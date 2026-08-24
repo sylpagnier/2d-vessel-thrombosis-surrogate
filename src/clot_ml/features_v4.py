@@ -20,16 +20,35 @@ __all__ = ["indicator_physics", "horizon_for", "new_channels", "augment_sample",
            "V4_CHANNELS"]
 
 
-def indicator_physics(data, bio, wall, hops=3):
-    """The backbone rerun with the separation branch as an INDICATOR (see module docs)."""
-    from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
-    from src.core_physics.physics_wall_model import integrate_mat_trajectory, t0_flow_fields
+#: MLS stencil width per flow source -- must match ``features.build_features``, which widens
+#: the stencil on the noisier predicted field.  Kept here so the v4 block and the v3 block
+#: differentiate the same velocity with the same operator.
+HOPS_FOR_FLOW = {"gt": 3, "pred": 6}
 
-    f0 = t0_flow_fields(data, bio, hops=hops, flow_source="gt")
+
+def indicator_physics(data, bio, wall, hops=None, *, flow: str = "gt"):
+    """The backbone rerun with the separation branch as an INDICATOR (see module docs).
+
+    ``flow`` selects the velocity field, exactly as ``features.build_features`` does.  It
+    used to be hardwired to ``"gt"``, which meant a ``flow="pred"`` sample carried four
+    GT-derived channels (``gate_ind``, ``log_mat_phys_ind``, ``onset_phys_ind``,
+    ``log_mat_ind_owner``) plus a ``log_mat_adv_ind`` transporting a GT source -- silently
+    optimistic and uninterpretable.  ``flow="gt"`` reproduces the old behaviour exactly.
+    """
+    from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
+    from src.core_physics.physics_wall_model import (
+        deposition_gate, integrate_mat_trajectory, t0_flow_fields,
+    )
+
+    hops = HOPS_FOR_FLOW.get(flow, 3) if hops is None else int(hops)
+    f0 = t0_flow_fields(data, bio, hops=hops, flow_source=flow)
     sgt = float(bio.sgt) / M_TO_CM
     gate_ind = (f0.dsrx < sgt).astype(np.float64) + (f0.sr < float(bio.lss)).astype(np.float64)
     hook = make_rollout_hook(SHIPPED, bio, f0.sr)
-    traj, _ = integrate_mat_trajectory(data, bio, gate_ind * wall,
+    # Same union as the backbone (docs/WOUND_PROGRESS.md 14.6): the indicator gate applies
+    # to the healthy wall, the wound deposits ungated.  No-op without a wound mask.
+    gate_full = deposition_gate(data, gate=gate_ind, wall=wall)
+    traj, _ = integrate_mat_trajectory(data, bio, gate_full,
                                        da_scale=SHIPPED_DA_SCALE, ap_closure=hook)
     crit = float(bio.viscosity_mat_crit)
     hot = traj >= crit
@@ -37,22 +56,33 @@ def indicator_physics(data, bio, wall, hops=3):
     return traj[-1], onset, gate_ind
 
 
-def horizon_for(pos, u, v, wall):
-    """Domain-crossing time at the bulk speed -- the natural time unit for the transport."""
+def horizon_for(pos, u, v, solid):
+    """Domain-crossing time at the bulk speed -- the natural time unit for the transport.
+
+    ``solid`` is excluded from the median because no-slip nodes sit at ~zero speed and are not
+    "bulk".  Pass the wall/wound UNION: a wound node is no-slip too, and counting its zero
+    speed into the bulk median lengthens the horizon spuriously.
+    """
     L = float(np.ptp(pos[:, 0]) + np.ptp(pos[:, 1]))
-    spd = float(np.median(np.hypot(u, v)[~wall])) + 1e-12
+    spd = float(np.median(np.hypot(u, v)[~solid])) + 1e-12
     return L / spd
 
 
 def new_channels(S, mat_ind, onset_ind, gate_ind, crit) -> dict:
-    wall, ei, owner = S["wall"], S["edge_index"], S["owner"]
+    # The transport BOUNDARY is the wall/wound union, not the healthy-wall label: `Mat` enters
+    # the domain through every no-slip surface, and seeding the source on `mask_wall` alone
+    # leaves the injured segment contributing nothing to the advection operator
+    # (MODEL_REVIEW_2026-08-22 5b.3/5b.5).  Older samples carry no `solid` key; on those --
+    # and on every no-wound pack -- the union IS `wall`, so this falls back exactly.
+    solid = S.get("solid", S["wall"])
+    ei, owner = S["edge_index"], S["owner"]
     pos = S["pos"].astype(np.float64)
     u, v = S["u"].astype(np.float64), S["v"].astype(np.float64)
     mat_phys = S["mat_phys"].astype(np.float64)
-    H = horizon_for(pos, u, v, wall)
+    H = horizon_for(pos, u, v, solid)
 
-    T = transport_fields(pos, ei, u, v, wall, mat_phys, horizon=H)
-    Ti = transport_fields(pos, ei, u, v, wall, np.asarray(mat_ind, float), horizon=H)
+    T = transport_fields(pos, ei, u, v, solid, mat_phys, horizon=H)
+    Ti = transport_fields(pos, ei, u, v, solid, np.asarray(mat_ind, float), horizon=H)
 
     def rel(a):
         """Value relative to the owner wall node's -- the attenuation, made dimensionless.
@@ -90,11 +120,19 @@ def new_channels(S, mat_ind, onset_ind, gate_ind, crit) -> dict:
     }
 
 
-def augment_sample(data, S: dict, bio) -> tuple[np.ndarray, list[str]]:
-    """Extend a v3 sample's ``X``/``cols`` with the v4 channels, in the cache's own order."""
+def augment_sample(data, S: dict, bio, *, flow: str = "gt") -> tuple[np.ndarray, list[str]]:
+    """Extend a v3 sample's ``X``/``cols`` with the v4 channels, in the cache's own order.
+
+    ``flow`` must match the flow the v3 block in ``S`` was built with -- the transport
+    channels read ``S["u"]``/``S["v"]`` and the indicator channels re-derive the gate, so a
+    mismatch produces a sample that is half predicted and half GT.
+    """
     crit = float(bio.viscosity_mat_crit)
+    # `wall`, not the union: `indicator_physics` re-runs the gated healthy-wall DEPOSITION LAW
+    # (`srf1`).  The union belongs to the geometry and to the transport boundary, both of
+    # which are resolved inside `new_channels`.
     wall = S["wall"]
-    mat_ind, onset_ind, gate_ind = indicator_physics(data, bio, wall)
+    mat_ind, onset_ind, gate_ind = indicator_physics(data, bio, wall, flow=flow)
     NC = new_channels(S, mat_ind, onset_ind, gate_ind, crit)
     order = sorted(NC)
     X = np.concatenate([S["X"]] + [NC[k].reshape(-1, 1) for k in order], axis=1)
