@@ -372,7 +372,9 @@ class RGP_DEQ(nn.Module):
             [shear_pot, features_to_encode, fourier_feats, rest, uv_prior, mu_prior, wss_prior], dim=1)
         if getattr(self, "use_width_priors", False):
             if x.size(1) >= NodeFeat.WIDTH_D2.stop:
-                width_features = x[:, NodeFeat.WIDTH_ND.start : NodeFeat.WIDTH_D2.stop]
+                width_features = x[:, NodeFeat.WIDTH_ND.start : NodeFeat.WIDTH_D2.stop].clone()
+                width_features[:, 1] = torch.clamp(width_features[:, 1], -4.14, 4.14)
+                width_features[:, 2] = torch.clamp(width_features[:, 2], -73.8, 73.8)
             else:
                 width_features = torch.zeros(x.size(0), 3, device=x.device, dtype=x.dtype)
             encoded_x = torch.cat([encoded_x, width_features], dim=1)

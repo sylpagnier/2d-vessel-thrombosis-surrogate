@@ -381,6 +381,48 @@ class PhysicsKernels:
             wss_pred[mask], wss_mag_phys[mask], beta=0.01
         )
 
+    def wall_shear_gradient_loss(self, pred, data, props=None):
+        """Supervised wall shear rate spatial gradient: ``d(gamma_dot)/ds`` vs COMSOL on **anchor ∩ wall** nodes.
+        
+        Critically important for downstream clot models which depend heavily on separation points (dsrx < sgt).
+        """
+        from src.utils.anchor_mask import anchor_node_mask, wall_wss_supervision_mask
+        from src.utils.rheology import compute_shear_rate
+        
+        node_anchor = anchor_node_mask(data)
+        if node_anchor is None:
+            return pred.sum() * 0.0
+
+        mask_wss = wall_wss_supervision_mask(data)
+        mask = mask_wss & node_anchor.view(-1).bool()
+        if not mask.any():
+            return pred.sum() * 0.0
+
+        if (not hasattr(data, "y")) or (data.y is None) or (data.y.shape[1] <= 4):
+            return pred.sum() * 0.0
+
+        if props is None:
+            props = self._get_geometric_props(data)
+
+        # Compute GT and Pred velocity derivatives
+        from src.config import PredChannels
+        c_u_gt = self._compute_derivatives(data.y[:, PredChannels.U:PredChannels.U + 1], props)
+        c_v_gt = self._compute_derivatives(data.y[:, PredChannels.V:PredChannels.V + 1], props)
+        c_u_pr = self._compute_derivatives(pred[:, PredChannels.U:PredChannels.U + 1], props)
+        c_v_pr = self._compute_derivatives(pred[:, PredChannels.V:PredChannels.V + 1], props)
+
+        sr_gt = compute_shear_rate(c_u_gt[:, 0, 0], c_u_gt[:, 1, 0], c_v_gt[:, 0, 0], c_v_gt[:, 1, 0], eps=1e-6)
+        sr_pr = compute_shear_rate(c_u_pr[:, 0, 0], c_u_pr[:, 1, 0], c_v_pr[:, 0, 0], c_v_pr[:, 1, 0], eps=1e-6)
+
+        # Compute derivatives of shear rates
+        c_sr_gt = self._compute_derivatives(sr_gt.unsqueeze(1), props)
+        c_sr_pr = self._compute_derivatives(sr_pr.unsqueeze(1), props)
+
+        grad_sr_gt = c_sr_gt[mask, :, 0]
+        grad_sr_pr = c_sr_pr[mask, :, 0]
+
+        return torch.nn.functional.mse_loss(grad_sr_pr, grad_sr_gt)
+
 
     def inlet_outlet_loss(self, pred, data):
         """Soft inlet/outlet alignment with COMSOL-style BCs.

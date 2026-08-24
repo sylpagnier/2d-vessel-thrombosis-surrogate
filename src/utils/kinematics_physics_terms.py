@@ -176,9 +176,11 @@ def compute_kinematics_physics_terms(
         du_ij = torch.stack([c_u[:, 0, 0], c_u[:, 1, 0], c_v[:, 0, 0], c_v[:, 1, 0]], dim=1)
         l_cont = kernels.continuity_loss(du_ij, data=data)
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
+        l_shear_grad = kernels.wall_shear_gradient_loss(pred, data, props=props)
 
     return {
         "l_wss": l_wss,
+        "l_shear_grad": l_shear_grad,
         "l_data_kine": l_data_kine,
         "l_data_mu": l_data_mu,
         "l_mom": l_mom,

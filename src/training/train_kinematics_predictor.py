@@ -512,12 +512,25 @@ def compute_step_loss(
 
     # 5. Static PDE weights (Kendall weighter disabled — avoids negative weighted PDE collapse)
     _ = loss_weighter
-    weighted_pdes = 1.0 * l_mom + 1.0 * l_cont
+    weighted_pdes = 1.0 * l_mom + 50.0 * l_cont
 
     # Scale up IO/BC weight severely ONLY in Stage 2 when interior data supervision is removed.
     io_weight = 100.0 if stage == 2 else 5.0
     bc_weight = 50.0 if stage == 2 else 5.0
 
+    l_shear_grad = terms.get("l_shear_grad", torch.tensor(0.0, device=device))
+
+    weighted_data = (
+        (weight_data * l_data_kine)
+        + (weight_mu * l_data_mu)
+        + (bc_weight * l_bc)
+        + (io_weight * l_io)
+        + (1.0 * p_grad_loss)
+        + (weight_wss * l_wss)
+        + (50.0 * l_shear_grad)
+    )
+
+    total_loss = weighted_pdes + weighted_data + jac_loss
     # 6. Final Composite Loss
     l_shear = torch.tensor(0.0, device=device)
     w_shear = 0.1
@@ -539,6 +552,7 @@ def compute_step_loss(
         + (io_weight * l_io)
         + (1.0 * p_grad_loss)
         + (weight_wss * l_wss)
+        + (50.0 * l_shear_grad)
         + (w_shear * l_shear)
         + (0.1 * jac_loss)
     )
@@ -549,6 +563,7 @@ def compute_step_loss(
     weighted_io = io_weight * l_io
     weighted_pgrad = 1.0 * p_grad_loss
     weighted_wss = weight_wss * l_wss
+    weighted_shear_grad = 50.0 * l_shear_grad
     weighted_shear = w_shear * l_shear
     weighted_jac = 0.1 * jac_loss
     metrics = {
@@ -559,6 +574,7 @@ def compute_step_loss(
         "L_bc": l_bc.item(),
         "L_io": l_io.item(),
         "L_wss": l_wss.item(),
+        "L_sgrad": l_shear_grad.item(),
         "L_shear": l_shear.item(),
         "L_jac": jac_loss.item(),
         "L_pgrad": p_grad_loss.item(),
@@ -570,6 +586,7 @@ def compute_step_loss(
         "C_io": weighted_io.item(),
         "C_pgrad": weighted_pgrad.item(),
         "C_wss": weighted_wss.item(),
+        "C_sgrad": weighted_shear_grad.item(),
         "C_shear": weighted_shear.item(),
         "C_jac": weighted_jac.item(),
     }
