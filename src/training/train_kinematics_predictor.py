@@ -520,17 +520,6 @@ def compute_step_loss(
 
     l_shear_grad = terms.get("l_shear_grad", torch.tensor(0.0, device=device))
 
-    weighted_data = (
-        (weight_data * l_data_kine)
-        + (weight_mu * l_data_mu)
-        + (bc_weight * l_bc)
-        + (io_weight * l_io)
-        + (1.0 * p_grad_loss)
-        + (weight_wss * l_wss)
-        + (50.0 * l_shear_grad)
-    )
-
-    total_loss = weighted_pdes + weighted_data + jac_loss
     # 6. Final Composite Loss
     l_shear = torch.tensor(0.0, device=device)
     w_shear = 0.1

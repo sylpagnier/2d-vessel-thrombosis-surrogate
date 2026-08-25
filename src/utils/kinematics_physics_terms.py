@@ -168,6 +168,7 @@ def compute_kinematics_physics_terms(
     if distillation:
         l_mom = z
         l_cont = z
+        l_shear_grad = z
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
     else:
         l_mom = kernels.navier_stokes_residual(pred, data, props=props, re_ref=re_ref, re_scale=re_scale)
