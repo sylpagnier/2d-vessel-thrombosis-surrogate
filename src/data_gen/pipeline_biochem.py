@@ -19,6 +19,8 @@ tracks:
 
 The batch CLI exposes these three steps directly via ``--track`` as
 ``synthetic`` / ``anchor_meshes`` / ``extract_anchor_cfd``.
+Wound sites for CFD: ``--wound`` / ``--wound-at-pathology`` on synthetic or
+``anchor_meshes`` (implies the Wound physical group).
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from src.data_gen.lib.vessel_generator import (
     normalize_pathology_mode,
     prompt_aneurysm_wall_mode,
     prompt_pathology_mode,
+    prompt_wound_options,
+    resolve_wound_flags,
     summarize_vessel_mesh_inventory,
     _prompt_int_choice as _vg_prompt_int_choice,
     _prompt_positive_int as _vg_prompt_positive_int,
@@ -66,6 +70,13 @@ def _anchor_paths() -> tuple[Path, Path, Path]:
         dr / "processed/cfd_results_biochem",
         dr / "processed/graphs_biochem_anchors",
     )
+
+
+def _wound_run_kwargs(*, wound: bool, wound_at_pathology: bool) -> dict[str, object]:
+    wound_probability, at_peak = resolve_wound_flags(
+        wound=wound, wound_at_pathology=wound_at_pathology
+    )
+    return {"wound_probability": wound_probability, "wound_at_pathology": at_peak}
 
 
 def _auto_scaffold_anchor_sidecars(anchor_raw_dir: Path) -> None:
@@ -127,6 +138,7 @@ def run_interactive_pipeline() -> None:
         no_plot = _prompt_yes_no("Skip matplotlib preview?", default=True)
         pathology_mode = prompt_pathology_mode()
         aneurysm_wall_mode = prompt_aneurysm_wall_mode(pathology_mode)
+        wound_probability, wound_at_pathology = prompt_wound_options()
         start_idx = 0 if overwrite else int(inv["next_idx"])
 
         print("\n--- Running VesselGeneratorPhase3 ---\n")
@@ -136,6 +148,8 @@ def run_interactive_pipeline() -> None:
             start_idx=start_idx,
             pathology_mode=pathology_mode,
             aneurysm_wall_mode=aneurysm_wall_mode,
+            wound_probability=wound_probability,
+            wound_at_pathology=wound_at_pathology,
         )
 
         if not no_plot:
@@ -170,6 +184,9 @@ def run_interactive_pipeline() -> None:
         n_vessels = _vg_prompt_positive_int("How many anchor-candidate meshes to generate", default_n)
         pathology_mode = prompt_pathology_mode()
         aneurysm_wall_mode = prompt_aneurysm_wall_mode(pathology_mode)
+        wound_probability, wound_at_pathology = prompt_wound_options(
+            default_at_pathology=True
+        )
         start_idx = 0 if overwrite else int(inv["next_idx"])
 
         print("\n--- Running VesselGeneratorPhase3 (unit=cm) ---\n")
@@ -180,7 +197,10 @@ def run_interactive_pipeline() -> None:
             unit="cm",
             pathology_mode=pathology_mode,
             aneurysm_wall_mode=aneurysm_wall_mode,
+            wound_probability=wound_probability,
+            wound_at_pathology=wound_at_pathology,
         )
+        _auto_scaffold_anchor_sidecars(anchor_raw_dir)
 
     else:
         anchor_raw_dir, anchor_cfd_dir, anchor_graph_dir = _anchor_paths()
@@ -224,7 +244,30 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
         metavar="N",
         help="Vessel count for synthetic or anchor-mesh generation.",
     )
-    p.add_argument("--overwrite", action="store_true", help="Synthetic: start vessel indices at 0.")
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Start vessel indices at 0 (synthetic or anchor meshes). Default is append.",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="RNG seed for vessel generation. Omit for a fresh random draw.",
+    )
+    p.add_argument(
+        "--wound",
+        action="store_true",
+        help="Enable wound sites (Wound physical group on wall segments).",
+    )
+    p.add_argument(
+        "--wound-at-pathology",
+        action="store_true",
+        help=(
+            "Center wounds on the stenosis or aneurysm peak when a pathology is present. "
+            "Implies --wound."
+        ),
+    )
     p.add_argument(
         "--show-vessel-plot",
         action="store_true",
@@ -268,17 +311,23 @@ def run_batch_pipeline(args: argparse.Namespace) -> None:
         start_idx = 0 if args.overwrite else int(inv["next_idx"])
         pathology_mode = normalize_pathology_mode(args.pathology_mode)
         aneurysm_wall_mode = normalize_aneurysm_wall_mode(args.aneurysm_wall)
+        wound_kw = _wound_run_kwargs(
+            wound=bool(args.wound), wound_at_pathology=bool(args.wound_at_pathology)
+        )
         print(
             f"--- VesselGeneratorPhase3 (synthetic): n={args.num_vessels} level={level} "
             f"start={start_idx} pathology={args.pathology_mode} "
-            f"aneurysm_wall={aneurysm_wall_mode} ---\n"
+            f"aneurysm_wall={aneurysm_wall_mode} "
+            f"wound={wound_kw['wound_probability']} at_pathology={wound_kw['wound_at_pathology']} ---\n"
         )
         vg.run_pipeline(
             n=int(args.num_vessels),
             level=level,
+            seed=args.seed,
             start_idx=start_idx,
             pathology_mode=pathology_mode,
             aneurysm_wall_mode=aneurysm_wall_mode,
+            **wound_kw,
         )
         if args.show_vessel_plot:
             saved_indices = sorted(
@@ -297,19 +346,26 @@ def run_batch_pipeline(args: argparse.Namespace) -> None:
         start_idx = 0 if args.overwrite else int(inv["next_idx"])
         pathology_mode = normalize_pathology_mode(args.pathology_mode)
         aneurysm_wall_mode = normalize_aneurysm_wall_mode(args.aneurysm_wall)
+        wound_kw = _wound_run_kwargs(
+            wound=bool(args.wound), wound_at_pathology=bool(args.wound_at_pathology)
+        )
         print(
             f"--- VesselGeneratorPhase3 (anchor meshes, cm): n={args.num_vessels} "
             f"level={level} start={start_idx} pathology={args.pathology_mode} "
-            f"aneurysm_wall={aneurysm_wall_mode} ---\n"
+            f"aneurysm_wall={aneurysm_wall_mode} "
+            f"wound={wound_kw['wound_probability']} at_pathology={wound_kw['wound_at_pathology']} ---\n"
         )
         vg.run_pipeline(
             n=int(args.num_vessels),
             level=level,
+            seed=args.seed,
             start_idx=start_idx,
             unit="cm",
             pathology_mode=pathology_mode,
             aneurysm_wall_mode=aneurysm_wall_mode,
+            **wound_kw,
         )
+        _auto_scaffold_anchor_sidecars(anchor_raw_dir)
         if args.show_vessel_plot:
             saved_indices = sorted(
                 int(p.stem.split("_")[-1])

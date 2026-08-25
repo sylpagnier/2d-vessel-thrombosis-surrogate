@@ -30,13 +30,23 @@ import os
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import PolyCollection
 from tqdm import tqdm
+
+# Running ``python src/data_gen/lib/vessel_generator.py`` does not put the repo
+# root on sys.path, so ``from src.config`` fails unless we add it first.
+if __name__ == "__main__":
+    import sys
+
+    _proj = Path(__file__).resolve().parents[3]
+    _ps = str(_proj)
+    if _ps not in sys.path:
+        sys.path.insert(0, _ps)
 
 from src.config import VesselConfig
 from src.utils.paths import get_project_root, migrate_legacy_vessel_meshes
@@ -1481,6 +1491,82 @@ def _prompt_yes_no(label: str, default: bool = False) -> bool:
         print("  Enter y/yes or n/no.")
 
 
+def resolve_wound_flags(*, wound: bool, wound_at_pathology: bool) -> tuple[float, bool]:
+    """``--wound-at-pathology`` implies wound sites; returns ``(probability, at_peak)``."""
+    at_peak = bool(wound_at_pathology)
+    return (1.0 if (bool(wound) or at_peak) else 0.0), at_peak
+
+
+def default_unit_for_phase(phase: str) -> str:
+    """COMSOL biochem CFD anchors are CGS (cm); synthetic / kinematics meshes are SI (m)."""
+    return "cm" if str(phase).strip().lower() == "biochem_anchors" else "m"
+
+
+class VesselGenCliSpec(NamedTuple):
+    """Resolved non-interactive vessel-generator destination (phase, units, wounds)."""
+
+    phase: str
+    unit: str
+    wound_probability: float
+    wound_at_pathology: bool
+
+
+def resolve_vessel_gen_cli(args: argparse.Namespace) -> VesselGenCliSpec:
+    """Map CLI flags onto the kinematics / synthetic-biochem / CFD-anchor tracks.
+
+    ``--anchors`` is the biochem COMSOL CFD track: ``data/raw/biochem_anchors`` and
+    ``unit=cm``. Plain ``--phase 2`` stays the synthetic SI track (``data/raw/biochem``).
+    """
+    anchors = bool(getattr(args, "anchors", False))
+    phase_n = getattr(args, "phase", None)
+    if anchors:
+        if phase_n is not None and int(phase_n) != 2:
+            raise ValueError("--anchors requires --phase 2 (biochem), not kinematics")
+        phase = "biochem_anchors"
+    else:
+        if phase_n is None:
+            raise ValueError("Provide --phase, or pass --anchors for biochem COMSOL CFD meshes")
+        phase = {1: "kinematics", 2: "biochem"}[int(phase_n)]
+
+    unit_arg = getattr(args, "unit", None)
+    unit = str(unit_arg).lower() if unit_arg else default_unit_for_phase(phase)
+    if phase == "biochem_anchors" and unit != "cm":
+        raise ValueError("Biochem COMSOL anchor meshes must use --unit cm")
+
+    wound_probability, wound_at_pathology = resolve_wound_flags(
+        wound=bool(getattr(args, "wound", False)),
+        wound_at_pathology=bool(getattr(args, "wound_at_pathology", False)),
+    )
+    return VesselGenCliSpec(
+        phase=phase,
+        unit=unit,
+        wound_probability=wound_probability,
+        wound_at_pathology=wound_at_pathology,
+    )
+
+
+def prompt_wound_options(
+    *,
+    wound_already: bool = False,
+    wound_at_pathology_already: bool = False,
+    default_at_pathology: bool = False,
+) -> tuple[float, bool]:
+    """Interactive wound prompts; CLI flags skip the questions."""
+    if wound_already or wound_at_pathology_already:
+        return resolve_wound_flags(
+            wound=wound_already,
+            wound_at_pathology=wound_at_pathology_already,
+        )
+    wound = _prompt_yes_no("Add wound sites to vessels?", default=False)
+    at_peak = False
+    if wound:
+        at_peak = _prompt_yes_no(
+            "Place wounds near stenosis/aneurysm when present?",
+            default=default_at_pathology,
+        )
+    return resolve_wound_flags(wound=wound, wound_at_pathology=at_peak)
+
+
 def _prompt_unit_choice(default: str = "m") -> str:
     """Read output unit from stdin; valid values are 'm' and 'cm'."""
     default = default.lower().strip()
@@ -1496,13 +1582,18 @@ def _prompt_unit_choice(default: str = "m") -> str:
 
 
 def _vessel_gen_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Generate 2D vessel meshes (Gmsh) for Kinematics phases.")
+    p = argparse.ArgumentParser(
+        description=(
+            "Generate 2D vessel meshes (Gmsh). Use --anchors for biochem COMSOL CFD "
+            "(cm meshes in data/raw/biochem_anchors)."
+        )
+    )
     p.add_argument(
         "--phase",
         type=int,
         choices=(1, 2),
         default=None,
-        help="Dataset (1=kinematics, 2=biochem; use with --level and -n)",
+        help="Dataset (1=kinematics, 2=biochem; use with --level and -n). Implied by --anchors.",
     )
     p.add_argument(
         "--level",
@@ -1517,7 +1608,7 @@ def _vessel_gen_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="N",
-        help="How many vessels to generate (use with --phase and --level)",
+        help="How many vessels to generate (use with --phase/--anchors and --level)",
     )
     p.add_argument(
         "--seed",
@@ -1531,8 +1622,16 @@ def _vessel_gen_arg_parser() -> argparse.ArgumentParser:
         "--unit",
         type=str,
         choices=("m", "cm"),
-        default="m",
-        help="Mesh unit system (default: m).",
+        default=None,
+        help="Mesh unit system. Default: cm with --anchors, otherwise m.",
+    )
+    p.add_argument(
+        "--anchors",
+        action="store_true",
+        help=(
+            "Biochem COMSOL CFD track: write cm meshes to data/raw/biochem_anchors. "
+            "Implies --phase 2. Do not use for synthetic SI graphs."
+        ),
     )
     p.add_argument(
         "--overwrite",
@@ -1587,30 +1686,53 @@ if __name__ == "__main__":
     parser = _vessel_gen_arg_parser()
     args = parser.parse_args()
 
+    if args.anchors and args.phase is None:
+        args.phase = 2
     trio = (args.phase is not None, args.level is not None, args.num_vessels is not None)
     if any(trio) and not all(trio):
-        parser.error("Provide --phase, --level, and -n/--num-vessels together for non-interactive mode.")
-
-    phase_map = {1: "kinematics", 2: "biochem"}
+        parser.error(
+            "Provide --phase (or --anchors), --level, and -n/--num-vessels together "
+            "for non-interactive mode."
+        )
 
     if all(trio):
-        phase = phase_map[int(args.phase)]
+        try:
+            spec = resolve_vessel_gen_cli(args)
+        except ValueError as exc:
+            parser.error(str(exc))
+        phase = spec.phase
         level = args.level
         n_vessels = args.num_vessels
         start_idx = 0 if args.overwrite else None
         show_vessel_plot = bool(args.show_vessel_plot)
-        unit_choice = str(args.unit).lower()
+        unit_choice = spec.unit
         pathology_mode = normalize_pathology_mode(args.pathology_mode)
         aneurysm_wall_mode = normalize_aneurysm_wall_mode(args.aneurysm_wall)
-        wound_at_pathology = bool(args.wound_at_pathology)
-        wound_probability = 1.0 if (args.wound or wound_at_pathology) else 0.0
+        wound_probability = spec.wound_probability
+        wound_at_pathology = spec.wound_at_pathology
+        vg = VesselGenerator(phase=phase)
     else:
-        phase_n = _prompt_int_choice("Dataset (1=kinematics, 2=biochem)", (1, 2))
-        level = _prompt_int_choice("Level (0=straight, 1=curved, 2=pro-clot)", (0, 1, 2))
-        phase = phase_map[phase_n]
-
-        unit_choice = "m"
-        if phase == "biochem" and level == 2:
+        phase_n = int(args.phase) if args.phase is not None else _prompt_int_choice(
+            "Dataset (1=kinematics, 2=biochem)", (1, 2)
+        )
+        level = int(args.level) if args.level is not None else _prompt_int_choice(
+            "Level (0=straight, 1=curved, 2=pro-clot)", (0, 1, 2)
+        )
+        anchors = bool(args.anchors)
+        if phase_n == 1 and anchors:
+            parser.error("--anchors requires biochem (--phase 2)")
+        if phase_n == 2 and not anchors:
+            anchors = _prompt_yes_no(
+                "Biochem COMSOL CFD anchors (cm, data/raw/biochem_anchors)?",
+                default=False,
+            )
+        phase = "biochem_anchors" if anchors else {1: "kinematics", 2: "biochem"}[phase_n]
+        unit_choice = default_unit_for_phase(phase)
+        if args.unit is not None:
+            unit_choice = str(args.unit).lower()
+            if phase == "biochem_anchors" and unit_choice != "cm":
+                parser.error("Biochem COMSOL anchor meshes must use --unit cm")
+        elif phase == "biochem" and level == 2:
             print("High-thrombus biochem generation detected.")
             print("Use 'cm' for thrombus CFD-compatible meshes, or keep 'm' for SI-scale meshes.")
             unit_choice = _prompt_unit_choice(default="cm")
@@ -1623,6 +1745,7 @@ if __name__ == "__main__":
         unused_slots = index_span - n_on_disk if max_idx >= 0 else 0
         print("\n--- Vessel mesh inventory ---")
         print(f"  Output: {vg.output_dir}")
+        print(f"  Unit: {unit_choice}")
         print(f"  Total number of phase vessels: {index_span}")
         print(f"  Number of vessel meshes already generated: {n_on_disk}")
         print(f"  Number of non-anchors remaining: {unused_slots}")
@@ -1633,7 +1756,11 @@ if __name__ == "__main__":
         else:
             overwrite = True if args.overwrite else _prompt_write_mode_vessel()
         default_n = 50 if n_on_disk > 0 else 500
-        n_vessels = _prompt_positive_int("How many vessels to generate", default_n)
+        n_vessels = (
+            int(args.num_vessels)
+            if args.num_vessels is not None
+            else _prompt_positive_int("How many vessels to generate", default_n)
+        )
         pathology_mode = prompt_pathology_mode()
         aneurysm_wall_mode = prompt_aneurysm_wall_mode(pathology_mode)
         start_idx = 0 if overwrite else None
@@ -1641,20 +1768,11 @@ if __name__ == "__main__":
             "Show matplotlib preview of generated meshes after this run?",
             default=False,
         )
-        wound_probability = 1.0 if (
-            args.wound
-            or args.wound_at_pathology
-            or _prompt_yes_no("Add wound sites to vessels?", default=False)
-        ) else 0.0
-        wound_at_pathology = bool(args.wound_at_pathology)
-        if wound_probability > 0.0 and not wound_at_pathology:
-            wound_at_pathology = _prompt_yes_no(
-                "Place wounds near stenosis/aneurysm when present?",
-                default=False,
-            )
-
-    if all(trio):
-        vg = VesselGenerator(phase=phase)
+        wound_probability, wound_at_pathology = prompt_wound_options(
+            wound_already=bool(args.wound),
+            wound_at_pathology_already=bool(args.wound_at_pathology),
+            default_at_pathology=anchors,
+        )
 
     if args.seed is not None:
         logger.info("Using fixed RNG seed=%s", args.seed)
