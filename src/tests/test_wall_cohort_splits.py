@@ -17,7 +17,8 @@ def test_splits_match_published_cohort_constants():
     assert FIT == WALL_COHORT_V2_FIT
     assert DEV == WALL_COHORT_V2_DEV_TRAIN
     assert SEALED == WALL_COHORT_V2_GENERALIZATION
-    assert DEV == ("patient039", "patient040", "patient041", "patient044")
+    # 042 left SEALED on 2026-08-22 and is a DEV vessel, so it joins DEV-train
+    assert DEV == ("patient039", "patient040", "patient041", "patient042", "patient044")
     assert "patient020" in FIT
     assert "patient020" not in DEV
     assert "patient020" not in SEALED
@@ -32,4 +33,5 @@ def test_split_of_never_puts_sealed_in_fit_or_dev():
         assert split_of(a) == "dev"
     assert split_of("patient020") == "fit"
     assert split_of("patient041") == "dev"
+    assert split_of("patient042") == "dev"
     assert split_of("patient043") == "sealed"

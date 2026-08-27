@@ -95,14 +95,15 @@ def fit_set_spec(cache, sc, pool, vs):
         q_cc, t_cc = cohort_cut(wall_of)
         q_r = q_of(lambda a: vs[a].score(FAMILIES["resid"][1](cache[a], sc[a], th_r)
                                          & wall_of(cache[a]), wall_of(cache[a])), wall_of)
-        b_w, med_w = tune_adapt(cache, vs, pool, sc, "resid", th_r, wall_of)
+        b_w, med_w, lo_w, hi_w = tune_adapt(cache, vs, pool, sc, "resid", th_r, wall_of,
+                                            return_support=True)
         q_ra = q_of(lambda a: vs[a].score(
-            apply_adapt(cache[a], sc[a], "resid", th_r, wall_of, b_w, med_w)
+            apply_adapt(cache[a], sc[a], "resid", th_r, wall_of, b_w, med_w, lo_w, hi_w)
             & wall_of(cache[a]), wall_of(cache[a])), wall_of)
         return {"cohort_cut": (q_cc, dict(kind="cohort_cut", t=t_cc)),
                 "resid": (q_r, dict(kind="resid", th=list(th_r))),
                 "resid_adapt": (q_ra, dict(kind="resid_adapt", th=list(th_r),
-                                          b=b_w, med=med_w))}
+                                          b=b_w, med=med_w, lo=lo_w, hi=hi_w))}
 
     curves = {(a, g): expected_curve(sc[a], off_of(cache[a]), Dt[a], dev, g)
               for a in pool for g in GAMMA}
@@ -122,9 +123,10 @@ def fit_set_spec(cache, sc, pool, vs):
         q_cc, t_cc = cohort_cut(off_of)
         q_r = q_of(lambda a: vs[a].score(FAMILIES["resid"][1](cache[a], sc[a], th_r)
                                          & off_of(cache[a]), off_of(cache[a])), off_of)
-        b_o, med_o = tune_adapt(cache, vs, pool, sc, "resid", th_r, off_of)
+        b_o, med_o, lo_o, hi_o = tune_adapt(cache, vs, pool, sc, "resid", th_r, off_of,
+                                            return_support=True)
         q_ra = q_of(lambda a: vs[a].score(
-            apply_adapt(cache[a], sc[a], "resid", th_r, off_of, b_o, med_o)
+            apply_adapt(cache[a], sc[a], "resid", th_r, off_of, b_o, med_o, lo_o, hi_o)
             & off_of(cache[a]), off_of(cache[a])), off_of)
         best_e = None
         for g in GAMMA:
@@ -136,7 +138,7 @@ def fit_set_spec(cache, sc, pool, vs):
         return {"cohort_cut": (q_cc, dict(kind="cohort_cut", t=t_cc)),
                 "resid": (q_r, dict(kind="resid", th=list(th_r))),
                 "resid_adapt": (q_ra, dict(kind="resid_adapt", th=list(th_r),
-                                          b=b_o, med=med_o)),
+                                          b=b_o, med=med_o, lo=lo_o, hi=hi_o)),
                 "expected_tuned": (best_e[0], dict(kind="expected_tuned",
                                                    gamma=best_e[1], kscale=best_e[2]))}
 
@@ -176,12 +178,32 @@ def apply_set_spec(S, sc, spec, dom_of, dev="cpu"):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", default="clot_gnn_v4")
+    ap.add_argument("--wake", action="store_true",
+                    help="fit the head against the flow-coupled ODE clock "
+                         "(src/core_physics/gelation_wake).  This is a NEW artifact "
+                         "generation, not a flag flip: promote it under its own --name.")
+    ap.add_argument("--stall", action="store_true",
+                    help="fit the head against the near-stall ODE clock "
+                         "(src/core_physics/near_stall).")
     ap.add_argument("--repoint", action="store_true")
     args = ap.parse_args()
 
     t0 = time.time()
+    # The ODE clock the head is fitted against MUST be the one deploy will replay, so the
+    # switch is set before any feature is built and then written onto the artifact.
+    ET.USE_WAKE_ODE = bool(args.wake)
+    ET.USE_STALL_ODE = bool(args.stall)
+    if args.wake:
+        print("[i] FLOW-COUPLED ODE CLOCK (gelation wake) -- this is a new generation;"
+              " do not mix its head with wake-free members.", flush=True)
+    if args.stall:
+        print("[i] NEAR-STALL ODE CLOCK -- this is a new generation.", flush=True)
     ens = load_ensemble(name=args.name)
     bio = BiochemConfig(phase="biochem")
+    # CLOT-CARRYING ONLY, deliberately.  This script fits ONSET TIMING, and a vessel that
+    # never clots has no onset to fit -- every per-time cell it contributes is empty-GT.
+    # `eligible_pool()` excludes `CLOT_FREE` for exactly this reason.  Their false-positive
+    # evidence belongs to `eval_strict.py --clot-free`, not here.
     pool = [a for a in eligible_pool() if (PACKS / f"{a}.pt").exists()]
     classes = classes_for(pool, PACKS)
     pool = [a for a in pool if a in classes]
@@ -285,7 +307,8 @@ def main() -> int:
         head=head, lag_models=(lag_model.models if lag_model is not None else None),
         lag_anchor="ode", lag_anchor_level=1.0, burden_gate=burden_gate,
         time_th_wall=list(time_th[0]), time_th_off=list(time_th[1]),
-        n_times=N_TIMES, head_seeds=HEAD_SEEDS, lag_seeds=LAG_SEEDS)
+        n_times=N_TIMES, head_seeds=HEAD_SEEDS, lag_seeds=LAG_SEEDS,
+        wake_ode=bool(args.wake), stall_ode=bool(args.stall))
     with (out / "temporal.pkl").open("wb") as fh:
         pickle.dump(artifact, fh)
 
@@ -295,7 +318,8 @@ def main() -> int:
     manifest["temporal_promoted_at"] = datetime.now(timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
     manifest["temporal_readout"] = dict(wall=wall_spec["kind"], off=off_spec["kind"],
-                                        lag_anchor="ode", burden_gate=burden_gate)
+                                        lag_anchor="ode", burden_gate=burden_gate,
+                                        wake_ode=bool(args.wake), stall_ode=bool(args.stall))
     manifest["temporal_scores_in_sample"] = dict(
         final=dict(wall=float(fin_wall), off=float(fin_off)),
         mean_over_time=dict(wall=float(mean_w), off=float(mean_o)))

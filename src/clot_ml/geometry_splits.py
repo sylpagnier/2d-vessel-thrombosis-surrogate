@@ -44,7 +44,14 @@ PRIORITY_CLASSES = ("aneurysm", "stenosis", "stenosis+aneurysm")
 
 
 def eligible_pool() -> list[str]:
-    """Non-SEALED vessels with a full horizon and non-empty GT, in a stable order."""
+    """Non-SEALED, full-horizon, **clot-carrying** vessels, in a stable order.
+
+    Deliberately excludes `wall_cohort_splits.CLOT_FREE`, which joined the cache on
+    2026-08-22.  Every caller of this function averages a RECALL-bearing score, and an
+    empty-GT vessel has no recall -- its evidence is about false positives and belongs on a
+    separate row (`eval_strict.py --clot-free`).  The training pool is a different question
+    and is taken from the cache itself, in `run_phase9_cv.py`.
+    """
     return sorted(set(OLD_FIT) | set(OLD_DEV))
 
 

@@ -52,11 +52,87 @@ Publishing policy: [`docs/PUBLISHING.md`](../docs/PUBLISHING.md).
 - Steady kinematics + GraphSAGE deploy smoke: `python -m src.evaluation.visualize_pipeline` (optional `--steady-kin-only`).
 - Batch steady-kin: `steady_kin_viz_cohort.py`
 - Customer Predict GUI: `go_customer_predict.ps1`
+- Customer Predict browser UI: `go_customer_predict_web.ps1` (local Python inference server + HTML viewer)
+  The browser version keeps inference local (including CUDA), while the page handles geometry
+  selection/upload, parametric vessels, timeline scrubbing, velocity bookends, Scientific mode,
+  and CSV download. Use `-Cpu` only for a slow smoke test.
 
 ## A/B and gates
 
 - `go_biochem_gnn_gate_ab.ps1` + `summarize_biochem_gnn_gate_ab.py`
 - `check_biochem_gnn_gate.py`
+
+## Pack repair (in-place; the COMSOL exports are gone for several vessels)
+
+Both go through `src/data_gen/lib/pack_repair.py`, which rebuilds `data.x` via the same
+`build_kinematics_node_x_tensor` call the extractor uses. Both write **surgically** -- only
+the rows or the delta the fix accounts for -- because a full rebuild does not reproduce the
+stored priors (two extractor revisions disagree; WOUND_PROGRESS 8). Run `--verify` first.
+
+- `repair_wound_pack_geometry.py` -- solid-boundary geometry on wound packs (WOUND_PROGRESS 6).
+- `repair_pack_wall_normals.py` -- populates `wall_normal` at boundary nodes and the
+  `node_type_*` one-hot on **every** pack (MODEL_REVIEW_2026-08-22 6.5). **Invalidates
+  `clot_gnn_v4`/`v4w`, the v5 cache and every `u0_pred`.** Idempotent; backups at
+  `*.pt.prenormalfix`.
+
+## Clot-ML diagnostics
+
+- `promote_clot_ml_v0.py` -- lock the unified wounded/non-wounded stack (`kind: unified_v0`).
+  Wraps `--base clot_gnn_v5w`; bit-identical on no-wound packs. Do not `--repoint` until
+  `eval_clot_ml_v0.py` shows a gain (docs/WOUND_PROGRESS.md 19).
+- `eval_clot_ml_v0.py` -- compare `clot_ml_v0` against a pinned baseline (default
+  `clot_gnn_v5w`) on the severity metric. `--cohort` adds FIT+DEV; SEALED is never default.
+- **OOF generalization viz (required for any non-wound `clot_ml_v0` movie):** the promoted
+  v6 ensemble is full-pool, so never render one of its predictions as validation. Re-run the
+  three C0 CV arms with the shared checkpoint root:
+  `run_phase9_cv.py --tag c0shape --cache v5 --folds 5 --seeds 3 --shape-w 2 --save-fold-models outputs/clot_ml/oof/clot_ml_v0`,
+  `run_phase9_cv.py --tag c0shape_b --cache v5 --folds 5 --seeds 3 --shape-w 2 --rounds 5 --save-fold-models outputs/clot_ml/oof/clot_ml_v0`, and
+  `run_phase9_cv.py --tag c0shape_c --cache v5 --folds 5 --seeds 3 --shape-w 2 --off-mult 2.5 --save-fold-models outputs/clot_ml/oof/clot_ml_v0`.
+  Then run
+  `eval_strict_temporal.py --save-oof-series ...` and
+  `gen_clot_ml_v0_oof_viz_data.py --series ...`. The resulting payload contains only
+  outer-fold vessels and asserts that FINAL_HALF is absent. Render it with
+  `build_v4_temporal_artifact.py --data ... --out ...`; every tab is badged **OOF**.
+  The sidecar checkpoints are reproducibility/viz assets, never deployment weights.
+- **Wound mode (on demand):** use
+  `gen_clot_ml_v0_oof_viz_data.py --wound --flow gt --out outputs/clot_ml_v0_wound_temporal_data.json`.
+  This runs the unified v0 dispatcher on `wound_patient001/002/003`, with wound-rate
+  constants evaluated leave-one-vessel-out. Build it with the same artifact builder; the
+  primary second score is the **general off-wall** domain (solid boundary excluded), with
+  an additional **wound region** curve/statistic for the wound patch. The combined report
+  exposes non-wound OOF and wound LOVO cohorts through one mode selector.
+  Combine both cohorts with `combine_clot_ml_v0_viz_data.py`, then render
+  `build_v4_temporal_artifact.py --data outputs/clot_ml_v0_temporal_data.json`; this is the
+  preferred single-page viewer.
+- `diag_wound_composition.py` -- what the wound module's override does to `clot_gnn_v4`'s set
+  (MODEL_REVIEW_2026-08-22 5b).
+- `diag_clot_free_headroom.py` -- do the 8 empty-GT vessels carry signal, or a free 1.0000?
+  Answer (MODEL_REVIEW 8c): a **physics tripwire, not a training signal**. The backbone
+  commits 0 of 95 583 nodes and the model's score never reaches a cut, but `patient022` sits
+  0.6% from firing the separation gate -- so check this after any change to the gate law.
+- `diag_closed_loop_feasibility.py` -- **the C3 gate, and it closed C3.** Hands the corrector
+  ORACLE occlusion and asks whether it reproduces the wound's 87% shear collapse. It does not
+  (-3.5% against -87%, and the wrong sign on 002), and it is insensitive to `delta_mu` over
+  100x. Ten minutes; MODEL_REVIEW 9e budgeted "~days" for the arm behind it.
+- `diag_field_calibration.py` -- **the C0 workhorse.** Is the score field comparable ACROSS
+  vessels? The mechanism
+  behind the 0.193 off-wall readout gap (MODEL_REVIEW 8f.2). Reports GT-median spread, the
+  separation margin against no-GT noise tails, and implied-burden error as median/p90/max --
+  the tail matters because a previous term fixed the median and left the tail alone.
+- `diag_geometry_class_recal.py` -- the geometry cuts against the repaired `width_nd`
+  (MODEL_REVIEW 8d). Prints the full ordered distribution and the gap each cut sits in;
+  **not** a threshold fitter. `--explain <stem>` dissects one vessel.
+- `diag_wound_p003_causes.py` -- **reproduces WOUND_PROGRESS 14.** Why `wound_patient003`
+  misses its wound-region clot, in four blocks (`--blocks set owners gate species`). The
+  `gate` block is the one that kills the WOUND_PROGRESS 11 story: the near-wound wall gate is
+  already 1.0 at t=0 and stays 1.0 under the GT flow oracle at every step, so there is no gate
+  for a neighbour trigger to open. The `species` block falsifies `wall_gate_frac_vessel` as a
+  selector -- `patient001/014/032` are as gated as 003 with AP amp exactly 1.000.
+- `fit_gelation_wake_kernel.py` -- refits the kernel in `src/core_physics/gelation_wake.py`
+  from GT: superposed gelled-neighbour load against `sr(t)/sr(0)` on **not-yet-gelled** wall,
+  pooled over wound and no-wound vessels. Bins with fewer than 3 vessels are deliberately not
+  reported -- in GT a node under that much load has already gelled, which is exactly why
+  `WAKE_LOAD_AMP` is clamped rather than extrapolated.
 
 ## Kinematics (Stage A)
 

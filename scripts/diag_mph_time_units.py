@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mph", default="comsol_models/phase2_template_nowound.mph")
+    ap.add_argument("--mph", default="comsol_models/phase2_nowound_011.mph")
     args = ap.parse_args()
     raw = zipfile.ZipFile(REPO / args.mph).read("smodel.json").decode("utf8", errors="replace")
 

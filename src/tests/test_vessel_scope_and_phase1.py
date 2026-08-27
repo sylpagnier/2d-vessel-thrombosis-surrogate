@@ -154,8 +154,10 @@ def test_phase1_trains_on_cohort_v2_and_never_on_the_sealed_set():
         WALL_COHORT_V2_GENERALIZATION,
         WALL_COHORT_V2_TRAIN,
     )
-    assert len(WALL_COHORT_V2_TRAIN) == 26
-    assert len(WALL_COHORT_V2_GENERALIZATION) == 8
+    # 2026-08-22: VIZ_HALF released from SEALED into TRAIN (docs/SEALED_SPLIT.md),
+    # so TRAIN 26 -> 30 and SEALED 8 -> 4.
+    assert len(WALL_COHORT_V2_TRAIN) == 30
+    assert len(WALL_COHORT_V2_GENERALIZATION) == 4
     assert not set(WALL_COHORT_V2_TRAIN) & set(WALL_COHORT_V2_GENERALIZATION)
     # patient002/023 are the project's existing data-quality exclusions; the launcher forbids
     # them, so a cohort containing one would fail at launch rather than at analysis time.

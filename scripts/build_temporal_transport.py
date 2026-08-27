@@ -42,8 +42,10 @@ if str(REPO) not in sys.path:
 
 from src.clot_ml.data import load_cache  # noqa: E402
 from src.clot_ml.temporal import ode_trajectory  # noqa: E402
+from src.clot_ml.features_v4 import horizon_for  # noqa: E402
 from src.clot_ml.transport import _node_volume, _solve_upwind, upwind_operator  # noqa: E402
 from src.config import BiochemConfig  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
 
 PACKS = REPO / "data/processed/graphs_biochem_anchors"
 OUT = REPO / "outputs/temporal_transport"
@@ -59,6 +61,9 @@ def main() -> int:
     cache = load_cache("gt")
 
     for a, S in sorted(cache.items()):
+        if a in CLOT_FREE:
+            # No onset to resolve, and `eval_strict_temporal.py` excludes them outright.
+            continue
         dst = OUT / f"{a}.npz"
         if dst.exists() and not args.force:
             print("[skip] %s" % a, flush=True)
@@ -72,8 +77,11 @@ def main() -> int:
         wall, ei, owner = S["wall"], S["edge_index"], S["owner"]
         pos = S["pos"].astype(np.float64)
         u, v = S["u"].astype(np.float64), S["v"].astype(np.float64)
-        L = float(np.ptp(pos[:, 0]) + np.ptp(pos[:, 1]))
-        H = L / (float(np.median(np.hypot(u, v)[~wall])) + 1e-12)
+        # ONE definition of the transport horizon (`features_v4.horizon_for`).  It
+        # excludes the SOLID boundary from the bulk-speed median, not just the healthy
+        # wall -- an inline `~wall` copy would compute a different horizon than the
+        # cache builder on a wound pack (a silent train/deploy skew).
+        H = horizon_for(pos, u, v, np.asarray(S.get("solid", wall), dtype=bool))
 
         # one factorisation-worth of work per time; the operator itself never changes
         F, out = upwind_operator(pos, ei, u, v)

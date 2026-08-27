@@ -172,9 +172,35 @@ def test_locked_ensemble_manifest_is_consistent():
     man = json.loads((root / p["manifest"].split("/")[-1]).read_text())
     assert man["name"] == p["name"]
 
-    from src.core_physics.wall_cohort_splits import SEALED
+    from src.biochem_gnn.mat_growth_simple import (
+        WALL_COHORT_V2_GENERALIZATION,
+        WALL_COHORT_V2_SEALED_PRE_20260822,
+    )
 
-    if kind == "temporal_v3":
+    if kind == "unified_v0":
+        # Wrapper: GNN lives two hops down (v0 -> v5w -> v5).  Provenance is the GNN's.
+        wound_root = repo / "outputs/clot_ml/locked" / man["base_model"]
+        wound_man = json.loads((wound_root / "manifest.json").read_text())
+        gnn_root = repo / "outputs/clot_ml/locked" / wound_man["base_model"]
+        gnn_man = json.loads((gnn_root / "manifest.json").read_text())
+        assert gnn_man["n_members"] == len(gnn_man["members"]) > 0
+        for m in gnn_man["members"]:
+            assert (gnn_root / m["file"]).exists(), m["file"]
+        assert (gnn_root / gnn_man["feature_norm"]).exists()
+        trained_on = set(gnn_man.get("training_pool") or [])
+    elif kind == "temporal_v4_wound":
+        # `clot_gnn_v4w` adds a boundary-condition branch to a base artifact rather than
+        # carrying weights of its own, so it declares `base_model` and no members; its
+        # training provenance is the base's.  (This branch was missing when v4w shipped.)
+        base_root = repo / "outputs/clot_ml/locked" / man["base_model"]
+        base_man = json.loads((base_root / "manifest.json").read_text())
+        assert base_man["n_members"] == len(base_man["members"]) > 0
+        for m in base_man["members"]:
+            assert (base_root / m["file"]).exists(), m["file"]
+        assert (base_root / base_man["feature_norm"]).exists()
+        assert (root / man["wound_rate_file"]).exists()
+        trained_on = set(base_man.get("training_pool") or [])
+    elif kind == "temporal_v3":
         assert (root / man["clf_file"]).exists()
         base_root = repo / "outputs/clot_ml/locked" / man["base_set_model"]
         base_man = json.loads((base_root / "manifest.json").read_text())
@@ -193,26 +219,99 @@ def test_locked_ensemble_manifest_is_consistent():
         trained_on = set(man.get("fit_anchors") or man.get("training_pool") or [])
 
     assert trained_on, "manifest must declare what it trained on"
-    assert not (trained_on & set(SEALED))
+    # The SEALED set that applied WHEN THIS ARTIFACT WAS PROMOTED.  VIZ_HALF (001/010/014/042)
+    # was released into TRAIN on 2026-08-22 (docs/SEALED_SPLIT.md), so the historical 8-vessel
+    # constant is the right yardstick for an older artifact and the wrong one for a new one --
+    # it fails on exactly the four vessels the release handed over.
+    at = str(p.get("promoted_at", ""))[:10]
+    sealed = set(WALL_COHORT_V2_GENERALIZATION if at and at >= "2026-08-22"
+                 else WALL_COHORT_V2_SEALED_PRE_20260822)
+    leak = trained_on & sealed
+    assert not leak, "SEALED leaked into training: %s" % sorted(leak)
 
 
-def test_geometry_classifier_reproduces_the_designated_class():
-    """The measured classifier must agree with the human designation where width is usable."""
+def _designated_stats():
+    """`{anchor: width_stats}` for every designated vessel present on disk."""
     import torch as _t
     from pathlib import Path
 
-    from src.clot_ml.geometry_class import USER_DESIGNATED, classify, width_stats
+    from src.clot_ml.geometry_class import USER_DESIGNATED, width_stats
 
     repo = Path(__file__).resolve().parents[2]
-    seen = 0
-    for anchor, expected in USER_DESIGNATED.items():
+    out = {}
+    for anchor in USER_DESIGNATED:
         p = repo / f"data/processed/graphs_biochem_anchors/{anchor}.pt"
-        if not p.exists():
-            continue
-        d = _t.load(p, map_location="cpu", weights_only=False)
-        s = width_stats(d)
-        if not s.get("usable"):
-            continue
-        seen += 1
-        assert classify(s, anchor) == expected, (anchor, s)
-    assert seen >= 4, "expected the designated vessels to be present and measurable"
+        if p.exists():
+            out[anchor] = width_stats(
+                _t.load(p, map_location="cpu", weights_only=False))
+    return out
+
+
+def test_geometry_classifier_reproduces_the_designated_class():
+    """`classify` must return the human designation for every labelled vessel.
+
+    It does so by LOOKUP now, not by measurement -- see the next test for why, and
+    `src/clot_ml/geometry_class.py`'s docstring for the numbers.  This is still worth pinning:
+    when the `width_nd` repair made every vessel usable, the old precedence (measure first,
+    designate only on abstain) silently reclassified all three designated stenoses to
+    `baseline`, and the priority-class reporting axis lost them with no test firing.
+    """
+    from src.clot_ml.geometry_class import USER_DESIGNATED, classify
+
+    stats = _designated_stats()
+    assert len(stats) >= 4, "expected the designated vessels to be present"
+    for anchor, s in stats.items():
+        assert classify(s, anchor) == USER_DESIGNATED[anchor], (anchor, s)
+
+
+def test_the_measured_stenosis_branch_is_known_not_to_separate():
+    """PINS A KNOWN-BAD STATE so that fixing it is DETECTED (roadmap item A2).
+
+    Against the repaired `width_nd` the aneurysm statistic separates by +0.506 and the
+    stenosis statistic separates by **-0.071** -- `patient012`, an unlabelled baseline, reads
+    `narrowing` 0.5129 against the designated stenoses' 0.5244 / 0.5361 / 0.5835.  No cut
+    recovers the labels, so `NARROWING_STENOSIS` was deliberately NOT retuned.
+
+    The assertion is therefore inverted on purpose: the three stenoses must still fail the
+    measured branch.  If a future `width_nd` improvement makes them pass, this test fires and
+    says so, rather than the improvement going unnoticed and the cut staying at a value nobody
+    re-derived.  The aneurysms must keep passing it in the meantime.
+    """
+    from src.clot_ml.geometry_class import USER_DESIGNATED, disagreements, measured_class
+
+    stats = _designated_stats()
+    dis = disagreements(stats)
+    aneurysms = {a for a, c in USER_DESIGNATED.items() if c == "aneurysm"} & set(stats)
+    stenoses = {a for a, c in USER_DESIGNATED.items() if c == "stenosis"} & set(stats)
+
+    for a in aneurysms:
+        assert measured_class(stats[a]) == "aneurysm", (
+            "the BULGE cut separates by +0.506 and must keep reproducing %s "
+            "unaided: %s" % (a, stats[a]))
+    assert set(dis) == stenoses, (
+        "expected exactly the designated stenoses to fail the measured branch and nothing "
+        "else.  Got %s.  If the stenoses now PASS, `width_nd` improved -- re-run "
+        "scripts/diag_geometry_class_recal.py and re-derive NARROWING_STENOSIS against the "
+        "new gap before deleting this test." % sorted(dis))
+
+
+def test_the_along_wall_smoothing_has_no_isolated_node_hole():
+    """`patient008` read `narrowing = 0.0000` from a divide-by-zero, not from anatomy.
+
+    The smoothing averaged over a node's SELECTED NEIGHBOURS only, so a selected node with no
+    selected neighbour smoothed to exactly 0 and set the 2nd percentile.  Its raw wall width
+    never goes below 0.61.
+    """
+    import torch as _t
+    from pathlib import Path
+
+    from src.clot_ml.geometry_class import width_stats
+
+    p = (Path(__file__).resolve().parents[2]
+         / "data/processed/graphs_biochem_anchors/patient008.pt")
+    if not p.exists():
+        pytest.skip("patient008 pack not present")
+    s = width_stats(_t.load(p, map_location="cpu", weights_only=False))
+    assert s["narrowing"] > 0.5, (
+        "narrowing collapsed to %.4f -- an isolated selected node is smoothing to zero again"
+        % s["narrowing"])

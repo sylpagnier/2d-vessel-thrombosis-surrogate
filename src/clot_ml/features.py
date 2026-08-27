@@ -19,6 +19,22 @@ Feature groups, and why each one is here:
              creep is flow-mediated, so upstream/downstream asymmetry is the right prior;
              PHASE6_RESULTS 3.4 measured that isotropic smoothing of the source makes the
              fit worse, i.e. the non-locality is advective.
+
+THE WALL LABEL IS TWO DIFFERENT THINGS, and this module keeps them apart.  ``mask_wall`` is
+COMSOL's *healthy* wall selection (``dif1``), carved disjoint from ``mask_wound`` (``sel1``)
+because the two carry different deposition laws -- ``srf1`` is gated, ``srf2`` is not.  That
+split is right for the **law** and wrong for the **geometry**: a wound node is still a no-slip
+solid boundary.  Measured against ``mask_wall`` alone, the injured segment came out encoded as
+open lumen ~11 edge-lengths from the wall, owned by a distant healthy node carrying no ``Mat``
+(MODEL_REVIEW_2026-08-22 5b.3).  So:
+
+  * geometry -- SDF, owner, hop distance, shell resolution, and the v4 transport source --
+    uses ``solid_boundary_nodes(data)``, the union;
+  * the deposition law -- the ``gate * wall`` source of the backbone rollout -- keeps
+    ``mask_wall``.
+
+``solid_boundary_mask`` returns ``mask_wall`` unchanged when there is no wound mask, so this
+is provably inert on every no-wound pack in the cohort.
 """
 from __future__ import annotations
 
@@ -26,6 +42,8 @@ import numpy as np
 import scipy.sparse as sp
 import torch
 from scipy.spatial import cKDTree
+
+from src.data_gen.lib.mesh_wls import solid_boundary_nodes
 
 M_TO_CM = 100.0
 MAT_S = 7e10          # pack Mat_log1p_nd -> COMSOL model units
@@ -114,13 +132,15 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     """Everything the models consume, for one vessel.  Returns arrays keyed by name."""
     from src.core_physics.mls_gradient import build_mls_gradient, node_positions, shear_rate_2d
     from src.core_physics.physics_lumen_model import resolve_offwall_shell
-    from src.core_physics.physics_wall_model import integrate_mat_trajectory, t0_flow_fields
+    from src.core_physics.physics_wall_model import (
+        PRED_DSRX_GAIN, deposition_gate, integrate_mat_trajectory, t0_flow_fields)
     from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
     from src.core_physics.species_pushforward_continuous import resolve_deploy_eval_time_index
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
 
     n = int(data.num_nodes)
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
+    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()   # the LAW's selection (srf1)
+    solid = solid_boundary_nodes(data)                       # the GEOMETRY's boundary
     ei = data.edge_index.detach().cpu().numpy()
     A = adjacency(ei, n)
     pos_nd = node_positions(data)
@@ -132,7 +152,28 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     if flow == "pred":
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-        hops = 4
+        # 6, not 4.  `dsrx` is a second derivative of a SMOOTH SURROGATE field, and the
+        # stencil width decides whether it carries signal or its own sign flip.  Measured
+        # 2026-08-23 against COMSOL t=0 (wall nodes, 10 vessels), correlation of predicted
+        # `dsrx`:  hops=3 -0.22 | hops=4 +0.24 | hops=6 +0.96 | hops=8 +0.98.  hops=4 sits
+        # inside the sign-flip band and is ANTI-correlated on 3 of 10 vessels (036 -0.90,
+        # 024 -0.43, 018 -0.11); at 6 every vessel is >= 0.76.  `sr` peaks at 6 as well
+        # (0.89 vs 0.88), so nothing is traded away, and a leave-one-vessel-out probe on
+        # these 69 columns reads oracle-F1 0.482 at hops=4 against 0.551 at hops=6.
+        # GT keeps 3: its field is not a surrogate and does not need the extra smoothing.
+        #
+        # !! THE TWO SCALES ARE NOT COMPARABLE.  A 6-hop stencil attenuates `dsrx` by ~2.18x
+        # relative to a 3-hop one -- measured on the GT field alone, so it is a property of
+        # the operator, not of the flow model (the residual surrogate deficit, like for
+        # like at hops=6, is only 1.38x at corr 0.95).  Every `dsrx`-derived channel
+        # (`dsrx_over_sgt`, `gate_sep`, `gate_A`, `gate`) therefore lands on a different
+        # scale here than in a GT-built cache, and `sgt` is a PHYSICAL constant fitted
+        # against the 3-hop convention.  A model trained on GT features must not be scored
+        # on this block without an amplitude correction -- fit one on its own split, or
+        # retrain on a pred-flow cache so the normaliser sees this scale.  Nothing shipped
+        # reads `flow="pred"` (every `locked.py` entry point defaults to "gt"), so this is
+        # a research-arm change; it is the retrain's input, not a deploy path.
+        hops = 6
     else:
         u = data.y[0, :, 0].detach().cpu().numpy().astype(np.float64)
         v = data.y[0, :, 1].detach().cpu().numpy().astype(np.float64)
@@ -145,6 +186,12 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     sr = shear_rate_2d(ux, uy, vx, vy) * scale
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)
     dsry = (Dy @ sr) / (d_bar * M_TO_CM)
+    if flow == "pred":
+        # Same amplitude correction `t0_flow_fields` applies -- `sgt` is a physical constant
+        # and `dsrx` here is on the 6-hop surrogate scale.  See PRED_DSRX_GAIN for the
+        # measurement and for why no per-vessel estimator exists.
+        dsrx = dsrx * PRED_DSRX_GAIN
+        dsry = dsry * PRED_DSRX_GAIN
     vort = (vx - uy) * scale
     div = (ux + vy) * scale
     spd = np.hypot(u, v)
@@ -158,12 +205,13 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     gate = A_branch + g_low
 
     # --- geometry / topology -------------------------------------------------
-    shell = resolve_offwall_shell(pos_xy, wall, ei)
+    # Every question here is "where is the boundary", so every one of them takes the union.
+    shell = resolve_offwall_shell(pos_xy, solid, ei)
     ms = midside_mask(pos_xy, A)
-    dist_w, owner = cKDTree(pos_xy[wall]).query(pos_xy)
-    owner = np.flatnonzero(wall)[owner]
+    dist_w, owner = cKDTree(pos_xy[solid]).query(pos_xy)
+    owner = np.flatnonzero(solid)[owner]
     h_edge = float(np.median(np.linalg.norm(pos_xy[ei[0]] - pos_xy[ei[1]], axis=1)))
-    hop_w = hop_distance(wall, A)
+    hop_w = hop_distance(solid, A)
     deg = np.asarray(A.sum(axis=1)).reshape(-1)
     xs = data.x.detach().cpu().numpy()
     ch = {c: i for i, c in enumerate(data.x_channel_names.split(","))}
@@ -179,7 +227,13 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     # --- physics backbone ----------------------------------------------------
     f0 = t0_flow_fields(data, bio_cfg, hops=hops, flow_source=flow)
     hook = make_rollout_hook(SHIPPED, bio_cfg, f0.sr)
-    traj, _ = integrate_mat_trajectory(data, bio_cfg, f0.gate * wall,
+    # Gated `srf1` on the healthy wall, UNGATED `srf2` on the wound -- `deposition_gate`
+    # keeps the two laws distinct while letting both deposit.  The old `f0.gate * wall` was
+    # a correct transcription of `srf1` and a wrong description of the vessel: it gave the
+    # injured segment no deposition at all, so `mat_phys` -- and `log_mat_owner`, and every
+    # transport channel built on it -- read zero exactly where the clot is guaranteed
+    # (docs/WOUND_PROGRESS.md 14.6).  Bit-identical on any pack without a wound mask.
+    traj, _ = integrate_mat_trajectory(data, bio_cfg, deposition_gate(data, f0, wall=wall),
                                        da_scale=SHIPPED_DA_SCALE, ap_closure=hook)
     mat_phys = traj[-1]
     # onset index in the backbone rollout (-1 -> never); a timing prior for the network
@@ -210,7 +264,9 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
 
     F = {
         # geometry / topology
-        "is_wall": wall.astype(np.float32),
+        # the union: this channel answers "am I on a solid boundary", and a wound node is.
+        # Which law applies there is `data.mask_wound`'s job, not this channel's.
+        "is_wall": solid.astype(np.float32),
         "is_shell": shell.astype(np.float32),
         "is_midside": ms.astype(np.float32),
         "dist_wall_edges": (dist_w / max(h_edge, 1e-12)).astype(np.float32),
@@ -263,7 +319,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     mat_gt = np.expm1(data.y[t_eval, :, names.index("Mat_log1p_nd")].double().numpy()) * MAT_S
     return dict(F=F, y=gt.astype(np.float32),
                 mat_gt=np.log1p(np.maximum(mat_gt, 0.0) / crit).astype(np.float32),
-                wall=wall, shell=shell, owner=owner.astype(np.int64),
+                wall=wall, solid=solid, shell=shell, owner=owner.astype(np.int64),
                 edge_index=ei.astype(np.int64), pos=pos_xy.astype(np.float32),
                 mat_phys=mat_phys.astype(np.float32), gate=gate.astype(np.float32),
                 sr=sr.astype(np.float32), spd=spd.astype(np.float32),

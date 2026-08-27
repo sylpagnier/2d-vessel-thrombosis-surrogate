@@ -145,15 +145,17 @@ class PatientDataExtractor:
         M_flat = out.scatter_add_(0, row.view(-1, 1).expand_as(M_e_flat), M_e_flat)
 
         M = M_flat.view(num_nodes, 5, 5)
-        epsilon = 1e-6
-        I = torch.eye(5, device=M.device).unsqueeze(0).expand(num_nodes, 5, 5)
-        M_reg = M + epsilon * I
 
-        # --- NEW: Compute Max Condition Number for Stability Check ---
-        cond_numbers = torch.linalg.cond(M_reg)
-        max_cond = cond_numbers.max().item()
+        # RGP_DEQ_REPAIR_PLAN.md D5: truncate what the stencil cannot resolve instead of
+        # ridging it into the inverse.  See `mesh_wls.rank_aware_pinv_sym` for why the old
+        # `pinv(M + 1e-6*I)` is scale-dependent and blows up on collinear (P2 mid-side) rows.
+        from src.data_gen.lib.mesh_wls import rank_aware_pinv_sym
 
-        M_inv = torch.linalg.pinv(M_reg)
+        cond_numbers = torch.linalg.cond(M)
+        finite_cond = cond_numbers[torch.isfinite(cond_numbers)]
+        max_cond = float(finite_cond.max().item()) if finite_cond.numel() else float("inf")
+
+        M_inv = rank_aware_pinv_sym(M)
         return V, W, M_inv.squeeze(1), max_cond
 
     def _precompute_sparse_operators(self, edge_index, num_nodes, M_inv, V, W):

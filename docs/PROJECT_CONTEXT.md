@@ -41,7 +41,7 @@ A “clot” here is not a discrete classifier. It is a region where continuous 
 | Train biochem_gnn | `python -m src.bin.main train biochem-gnn` |
 | Kinematics datagen | `python -m src.data_gen.pipeline_kinematics` |
 | Biochem datagen | `python -m src.data_gen.pipeline_biochem` |
-| Customer UI | `scripts/go_customer_predict.ps1` |
+| Customer UI | `scripts/go_customer_predict.ps1` (desktop) / `scripts/go_customer_predict_web.ps1` (browser) |
 | Flow demo | `python -m src.bin.main inspect flow -- --rheology carreau` |
 
 Checkpoints: `outputs/kinematics/`, `outputs/biochem/` (local). Reference manifests: `data/reference/`. Path helpers: `data_root()`, `outputs_root()`, `kinematics_dir()`, `biochem_dir()`, `reports_dir()`, `comsol_models_dir()`, `resolve_checkpoint()`.

@@ -112,7 +112,7 @@ def main() -> int:
 
     print("[i] loading compound pipeline (WC_v7 wall + lumen specialist)...")
     t0 = time.time()
-    pipeline = CustomerDeployPipeline()
+    pipeline = CustomerDeployPipeline(model_name="legacy_species")
     pipeline._ensure_loaded()
     print("[i] loaded in %.0fs" % (time.time() - t0))
 

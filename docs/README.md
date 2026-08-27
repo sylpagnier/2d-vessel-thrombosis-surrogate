@@ -15,6 +15,7 @@ Active design and operator docs for **HemoRGP**. Lab notebooks, sweep logs, and 
 | Doc | Purpose |
 |-----|---------|
 | [KINEMATICS_BEST_ARCHITECTURE.md](KINEMATICS_BEST_ARCHITECTURE.md) | Locked architecture + training recipe |
+| **[RGP_DEQ_REPAIR_PLAN.md](RGP_DEQ_REPAIR_PLAN.md)** | **Why the deployable flow arm fails: prior leak, wall-band blindness, bug list + redesign** |
 | [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md) | Optional k-hop clot diversion GNN |
 | [COMSOL_PHYSICS_VALIDATION.md](COMSOL_PHYSICS_VALIDATION.md) | Flow / physics parity vs COMSOL |
 | [COMSOL_MU_RHEOLOGY_CHECKLIST.md](COMSOL_MU_RHEOLOGY_CHECKLIST.md) | Viscosity / rheology checklist |
@@ -26,6 +27,10 @@ Active design and operator docs for **HemoRGP**. Lab notebooks, sweep logs, and 
 | [BIOCHEM_GNN.md](BIOCHEM_GNN.md) | Deploy stack (`biochem_gnn`) |
 | [MAT_GROWTH.md](MAT_GROWTH.md) | Canonical mat-growth baseline and how to extend it |
 | [BIOCHEM_LEGACY_LESSONS.md](BIOCHEM_LEGACY_LESSONS.md) | Condensed takeaways from retired ladders |
+| [PHASE10_V4.md](PHASE10_V4.md) | `clot_gnn_v4`: strict protocol, readout, noise floor |
+| [WOUND_PROGRESS.md](WOUND_PROGRESS.md) | Injured wall: the ungated law, `clot_gnn_v4w`, unified `clot_ml_v0` |
+| **[MODEL_REVIEW_2026-08-22.md](MODEL_REVIEW_2026-08-22.md)** | **Full-stack review: where the remaining score is, and the current to-do list** |
+| [SEALED_SPLIT.md](SEALED_SPLIT.md) | Which vessels are held out, and the 2026-08-22 release |
 
 ## Operators
 

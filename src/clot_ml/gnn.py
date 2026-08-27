@@ -24,6 +24,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+#: Speeds below ``FLOW_DIR_DEADBAND * median(|u|)`` carry no flow DIRECTION.
+#:
+#: The direction cosines below are ``(edge . velocity) / |velocity|``, and the normaliser
+#: amplifies whatever is in the numerator without limit as ``|velocity| -> 0``.  COMSOL's
+#: no-slip wall velocity is **exactly** 0.0, so under ``flow="gt"`` every edge into a wall
+#: node gets ``cos = 0`` and ``w_up = w_dn = 0`` -- the locked ensembles were trained with
+#: wall nodes receiving no anisotropic messages at all.  RGP-DEQ cannot reproduce that: its
+#: hard BC is ``u = uv_prior + sdf * uvp`` and on these packs ``sdf_nd`` at the wall is
+#: clamped to 1e-6 while ``u_prior`` is ~2.9e-5, so its wall speed is ~5e-6 -- physically
+#: zero (4e-6 of the lumen median) but a thousand times the old ``+1e-9`` floor, which
+#: turned float noise into a UNIT direction vector.  Measured 2026-08-23: mean ``|cos_d|``
+#: on wall-destination edges 0.0000 (GT) vs 0.70 (RGP-DEQ), total up/down aggregation mass
+#: 0 vs ~1100, and per-node F1 recovers 0.377 -> 0.619 with the deadband in place.
+#:
+#: A *relative* floor is what makes this safe.  Under GT no node falls in the band at all
+#: (the field is exactly 0 at the wall or O(1) in the lumen), so the GT arm is unchanged --
+#: pinned by ``test_flow_direction_deadband``.  The value is not tuned: 1e-3 and 1e-2 give
+#: identical scores on all 10 measured vessels, which is the signature of a noise floor
+#: rather than a threshold.
+FLOW_DIR_DEADBAND = 1e-3
+
+
 def edge_features(pos: np.ndarray, ei: np.ndarray, u: np.ndarray, v: np.ndarray,
                   h_edge: float) -> np.ndarray:
     src, dst = ei[0], ei[1]
@@ -32,11 +54,13 @@ def edge_features(pos: np.ndarray, ei: np.ndarray, u: np.ndarray, v: np.ndarray,
     dh = d / (ln + 1e-9)
     fs = np.stack([u[src], v[src]], 1)
     fd = np.stack([u[dst], v[dst]], 1)
-    ns = np.linalg.norm(fs, axis=1, keepdims=True) + 1e-9
-    nd = np.linalg.norm(fd, axis=1, keepdims=True) + 1e-9
-    cos_s = (dh * fs).sum(1, keepdims=True) / ns
-    cos_d = (dh * fd).sum(1, keepdims=True) / nd
-    spd_s = np.log1p(ns)
+    ns = np.linalg.norm(fs, axis=1, keepdims=True)
+    nd = np.linalg.norm(fd, axis=1, keepdims=True)
+    # Below the deadband a "direction" is numerical noise, not flow -- see FLOW_DIR_DEADBAND.
+    floor = FLOW_DIR_DEADBAND * float(np.median(np.hypot(u, v)))
+    cos_s = (dh * fs).sum(1, keepdims=True) / (ns + 1e-9) * (ns > floor)
+    cos_d = (dh * fd).sum(1, keepdims=True) / (nd + 1e-9) * (nd > floor)
+    spd_s = np.log1p(ns + 1e-9)
     return np.concatenate([dh, ln, cos_s, cos_d, cos_s * spd_s, spd_s], axis=1).astype(np.float32)
 
 
@@ -101,4 +125,10 @@ def to_device(S: dict, mu: np.ndarray, sd: np.ndarray, dev: torch.device) -> dic
         w_up=t(w_up), w_dn=t(w_dn),
         mat_phys=t(np.log1p(np.maximum(S["mat_phys"], 0.0) / 2e7)),
         y=t(S["y"]), mat_gt=t(S["mat_gt"]),
-        wall=t(S["wall"].astype(np.float32)), n=int(len(S["wall"])))
+        wall=t(S["wall"].astype(np.float32)),
+        # `solid` = wall | wound.  Carried so the training domains can match the EVAL
+        # domains exactly (`src/clot_ml/data.eval_domains`): off-wall is `~solid`, true
+        # lumen, not `~wall`.  Identical on every no-wound pack, and older caches that
+        # predate the geometry union fall back to `wall`.
+        solid=t(np.asarray(S.get("solid", S["wall"])).astype(np.float32)),
+        n=int(len(S["wall"])))

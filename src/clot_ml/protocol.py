@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from src.clot_ml.data import eval_domains
 from src.clot_ml.fastscore import VesselScorer
 
 
@@ -23,9 +24,9 @@ class Bench:
 
     def row(self, a: str, pred: np.ndarray) -> dict:
         S = self.cache[a]
-        wall = S["wall"]
+        wall, off = eval_domains(S)      # `off` is ~solid, not ~wall -- see data.eval_domains
         return dict(wall=self.vs[a].score(pred, wall),
-                    off=self.vs[a].score(pred, ~wall),
+                    off=self.vs[a].score(pred, off),
                     full=self.vs[a].score(pred, None))
 
     def summarise(self, rows: dict) -> dict:

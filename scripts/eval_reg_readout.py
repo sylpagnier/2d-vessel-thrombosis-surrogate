@@ -86,7 +86,10 @@ def budget_mask(cls, reg, d):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", required=True)
-    ap.add_argument("--cache", default="v4")
+    ap.add_argument("--cache", default="v5",
+                    help="v5 is the current cache.  This defaulted to 'v4', which is the "
+                         "19-vessel PRE-REPAIR cache -- still on disk and now warned about "
+                         "by `load_cache`, but silently wrong as a default.")
     ap.add_argument("--save", default="")
     args = ap.parse_args()
 

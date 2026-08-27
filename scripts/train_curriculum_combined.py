@@ -5,6 +5,12 @@ import time
 import sys
 from pathlib import Path
 
+
+# Run directly (`python scripts/train_curriculum_combined.py`) needs the repo root importable.
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from src.differentiable_wall_model.temporal_models import (
     TemporalDifferentiableWallModel,
     PseudoCGNODE

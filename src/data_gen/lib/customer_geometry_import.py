@@ -164,6 +164,65 @@ def apply_re_target(data: Data, re_target: float) -> Data:
     return out
 
 
+def apply_customer_mirrored_wound(
+    data: Data,
+    *,
+    enabled: bool,
+    position_frac: float = 0.50,
+    width_frac: float = 0.15,
+) -> Data:
+    """Assign a symmetric wound patch on both wall sides of a customer graph.
+
+    ``position_frac`` and ``width_frac`` are measured along the inlet-to-outlet axis,
+    not in global x.  Every solid-boundary node inside that axial interval becomes a
+    wound node; therefore the patch is mirrored across the lumen by construction.
+    The healthy-wall mask is made disjoint from it, matching the wound complement's
+    domain convention.  With ``enabled=False`` the existing solid boundary is restored
+    as healthy wall and the result is a no-wound graph.
+    """
+    out = data.clone() if hasattr(data, "clone") else data
+    if not hasattr(out, "mask_wall") or out.mask_wall is None:
+        raise CustomerGeometryError("Graph is missing mask_wall; cannot place a wound.")
+    wall = out.mask_wall.reshape(-1).bool()
+    existing = getattr(out, "mask_wound", None)
+    if existing is not None and torch.is_tensor(existing) and existing.numel():
+        solid = wall | existing.reshape(-1).bool().to(device=wall.device)
+    else:
+        solid = wall.clone()
+    n = int(solid.numel())
+    wound = torch.zeros(n, dtype=torch.bool, device=wall.device)
+    if enabled and bool(solid.any()):
+        pos = out.x[:, :2].detach().to(device="cpu", dtype=torch.float64).numpy()
+        inlet = getattr(out, "mask_inlet", None)
+        outlet = getattr(out, "mask_outlet", None)
+        axis: np.ndarray | None = None
+        if inlet is not None and outlet is not None:
+            inn = inlet.reshape(-1).bool().detach().cpu().numpy()
+            outn = outlet.reshape(-1).bool().detach().cpu().numpy()
+            if inn.any() and outn.any():
+                axis = pos[outn].mean(axis=0) - pos[inn].mean(axis=0)
+        if axis is None or float(np.linalg.norm(axis)) < 1e-12:
+            centered = pos - pos.mean(axis=0, keepdims=True)
+            _u, _s, vh = np.linalg.svd(centered, full_matrices=False)
+            axis = vh[0]
+        axis = np.asarray(axis, dtype=np.float64)
+        axis /= max(float(np.linalg.norm(axis)), 1e-12)
+        q = pos @ axis
+        solid_np = solid.detach().cpu().numpy()
+        lo, hi = float(q[solid_np].min()), float(q[solid_np].max())
+        along = (q - lo) / max(hi - lo, 1e-12)
+        center = float(np.clip(position_frac, 0.0, 1.0))
+        width = float(np.clip(width_frac, 0.01, 0.80))
+        wound_np = solid_np & (np.abs(along - center) <= 0.5 * width)
+        wound = torch.as_tensor(wound_np, dtype=torch.bool, device=wall.device)
+    out.mask_wound = wound
+    out.mask_wall = solid & ~wound
+    out.customer_wound_enabled = bool(enabled)
+    out.customer_wound_position_frac = float(np.clip(position_frac, 0.0, 1.0))
+    out.customer_wound_width_frac = float(np.clip(width_frac, 0.01, 0.80))
+    return out
+
+
 def _bio_y_width() -> int:
     return int(Y_SCHEMAS[BIO_Y_SCHEMA].width)
 

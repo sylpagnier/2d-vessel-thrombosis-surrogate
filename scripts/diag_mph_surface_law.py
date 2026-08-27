@@ -7,7 +7,7 @@ reaction nodes, the analytic functions they call, and the parameters -- so the r
 than re-derived from exports.
 
     python scripts/diag_mph_surface_law.py
-    python scripts/diag_mph_surface_law.py --mph comsol_models/phase2_template_wound.mph
+    python scripts/diag_mph_surface_law.py --mph comsol_models/phase2_wound_001.mph
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def settings_of(node: dict) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mph", default="comsol_models/phase2_template_nowound.mph")
+    ap.add_argument("--mph", default="comsol_models/phase2_nowound_011.mph")
     args = ap.parse_args()
     sm, raw = load(REPO / args.mph)
     nodes: list = []

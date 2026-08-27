@@ -53,25 +53,46 @@ from src.clot_ml.features_v4 import (  # noqa: E402
     horizon_for, indicator_physics, new_channels,
 )
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
-from src.core_physics.wall_cohort_splits import DEV, FIT, MIN_T  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T  # noqa: E402
 
 PACKS = REPO / "data/processed/graphs_biochem_anchors"
-SRC = REPO / "outputs/clot_ml_cache_gt"
 M_TO_CM = 100.0
+
+#: v3 cache to extend, per flow source.  The v4 block is an EXTENSION of the v3 sample, so
+#: the two halves must be built from the same velocity field -- `--flow pred` reads the
+#: predicted-flow v3 cache, which `scripts/build_clot_ml_cache.py --flow pred` writes.
+SRC_FOR_FLOW = {"gt": "outputs/clot_ml_cache_gt", "pred": "outputs/clot_ml_cache_pred"}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="outputs/clot_ml_cache_v4")
+    ap.add_argument("--flow", default="gt", choices=["gt", "pred"],
+                    help="velocity field for BOTH the source v3 cache and the v4 block")
+    ap.add_argument("--out", default="",
+                    help="default: outputs/clot_ml_cache_v4 (gt) / _v4_pred (pred)")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--src", default="",
+                    help="override the source v3 cache (default: per --flow)")
+    ap.add_argument("--only", default="", help="comma-separated anchors")
     args = ap.parse_args()
-    out = REPO / args.out
+    SRC = REPO / (args.src or SRC_FOR_FLOW[args.flow])
+    if not SRC.exists():
+        print("[ERR] source v3 cache %s missing -- run "
+              "`python scripts/build_clot_ml_cache.py --flow %s` first"
+              % (SRC, args.flow), flush=True)
+        return 2
+    out = REPO / (args.out or ("outputs/clot_ml_cache_v4" if args.flow == "gt"
+                               else "outputs/clot_ml_cache_v4_pred"))
     out.mkdir(parents=True, exist_ok=True)
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     crit = float(bio.viscosity_mat_crit)
 
     diag = []
-    for a in list(FIT) + list(DEV):
+    todo = list(FIT) + list(DEV) + list(CLOT_FREE)
+    only = [x.strip() for x in args.only.split(",") if x.strip()]
+    if only:
+        todo = [a for a in todo if a in only]
+    for a in todo:
         src = SRC / f"{a}.npz"
         dst = out / f"{a}.npz"
         if not src.exists():
@@ -86,7 +107,7 @@ def main() -> int:
         z = np.load(src, allow_pickle=True)
         S = {k: z[k] for k in z.files}
         wall = S["wall"]
-        mat_ind, onset_ind, gate_ind = indicator_physics(d, bio, wall)
+        mat_ind, onset_ind, gate_ind = indicator_physics(d, bio, wall, flow=args.flow)
         NC = new_channels(S, mat_ind, onset_ind, gate_ind, crit)
 
         cols = [str(c) for c in S["cols"]]

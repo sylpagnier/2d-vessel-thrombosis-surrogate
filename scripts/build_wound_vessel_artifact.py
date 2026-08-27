@@ -130,22 +130,11 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
     Inlet/outlet are the small filled ticks so you can orient the vessel.
   </p>
 
-  <div class="callout">
-    <b>The wound mask is empty on these packs.</b>
-    Each graph has a <code>mask_wound</code> tensor, but it is all-false.
-    The meshes have no Gmsh line tags, there is no
-    <code>wound_patientXXX_wound.txt</code>, and the COMSOL selection labeled
-    <code>wound</code> (<code>sel1</code> in the <code>.mph</code>) never made it
-    into the graph. Until that export is re-pulled, we cannot point at a wall
-    node and say &ldquo;this is the wound&rdquo; from the pack itself.
+  <div class="callout" id="callout-mask">
+    <b>Checking the wound mask&hellip;</b>
   </div>
-  <div class="callout ok">
-    <b>Left window fallback is diagnostic, not the wound selection.</b>
-    Because the mask is empty, the left window colours wall nodes by
-    <code>Mat</code> at the current time (normalised by that vessel&rsquo;s
-    final wall max). Wound physics dumps Mat through <code>WoundFlux_9spec</code>,
-    so a compact Mat patch is a useful hint &mdash; it is not
-    <code>data.mask_wound</code>.
+  <div class="callout ok" id="callout-left">
+    <b>Left is wall identity. Right is GT clot.</b>
   </div>
 
   <div class="tabs">
@@ -200,8 +189,8 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
   </div>
 
   <div class="legend">
-    <div class="legend-item"><span class="swatch wound"></span> wound mask (empty here)</div>
-    <div class="legend-item"><span class="grad-swatch grad-model"></span> wall Mat diagnostic</div>
+    <div class="legend-item" id="legend-wound"><span class="swatch wound"></span> wound mask</div>
+    <div class="legend-item" id="legend-mat"><span class="grad-swatch grad-model"></span> wall Mat diagnostic</div>
     <div class="legend-item"><span class="swatch gt"></span> GT clot, wall</div>
     <div class="legend-item"><span class="swatch sq gt"></span> GT clot, lumen</div>
     <div class="legend-item"><span class="swatch inlet"></span> inlet</div>
@@ -212,23 +201,14 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
   </div>
 
   <h2 class="section">What to read off this</h2>
-  <div class="finding-box" id="finding">
-    If the left window lights up a compact wall patch as time advances, that is
-    where Mat is accumulating &mdash; the wound-flux signature, not a stored
-    wound mask. The right window should start empty and grow a clot that
-    overlaps that patch. A healthy extract has inlet/outlet on opposite ends,
-    a connected wall, and a non-zero final clot. None of these packs currently
-    satisfy &ldquo;we know which wall nodes are the wound.&rdquo;
-  </div>
+  <div class="finding-box" id="finding"></div>
 
-  <p class="foot-note">
+  <p class="foot-note" id="foot-note">
     Graphs: <code>data/processed/graphs_biochem_anchors/wound_patient00{1,2,3}.pt</code>.
     GT clot from <code>gt_clot_phi_at_time</code> (growth of capped <code>mu_eff</code>).
-    Mat from <code>y</code> channel <code>Mat</code>. Identity from
-    <code>mask_wound</code> / <code>mask_wall</code> / <code>mask_inlet</code> /
-    <code>mask_outlet</code>. This page is a data-health check, not a model score.
-    To actually populate the wound mask, re-pull the COMSOL <code>wound</code>
-    selection into <code>*_wound.txt</code> and re-extract.
+    Identity from <code>mask_wound</code> / <code>mask_wall</code> /
+    <code>mask_inlet</code> / <code>mask_outlet</code>. This page is a data-health
+    check, not a model score.
   </p>
 </main>
 
@@ -505,6 +485,27 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
     return series[best];
   }
 
+  function updatePageCopy() {
+    const allKnown = order.every(k => DATA[k].flags.wound_known);
+    const maskEl = document.getElementById('callout-mask');
+    const leftEl = document.getElementById('callout-left');
+    const legendMat = document.getElementById('legend-mat');
+    const finding = document.getElementById('finding');
+    if (allKnown) {
+      maskEl.className = 'callout ok';
+      maskEl.innerHTML = '<b>The wound mask is on these graphs.</b> Extract snapped mesh nodes onto the COMSOL <code>wound</code> selection (<code>sel1</code>) and wrote <code>*_wound.txt</code>. Left-window circles in the wound colour are <code>mask_wound</code>. The injury is stored disjoint from healthy <code>mask_wall</code>; the left window shows the union.';
+      leftEl.innerHTML = '<b>Left is identity, right is clot.</b> The wound patch should sit still on the wall while the right window grows clot that overlaps it. A healthy extract has inlet/outlet on opposite ends, empty clot at t=0, and a non-zero final clot.';
+      legendMat.style.display = 'none';
+      finding.innerHTML = 'The left window should show a compact wound patch that does not move in time. The right window should start empty and grow a clot that covers that patch, then continue into the lumen. Inlet and outlet ticks belong at opposite ends.';
+    } else {
+      maskEl.className = 'callout';
+      maskEl.innerHTML = '<b>The wound mask is empty on these packs.</b> Each graph has a <code>mask_wound</code> tensor, but it is all-false. Until <code>*_wound.txt</code> is re-pulled from the COMSOL <code>wound</code> selection (<code>sel1</code>), we cannot point at a wall node and say it is the wound.';
+      leftEl.innerHTML = '<b>Left window fallback is diagnostic, not the wound selection.</b> Because the mask is empty, the left window colours wall nodes by <code>Mat</code>. That is a hint from <code>WoundFlux_9spec</code>, not <code>data.mask_wound</code>.';
+      legendMat.style.display = '';
+      finding.innerHTML = 'If the left window lights up a compact wall patch as time advances, that is Mat accumulating &mdash; not a stored wound mask. The right window should start empty and grow a clot. None of these packs currently satisfy &ldquo;we know which wall nodes are the wound.&rdquo;';
+    }
+  }
+
   function updateReadout() {
     const d = DATA[vessel];
     const t = d.frame_t[frame];
@@ -573,6 +574,7 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
   });
 
   window.addEventListener('resize', redraw);
+  updatePageCopy();
   setVessel(vessel);
 })();
 </script>

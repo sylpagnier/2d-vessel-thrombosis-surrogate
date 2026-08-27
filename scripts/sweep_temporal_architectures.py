@@ -7,6 +7,13 @@ import torch
 import torch.nn.functional as F
 import time
 from pathlib import Path
+import sys
+
+# Run directly (`python scripts/sweep_temporal_architectures.py`) needs the repo root importable.
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from src.differentiable_wall_model.temporal_models import (
     TemporalDifferentiableWallModel,
     get_temporal_model_by_name
@@ -49,7 +56,9 @@ def run_sweep():
     import numpy as np
     from src.differentiable_wall_model.evaluation import evaluate_vessel
     import json
-    results_file = Path("sweep_results_score.json")
+    # `outputs/`, not the repo root -- a sweep should not drop its results next to the source.
+    results_file = Path("outputs/sweep_temporal_architectures_score.json")
+    results_file.parent.mkdir(parents=True, exist_ok=True)
     if results_file.exists():
         with open(results_file, "r") as f:
             results = json.load(f)

@@ -17,6 +17,7 @@ from torch_geometric.data import Data
 from src.config import NodeFeat, PhysicsConfig, VesselConfig
 from src.data_gen.lib.centerline_utils import resolve_centerline_nd
 from src.data_gen.lib.mesh_to_graph import _clip_wss_magnitude_quantile, assemble_kinematics_graph_data
+from src.data_gen.lib.mesh_wls import boundary_normals_from_graph, solid_boundary_mask
 from src.data_gen.lib.node_feature_assembly import build_kinematics_node_x_tensor
 from src.utils.kinematics_geometry import attach_geometry_metadata
 from src.utils.units import d_bar_si_from_sidecar
@@ -33,15 +34,27 @@ def wall_normals_and_sdf_mesh_to_graph_style(
     d_bar_si: float,
     centerline_pts_si: Optional[np.ndarray] = None,
     wall_tag: Optional[int] = None,
+    wound_tag: Optional[int] = None,
+    edge_index: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Gmsh line-segment wall normals + KD-tree SDF (matches ``MeshToGraph``)."""
+    """Gmsh line-segment wall normals + KD-tree SDF (matches ``MeshToGraph``).
+
+    The SDF and the normals are measured against the **solid boundary** -- wall union wound
+    (``solid_boundary_mask``) -- not against ``mask_wall`` alone.  A wound node is a no-slip
+    boundary node that happens to carry the ungated deposition law; measuring distance to the
+    nearest *un-wounded* wall node instead put wound nodes 0.1-0.3 diameters into the lumen.
+    """
+    tags = VesselConfig(phase="kinematics").TAGS
     if wall_tag is None:
-        wall_tag = int(VesselConfig(phase="kinematics").TAGS["Walls"])
+        wall_tag = int(tags["Walls"])
+    if wound_tag is None and tags.get("Wound") is not None:
+        wound_tag = int(tags["Wound"])
 
     nodes = np.asarray(nodes_si, dtype=np.float64)
-    wall_idx = np.where(mask_wall.detach().cpu().numpy())[0]
+    mask_solid = solid_boundary_mask(mask_wall, mask_wound)
+    wall_idx = np.where(mask_solid.detach().cpu().numpy())[0]
     if len(wall_idx) == 0:
-        raise ValueError("wall_normals_and_sdf: empty mask_wall")
+        raise ValueError("wall_normals_and_sdf: empty wall/wound boundary mask")
 
     wall_pts = nodes[wall_idx]
     tree_wall = KDTree(wall_pts)
@@ -60,11 +73,31 @@ def wall_normals_and_sdf_mesh_to_graph_style(
         else:
             l_cells, l_tags = [], []
 
+        solid_tags = {int(wall_tag)}
+        if wound_tag is not None:
+            solid_tags.add(int(wound_tag))
         for i, tag in enumerate(l_tags):
-            if int(tag) == int(wall_tag):
+            if int(tag) in solid_tags:
                 wall_lines.append(l_cells[i])
     except Exception:
         wall_lines = []
+
+    if not wall_lines and edge_index is not None:
+        # NO LINE CELLS -- which is every pack in this cohort.  The COMSOL `.msh` exports
+        # carry only `triangle6`, so the branch below never ran and the KD-tree fallback
+        # handed a wall node ITSELF as its nearest boundary neighbour: `diff_vec` is the zero
+        # vector there, and `wall_normal` came out identically zero at every wall node on
+        # every pack (WOUND_PROGRESS 8).  Fall back to the graph instead of to nothing.
+        spine = None
+        if centerline_pts_si is not None and len(centerline_pts_si) > 0:
+            cl = np.asarray(centerline_pts_si, dtype=np.float64)
+            _, near = cKDTree(cl).query(nodes)
+            spine = cl[near]
+        graph_normals = boundary_normals_from_graph(
+            nodes, mask_solid.detach().cpu().numpy(),
+            np.asarray(edge_index), orient_targets=spine)
+        got = np.linalg.norm(graph_normals, axis=1) > 0.5
+        diff_vec[got] = graph_normals[got]
 
     if wall_lines:
         node_normals = np.zeros((len(nodes), 2), dtype=np.float32)
@@ -72,10 +105,7 @@ def wall_normals_and_sdf_mesh_to_graph_style(
             spine_tree = cKDTree(np.asarray(centerline_pts_si, dtype=np.float64))
         else:
             spine_tree = None
-        if mask_wound is not None:
-            interior = ~(mask_wall.numpy() | mask_inlet.numpy() | mask_outlet.numpy() | mask_wound.numpy())
-        else:
-            interior = ~(mask_wall.numpy() | mask_inlet.numpy() | mask_outlet.numpy())
+        interior = ~(mask_solid.numpy() | mask_inlet.numpy() | mask_outlet.numpy())
         center_pt = np.mean(nodes[interior], axis=0) if interior.any() else np.mean(nodes, axis=0)
 
         for line in wall_lines:
@@ -200,12 +230,16 @@ def build_kinematics_graph_from_comsol_steady(
     nodes_nd = torch.tensor(mesh_nodes_si / float(d_bar_si), dtype=torch.float32)
     pos_nd_tensor = nodes_nd
 
+    # Physics keeps wall and wound separate (gated vs ungated deposition); geometry must not.
+    # Every wall-derived feature below is measured against the solid boundary union.
+    mask_solid = solid_boundary_mask(mask_wall, mask_wound)
+
     cl_pts_nd, cl_tan_nd, centerline_source = resolve_centerline_nd(
         pos_nd_tensor,
         mask_inlet,
         mask_outlet,
         edge_index=edge_index,
-        mask_wall=mask_wall,
+        mask_wall=mask_solid,
         stem=stem,
         raw_sidecar_dir=raw_sidecar_dir,
     )
@@ -220,9 +254,10 @@ def build_kinematics_graph_from_comsol_steady(
         mask_wound=mask_wound,
         d_bar_si=float(d_bar_si),
         centerline_pts_si=centerline_pts_si,
+        edge_index=edge_index,
     )
 
-    wall_coords_si = mesh_nodes_si[mask_wall.detach().cpu().numpy()]
+    wall_coords_si = mesh_nodes_si[mask_solid.detach().cpu().numpy()]
     wall_tree = cKDTree(wall_coords_si if len(wall_coords_si) else mesh_nodes_si)
 
     u_bc = torch.zeros((n, 1), dtype=torch.float32)
@@ -236,7 +271,7 @@ def build_kinematics_graph_from_comsol_steady(
         wall_normal=wall_normal_vec,
         mask_inlet=mask_inlet,
         mask_outlet=mask_outlet,
-        mask_wall=mask_wall if mask_wound is None else (mask_wall | mask_wound),
+        mask_wall=mask_solid,
         d_bar_si=float(d_bar_si),
         u_ref=float(u_ref),
         phys_cfg=phys_cfg,
@@ -256,11 +291,8 @@ def build_kinematics_graph_from_comsol_steady(
 
     u_nd = u_nd.clone()
     v_nd = v_nd.clone()
-    u_nd[mask_wall] = 0.0
-    v_nd[mask_wall] = 0.0
-    if mask_wound is not None:
-        u_nd[mask_wound] = 0.0
-        v_nd[mask_wound] = 0.0
+    u_nd[mask_solid] = 0.0
+    v_nd[mask_solid] = 0.0
 
     y_labels = comsol_fields_to_kinematics_y(
         u_nd=u_nd,
@@ -268,7 +300,7 @@ def build_kinematics_graph_from_comsol_steady(
         p_nd=p_nd,
         mu_nd=mu_nd,
         wall_normal_vec=wall_normal_vec,
-        mask_wall=mask_wall if mask_wound is None else (mask_wall | mask_wound),
+        mask_wall=mask_solid,
         edge_index=edge_index,
         M_inv=M_inv,
         V=V,

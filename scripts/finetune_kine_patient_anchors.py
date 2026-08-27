@@ -31,8 +31,28 @@ if str(_REPO) not in sys.path:
 # Must be set before train_kinematics_predictor import side effects.
 os.environ.setdefault("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "1")
 os.environ.setdefault("KINEMATICS_SKIP_LBFGS", "1")
-os.environ.setdefault("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", "patient007")
 os.environ.setdefault("KINEMATICS_DUAL_PROMOTION_GATES", "1")
+
+
+def _default_holdout_stems() -> str:
+    """Every SEALED vessel, plus DEV, held out of Stage-A training.
+
+    RGP_DEQ_REPAIR_PLAN.md B8.  This used to default to the single stem ``patient007``, so the
+    other three FINAL_HALF vessels -- ``patient013``, ``patient031``, ``patient043`` -- were
+    *trained on*.  Stage-A flow is an input to every downstream clot score, so training the
+    flow model on a sealed vessel contaminates the one spend the seal exists to protect.
+    Derive the holdout from the canonical split definitions rather than restating it here.
+    """
+    from src.core_physics.wall_cohort_splits import DEV, SEALED
+
+    return ",".join(sorted(set(SEALED) | set(DEV)))
+
+
+os.environ.setdefault("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", _default_holdout_stems())
+# The DEQ consumes UV_PRIOR/MU_PRIOR as inputs; the anchor packs store COMSOL's own t=0 field
+# there (bit-identical on 43/43).  Training on it teaches a near-identity that deploy cannot
+# reproduce, so Stage-A trains on the analytic block deploy will actually have (s17 Z2).
+os.environ.setdefault("SPECIES_PRIOR_SOURCE", "analytic")
 os.environ.setdefault("KINEMATICS_SYNTHETIC_VAL_RATIO", "0.15")
 os.environ.setdefault("KINEMATICS_SYNTHETIC_VAL_MIN", "20")
 os.environ.setdefault("KINEMATICS_SYNTHETIC_VAL_MIN_L2", "6")

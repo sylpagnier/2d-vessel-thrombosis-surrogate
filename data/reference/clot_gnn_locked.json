@@ -1,98 +1,223 @@
 {
-  "name": "clot_gnn_v4",
-  "kind": "temporal_v4",
-  "path": "outputs/clot_ml/locked/clot_gnn_v4",
-  "manifest": "outputs/clot_ml/locked/clot_gnn_v4/manifest.json",
-  "promoted_at": "2026-08-21T06:45:22Z",
-  "docs": "docs/PHASE10_V4.md",
-  "supersedes": "clot_gnn_v3",
+  "name": "clot_gnn_v6w",
+  "kind": "temporal_v4_wound",
+  "path": "outputs/clot_ml/locked/clot_gnn_v6w",
+  "manifest": "outputs/clot_ml/locked/clot_gnn_v6w/manifest.json",
+  "promoted_at": "2026-08-24T13:43:49Z",
+  "docs": "docs/WOUND_PROGRESS.md",
+  "supersedes": "clot_gnn_v6",
   "scores_strict_cv": {
     "protocol": "geometry-stratified 5-fold; every readout scalar selected on the OUT-OF-FOLD scores of vessels outside the held-out fold (scripts/eval_strict.py)",
+    "cohort": "23 clot-carrying vessels (VIZ_HALF released 2026-08-22) + 8 clot-free scored on the false-positive branch only; SEALED 007/013/031/043 never seen",
     "v4": {
+      "final": {
+        "all": {
+          "wall": 0.9203,
+          "off": 0.7078
+        },
+        "baseline": {
+          "wall": 0.9246,
+          "off": 0.6631
+        },
+        "priority": {
+          "wall": 0.8997,
+          "off": 0.8419
+        },
+        "clot_free_fp_only": {
+          "wall": 1.0,
+          "off": 1.0,
+          "nodes_committed": 0
+        }
+      },
+      "mean_over_time": {
+        "all": {
+          "wall": 0.8694,
+          "off": 0.5792
+        },
+        "baseline": {
+          "wall": 0.8695,
+          "off": 0.5029
+        },
+        "priority": {
+          "wall": 0.869,
+          "off": 0.8081
+        }
+      },
+      "frozen_same_set": {
+        "all": {
+          "wall": 0.7885,
+          "off": 0.4124
+        }
+      },
+      "oracle_timing_same_set": {
+        "all": {
+          "wall": 0.9673,
+          "off": 0.8219
+        }
+      },
+      "per_vessel_oracle_cut": {
+        "all": {
+          "wall": 0.9377,
+          "off": 0.7526
+        }
+      }
+    },
+    "without_c0": {
+      "final": {
+        "all": {
+          "wall": 0.9008,
+          "off": 0.5812
+        }
+      },
+      "mean_over_time": {
+        "all": {
+          "wall": 0.8716,
+          "off": 0.5713
+        }
+      },
+      "per_vessel_oracle_cut": {
+        "all": {
+          "wall": 0.9312,
+          "off": 0.7746
+        }
+      },
+      "note": "the same cohort and features WITHOUT the C0 distributional constraint (shape_w=0; tags v5a/v5b/v5c).  Paired per configuration, off-wall +0.0854 P=0.031, +0.1059 P=0.002, +0.1649 P=0.000 -- three of three positive.  The WALL gain (+0.0195 at ensemble) is INSIDE the +/-0.024 floor and is NOT claimed.  Mean-over-time is unchanged, so C0 is a FINAL-TIME result.  MODEL_REVIEW_2026-08-22 9b."
+    },
+    "physics_backbone": {
+      "final": {
+        "all": {
+          "wall": 0.8832,
+          "off": 0.3999
+        }
+      }
+    },
+    "superseded_pre_repair_n19": {
       "final": {
         "all": {
           "wall": 0.9176,
           "off": 0.7366
-        },
-        "baseline": {
-          "wall": 0.9186,
-          "off": 0.6973
-        },
-        "priority": {
-          "wall": 0.9123,
-          "off": 0.8674
         }
       },
       "mean_over_time": {
         "all": {
           "wall": 0.875,
           "off": 0.7188
-        },
-        "baseline": {
-          "wall": 0.8741,
-          "off": 0.6821
-        },
-        "priority": {
-          "wall": 0.8798,
-          "off": 0.8411
         }
       },
-      "oracle_timing_same_set": {
-        "all": {
-          "wall": 0.9662,
-          "off": 0.8709
-        }
-      }
-    },
-    "v3_same_protocol": {
-      "final": {
-        "all": {
-          "wall": 0.9014,
-          "off": 0.7011
-        }
-      },
-      "mean_over_time": {
-        "all": {
-          "wall": 0.8687,
-          "off": 0.6389
-        }
-      }
-    },
-    "physics_backbone": {
-      "final": {
-        "all": {
-          "wall": 0.8766,
-          "off": 0.4141
-        }
-      }
+      "note": "docs/PHASE10_V4.md.  Measured on 19 vessels before the pack repair; NOT comparable.  The off-wall difference is a READOUT gap, not a model one -- out-of-fold AUC is unchanged at 0.989 and the per-vessel oracle cut is within the noise floor.  See MODEL_REVIEW_2026-08-22 8f."
     },
     "noise_floor": {
       "wall": 0.024,
-      "off": 0.091,
-      "note": "config spread of one arm; docs/PHASE10_V4.md 2. A 0.01-0.03 cohort-mean difference on these 19 vessels is not a result."
+      "off": 0.074,
+      "note": "config spread of one arm, RE-MEASURED on this cohort (scripts/eval_significance.py --cache v5). Per-vessel spread is far larger: median 0.042 wall / 0.112 off, max 0.216 / 0.628. A cohort-mean difference below the spread is not a result."
     },
-    "paired_bootstrap_v3_to_v4": {
-      "mean_off": [
-        0.0685,
-        0.0281,
-        0.1116
-      ],
-      "final_off": [
-        0.0355,
-        0.01,
-        0.0619
-      ],
-      "mean_wall": [
-        0.0063,
-        -0.015,
-        0.0353
-      ],
-      "final_wall": [
-        0.0162,
-        -0.0153,
-        0.0572
-      ],
-      "note": "P(diff<=0) = 0.000 / 0.002 off-wall; 0.342 / 0.203 wall"
+    "readout_gap": {
+      "off_cohort_cut": 0.7078,
+      "off_per_vessel_oracle": 0.7526,
+      "gap": 0.0448,
+      "gap_without_c0": 0.1934,
+      "previous_gap": 0.12,
+      "note": "Was the largest quantified loss in the project (0.193).  Closed to 0.045 by the C0 training-time distributional constraint (shape_w), NOT by a new readout: the per-vessel oracle did NOT rise (0.7746 -> 0.7526), the cohort cut did (0.5812 -> 0.7078).  The field became cuttable by one constant.  MODEL_REVIEW_2026-08-22 8f.2 and 9b."
     }
-  }
+  },
+  "scores_wound": {
+    "protocol": "scripts/eval_wound_complement.py; cohort mean over the 3 wound vessels; (G_pre, G_post) LEAVE-ONE-VESSEL-OUT; GT flow at t=0 only",
+    "n_vessels": 3,
+    "domains": {
+      "wall": "healthy wall (COMSOL dif1) -- v4's territory, must be identical across arms",
+      "wnd": "the wound boundary (sel1). COVERAGE ONLY -- 100% GT clot, so any model that commits the patch reads 1.0. NOT a score.",
+      "w_reg": "wound region: every node within 8 mesh hops of the wound. GT+ rate 0.19/0.19/0.33",
+      "w_lum": "the lumen subset of w_reg -- the clot the wound pushes into the flow. GT+ rate 0.10/0.10/0.25",
+      "far": "off-boundary beyond 8 hops -- clot the wound did not cause",
+      "full": "whole mesh"
+    },
+    "final": {
+      "v4": {
+        "wall": 0.7879,
+        "wnd": 0.0,
+        "w_reg": 0.0604,
+        "w_lum": 0.0,
+        "far": 0.2614,
+        "full": 0.4989
+      },
+      "v4w_physics_only": {
+        "wall": 0.7879,
+        "wnd": 1.0,
+        "w_reg": 0.6759,
+        "w_lum": 0.0,
+        "far": 0.2614,
+        "full": 0.706
+      },
+      "v4w": {
+        "wall": 0.7879,
+        "wnd": 1.0,
+        "w_reg": 0.8777,
+        "w_lum": 0.8522,
+        "far": 0.2614,
+        "full": 0.8058
+      }
+    },
+    "mean_over_time": {
+      "v4": {
+        "wall": 0.623,
+        "wnd": 0.0,
+        "w_reg": 0.0178,
+        "w_lum": 0.0,
+        "far": 0.0292,
+        "full": 0.3662
+      },
+      "v4w_physics_only": {
+        "wall": 0.623,
+        "wnd": 0.5328,
+        "w_reg": 0.3612,
+        "w_lum": 0.0,
+        "far": 0.0292,
+        "full": 0.4841
+      },
+      "v4w": {
+        "wall": 0.623,
+        "wnd": 0.9445,
+        "w_reg": 0.8367,
+        "w_lum": 0.7288,
+        "far": 0.0292,
+        "full": 0.723
+      }
+    },
+    "headline": "Read w_reg and w_lum. On the wound REGION v4 scores 0.060 final / 0.018 mean-over-time and v4w scores 0.878 / 0.837; on the wound's LUMEN clot v4 scores 0.000 / 0.000 and v4w 0.852 / 0.729.",
+    "note_physics_only": "The zero-parameter arm (G=1) reads 1.0 on `wnd` and 0.0 on `w_lum`: the ungated law commits the boundary for free but never drives Mat past crit/att, so the lumen extension never fires. The lumen clot is bought entirely by the two fitted scalars, NOT by the physics.",
+    "per_vessel_final_w_reg": {
+      "wound_patient001": 0.9701,
+      "wound_patient002": 0.9701,
+      "wound_patient003": 0.6931
+    },
+    "per_vessel_final_w_lum": {
+      "wound_patient001": 0.9708,
+      "wound_patient002": 0.9708,
+      "wound_patient003": 0.6151
+    },
+    "wall_is_identical_by_construction": true,
+    "rate_lovo": {
+      "onset_mae_steps": 7.3,
+      "onset_mae_frac_of_horizon": 0.064,
+      "recall": 1.0,
+      "arms": "physics G=1 30.7 steps | const (SHIPPED) 7.3 | per-node net 35.0 (LOSES)"
+    },
+    "caveats": [
+      "n=3. Sign and mechanism are solid; treat the magnitude as indicative.",
+      "On 001/002 ALL off-boundary GT clot is wound-caused, so `far` has no GT positives there and is nan; the 0.2614 is wound_patient003 alone.",
+      "wound_patient003 is externally triggered and remains an outlier (WOUND_PROGRESS 11): w_reg 0.693 / w_lum 0.615 against 0.970 / 0.971 on the other two."
+    ]
+  },
+  "readout": {
+    "selection": "per-domain, in-fold, over {cohort_cut, resid, resid_adapt, expected_tuned}",
+    "wall": "resid_adapt -- the physics-conditioned keep/add readout, with its four cuts PERTURBED by a fitted slope on the vessel's mean score.  b=0 reproduces the cohort readout exactly, so it can only move if the statistic pays.",
+    "off": "expected_tuned -- rank the nodes and commit the prefix that maximises the EXPECTED severity score, using the model's own p in place of GT, with two in-fold scalars (gamma sharpening, prefix scale) correcting for miscalibration. This is the fix for the low-burden precision problem: the budget adapts per vessel with no label.  Off-wall 0.7136 -> 0.7359 against a cohort cut.",
+    "temporal": "time-conditioned head, 4 seeds averaged, monotone in time, every node in the committed set clot at the last timestep (commit_final), off-wall never before its owner, and OFF-WALL ONSET from a learned per-node LAG behind the owner (--owner-lag --learn-lag --lag-anchor ode): the lag regression is fitted OUT-OF-FOLD on the inner split, gated on predicted off-wall burden, and anchored on the ODE's OWN owner crossing rather than the head's predicted one -- target and anchor must be the same object at train and apply time, and wall-onset error is worth 2.3x the lag error (docs/PHASE10_V4.md 15). Together worth +0.038 mean-over-time off-wall.",
+    "scripts": [
+      "scripts/eval_expected_score_readout.py",
+      "scripts/eval_strict_temporal.py"
+    ]
+  },
+  "fingerprint": "efa049dba2c38b0b4098e4bbfac263d42c95586d",
+  "scores_from": "clot_gnn_v6/manifest.json"
 }

@@ -46,6 +46,12 @@ class T0Fields:
     gate_low: np.ndarray  # spf.sr < lss
     gate_sep: np.ndarray  # d(spf.sr,x) < sgt
     gate: np.ndarray      # (L/gamma_m)*|dsrx|*[sep] + [low]   -- the law's bracket prefactor
+    # The velocity these were differentiated FROM, carried so downstream consumers cannot
+    # silently re-read `data.y[0]` and reintroduce GT flow under `flow_source='pred'`.
+    # `None` on the hand-built T0Fields in shear_redistribution / the diag scripts, which
+    # synthesise sr/dsrx directly; consumers that need u/v must check rather than fall back.
+    u: np.ndarray | None = None
+    v: np.ndarray | None = None
 
 
 def gate_from_shear(
@@ -64,6 +70,52 @@ def gate_from_shear(
     coef = float(bio_cfg.L_char) * M_TO_CM / float(bio_cfg.gamma_m)
     g = (dsrx < sgt_cgs) * coef * np.abs(dsrx) + (sr < float(bio_cfg.lss))
     return g if wall is None else g * wall
+
+
+#: The injured wall's deposition prefactor.  COMSOL's `srf2` is `srf1` with both shear gates
+#: deleted, so the bracket multiplier there is a hard 1 (docs/WOUND_PROGRESS.md 1).  Not a fit.
+WOUND_UNGATED_PREFACTOR: float = 1.0
+
+
+def deposition_gate(data, fields=None, *, gate: np.ndarray | None = None,
+                    wall: np.ndarray | None = None, wound_source: bool = True,
+                    prefactor: float = WOUND_UNGATED_PREFACTOR) -> np.ndarray:
+    """The full surface-deposition prefactor: gated `srf1` on healthy wall, ungated `srf2`
+    on the wound.
+
+    WHY THIS EXISTS.  Every consumer used to write ``fields.gate * mask_wall``, which is the
+    right transcription of `srf1` and a wrong description of the VESSEL: on a wound pack the
+    injured segment then deposits nothing at all, while carrying **50-88% of the vessel's
+    total surface ``Mat``**.  Everything derived from that trajectory inherits the hole --
+    ``mat_phys``, the advective source, and ``mat_owner`` on the 5.6-16.4% of the mesh whose
+    nearest solid node is a wound node (docs/WOUND_PROGRESS.md 14.6).
+
+    This is the same defect WOUND_PROGRESS 6/6b found in the geometry layer, one level up.
+    The split those sections preserved still holds and is the reason this is not simply
+    ``fields.gate * solid``: ``mask_wall`` selects the **gated law**, and the wound gets the
+    **ungated one** rather than `srf1`'s value.
+
+    Pass either ``fields`` (uses ``fields.gate``) or an explicit ``gate`` array -- the v4
+    indicator backbone builds its own gate and needs the same union applied to it.
+
+    ``wound_source=False`` reproduces the healthy-wall-only prefactor bit-for-bit, and on a
+    pack with no wound mask both branches are identical.
+    """
+    if (fields is None) == (gate is None):
+        raise ValueError("pass exactly one of `fields` or `gate`")
+    wall = (data.mask_wall.reshape(-1).bool().cpu().numpy() if wall is None
+            else np.asarray(wall, dtype=bool))
+    base = fields.gate if gate is None else np.asarray(gate, dtype=np.float64)
+    gate = base * wall
+    if not wound_source:
+        return gate
+    wnd = getattr(data, "mask_wound", None)
+    if wnd is None or not torch.is_tensor(wnd) or wnd.numel() == 0:
+        return gate
+    wnd = wnd.reshape(-1).bool().cpu().numpy()
+    if not wnd.any():
+        return gate
+    return np.where(wnd, float(prefactor), gate)
 
 
 def gt_flow_gate_series(
@@ -89,6 +141,36 @@ def gt_flow_gate_series(
         sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
         out[ti] = gate_from_shear(sr, (Dx @ sr) / (d_bar * M_TO_CM), bio_cfg, wall=wall)
     return out
+
+
+#: Amplitude correction that puts predicted-flow ``dsrx`` on the scale ``sgt`` was fitted at.
+#:
+#: ``sgt`` is a PHYSICAL constant read off COMSOL's deposition law, but the discrete ``dsrx``
+#: it is compared against depends on the stencil that produced it, and the two flow sources do
+#: not use the same one: GT is differentiated at ``hops=3`` and the surrogate needs ``hops=6``
+#: to escape a sign flip (``src/clot_ml/features.py``).  Two effects stack, both measured
+#: 2026-08-23 at the wall: a 6-hop stencil attenuates ``dsrx`` **2.18x** relative to a 3-hop
+#: one on the GT field alone, and the surrogate is a further **1.38x** low like-for-like at
+#: hops=6 (corr 0.95).  Uncorrected, the ``sgt`` gate branch fires on 0.56x the nodes it
+#: should and agrees with the GT gate on almost none of them.
+#:
+#: **This is a fitted constant, not a derivation, and it is fitted on FIT only.**  The obvious
+#: deploy-legal alternative was tested and fails: the same operator chain applied to a smooth
+#: SYNTHETIC field reads a ratio of 1.00 on every vessel, because a wide stencil is exact on a
+#: resolved field -- the attenuation is a statement about the near-wall shear field's own
+#: spectral content, not a property of the operator, so it cannot be estimated per vessel
+#: without ground truth.  Least squares on FIT (n=25) gives 3.00; DEV (n=5, held out) would
+#: have chosen 2.56, which is the honest measure of how well it transfers.  Two significant
+#: figures: anything finer is inside that spread.
+#:
+#: Wall gate union Jaccard against the GT gate, median:  FIT **0.20 -> 0.52**, DEV (held out)
+#: **0.47 -> 0.54**.  Fire rate relative to GT: FIT x0.61 -> x0.89, DEV x0.67 -> x1.24.
+#:
+#: Applied here and in ``src/clot_ml/features.py`` -- the two places that gate on `sgt`.
+#: Deliberately NOT applied in ``src/differentiable_wall_model``: its gates are soft and its
+#: thresholds are *learned* per artifact (``compute_soft_gates`` / ``ParameterMap``), so they
+#: absorb the scale themselves and rescaling the input would invalidate its trained weights.
+PRED_DSRX_GAIN = 3.00
 
 
 def t0_flow_fields(
@@ -120,6 +202,8 @@ def t0_flow_fields(
         v = data.y[time_index, :, 1].detach().cpu().numpy().astype(np.float64)
         sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)                                   # 1/(s*cm)
+    if flow_source == "pred":
+        dsrx = dsrx * PRED_DSRX_GAIN
 
     sgt_cgs = float(bio_cfg.sgt) / M_TO_CM             # 1/(s*m) -> 1/(s*cm)
     return T0Fields(
@@ -127,6 +211,7 @@ def t0_flow_fields(
         gate_low=(sr < float(bio_cfg.lss)).astype(np.float64),
         gate_sep=(dsrx < sgt_cgs).astype(np.float64),
         gate=gate_from_shear(sr, dsrx, bio_cfg),
+        u=u, v=v,
     )
 
 
@@ -224,8 +309,21 @@ def integrate_mat_trajectory(
     ap_closure=None,
     washout: float = 0.0,
     washout_sr: np.ndarray | None = None,
+    wall_ap_renewal=None,
+    wall_ap_fields=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Integrate the surface ODEs, returning ``Mat`` at EVERY timestep.
+
+    ``wall_ap_renewal`` -- optional :class:`src.core_physics.wall_ap_renewal.WallApRenewal`
+        instance.  When set, the time-varying wall-AP ODE (:mod:`wall_ap_renewal`) is
+        resolved first and the result is used as ``species``, overriding any explicit
+        ``species`` argument and clearing ``ap_closure`` (the dynamic field supersedes the
+        static Damkohler correction).  ``wall_ap_fields`` must be provided alongside it
+        (a :class:`T0Fields` instance carrying ``u``/``v`` for the upwind transport solve).
+
+        Both parameters default to ``None`` — when absent the function is bit-identical to
+        the previous signature and every existing caller is unaffected.
+
 
     ``da_scale`` defaults to 40, not the 100 the final-mask sweep settled on.  Every value
     above ~50 gives a bit-identical committed set (docs/PHASE3_RESULTS.md 3), so the mask
@@ -296,6 +394,26 @@ def integrate_mat_trajectory(
 
     Returns ``(traj [T, N], t [T])`` in COMSOL model units.
     """
+    # ---- wall_ap_renewal convenience entry point ---------------------------
+    # Lazy import avoids the circular dependency: wall_ap_renewal imports from
+    # physics_wall_model (T0Fields, wall_platelet_constants), so physics_wall_model
+    # must not import wall_ap_renewal at module level.
+    if wall_ap_renewal is not None:
+        from src.core_physics.wall_ap_renewal import make_species_from_renewal  # noqa: PLC0415
+        if species is not None:
+            raise ValueError(
+                "pass either `species` or `wall_ap_renewal`, not both; "
+                "`wall_ap_renewal` resolves to a species array internally"
+            )
+        if wall_ap_fields is None:
+            raise ValueError(
+                "`wall_ap_renewal` requires `wall_ap_fields` (a T0Fields instance "
+                "carrying u/v for the upwind transport solve)"
+            )
+        species = make_species_from_renewal(data, bio_cfg, wall_ap_fields,
+                                            renewal=wall_ap_renewal)
+        ap_closure = None   # dynamic field supersedes the static Damkohler correction
+
     k_rs = float(bio_cfg.k_rs) * M_TO_CM
     k_as = float(bio_cfg.k_as) * M_TO_CM
     k_aa = float(bio_cfg.k_aa) * M_TO_CM
@@ -629,3 +747,80 @@ def predict_phi(
     mat = integrate_mat(data, bio_cfg, fields, da_scale=da_scale)
     pred = (mat >= float(bio_cfg.viscosity_mat_crit)) & wall
     return torch.tensor(pred.astype(np.float32)), fields, mat
+
+
+#: Where the never-igniting wall nodes sit, relative to the median igniter onset, as a
+#: fraction of the horizon; and how far they spread around it.  Fitted on FIT vessels,
+#: leave-one-vessel-out selects (0.25, 0.6) on 8 of 13 folds and (0.35, 0.8) on 4.
+STITCH_OFFSET = 0.25
+STITCH_SPREAD = 0.6
+
+
+def stitch_onset(
+    onset: np.ndarray,
+    ignited: np.ndarray,
+    node_set: np.ndarray,
+    sr: np.ndarray,
+    n_times: int,
+    *,
+    offset: float = STITCH_OFFSET,
+    spread: float = STITCH_SPREAD,
+) -> np.ndarray:
+    """Schedule the wall nodes the surface ODE never ignites, instead of one constant.
+
+    A fifth (FIT) to nearly half (DEV) of the wall nodes that clot in GT never cross ``crit``
+    in the ODE -- they all have ``gate == 0``, so their trajectory never moves -- and the
+    scoring convention hands every one of them the SAME number, the median igniter onset.
+    Two things are wrong with that number, both measured on 13 full-horizon cohort vessels:
+
+    **It is in the wrong place.**  Those nodes' true median onset is **+0.267 of the horizon
+    later** than the constant they are given (FIT mean; DEV +0.196), and the sign is the same
+    on **13 of 13 vessels**, ranging +0.060 to +0.363.  Physically that is what it should be:
+    these are the nodes outside the admission gate, reached later by growth.
+
+    **It has no spread.**  PHASE6_RESULTS 12 priced the wall model's compressed onset
+    distribution at about -0.13; a single constant is the extreme case of it.  ``sr`` at t=0
+    orders these nodes' true onset at rank **+0.809 FIT / +0.658 DEV** -- better than hop
+    distance to the nearest igniter (+0.50 / +0.34), which is why the obvious front-arrival
+    model is the wrong shape and was measured and dropped.
+
+    So: keep the ODE's own onset where it exists, and give the rest a shear-ordered spread
+    about a shifted centre.  Mean-over-time wall deploy score, GT wall set so this isolates
+    timing from the mask, 13 vessels:
+
+        median-igniter constant (ships)              0.8164
+        best degenerate null, all stitch at 0.75*T   0.8417
+        offset only, no spread                       0.8478
+        THIS, offset 0.25 spread 0.6                 0.8636
+        the same spread with a RANDOM order          0.8339   <- worse than a plain shift
+        GT on the stitch nodes (ceiling)             0.9011
+
+    Leave-one-vessel-out, refitting ``(offset, spread)`` on the other 12 each time:
+    **+0.0422, 95% CI [+0.0252, +0.0613], P(delta<=0) = 0.0000, positive on 12 of 13** --
+    the lower bound clears the +-0.024 wall noise floor.  It collects 55% of the stitch prize.
+
+    CAVEAT, and it is a real one.  Measured on a set held at the GT wall set.  On a
+    *predicted* set (igniters plus 20-hop along-wall growth) the apparent gain is far larger,
+    +0.176, but **94% of that is a degenerate null** -- simply not showing graph-grown nodes
+    until the end of the horizon -- which is a precision effect on an over-grown mask, not
+    this timing model.  Do not quote the predicted-set number as a timing result.
+
+    ``onset`` and the return are in grid-step units; ``node_set`` is the mask being scheduled.
+    """
+    out = np.asarray(onset, dtype=np.float64).copy()
+    ign = np.asarray(ignited, dtype=bool)
+    sel = np.asarray(node_set, dtype=bool)
+    live = sel & ign
+    if not live.any():
+        return out
+    centre = float(np.median(out[live])) + float(offset) * float(n_times)
+    stitch = sel & ~ign
+    k = int(stitch.sum())
+    if k == 0:
+        return out
+    out[stitch] = centre
+    if spread > 0 and k > 1:
+        rank = np.argsort(np.argsort(np.asarray(sr, dtype=np.float64)[stitch])) / (k - 1)
+        out[stitch] = centre + float(spread) * (rank - 0.5) * float(n_times)
+    out[stitch] = np.clip(out[stitch], 0.0, float(n_times) - 1.0)
+    return out

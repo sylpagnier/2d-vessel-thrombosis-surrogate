@@ -1,6 +1,6 @@
 """HemoRGP Customer Predict App (matplotlib desktop).
 
-Professional light chrome + white graphics viewport:
+Warm, concise chrome + white graphics viewport:
   - left control rail
   - right graphics: geometry preview (editable in Parametric mode) until Run finishes,
     then mode-specific result views + timeline scrubber (Clot mode)
@@ -48,6 +48,7 @@ from src.data_gen.lib.vessel_geometry import (
 )
 from src.inference.customer_pipeline import CustomerDeployPipeline, CustomerTrajectory
 from src.tools.customer_predict_metrics import (
+    frame_scientific_metrics,
     trajectory_scientific_table,
     write_scientific_csv,
 )
@@ -60,32 +61,32 @@ DEFAULT_HORIZON_H = 8.0
 DEFAULT_HORIZON_S = 30000.0
 _SECONDS_PER_UI_HOUR = DEFAULT_HORIZON_S / DEFAULT_HORIZON_H
 
-# Light research-tool palette (COMSOL / MATLAB-app inspired).
+# Warm, quiet palette shared with the generalization viewer.
 C = {
-    "bg": "#e8edf2",
-    "panel": "#ffffff",
-    "panel2": "#f2f5f8",
-    "border": "#c5d0dc",
-    "text": "#1b2430",
-    "muted": "#5b6b7c",
-    "accent": "#0f766e",
-    "accent_dim": "#0d9488",
-    "accent_hover": "#115e59",
-    "btn_secondary": "#e8eef4",
-    "btn_secondary_hover": "#d7e0ea",
-    "warn": "#b45309",
-    "err": "#b91c1c",
-    "ok": "#047857",
-    "slider": "#0f766e",
-    "viewport": "#ffffff",
-    "viewport_edge": "#b8c5d4",
-    "plot_text": "#1b2430",
-    "plot_muted": "#5b6b7c",
-    "wall": "#1f6f9f",
-    "fluid": "#6baed6",
-    "inlet": "#2ca02c",
-    "outlet": "#d62728",
-    "clot_cmap": "RdBu_r",
+    "bg": "#f4f0e8",
+    "panel": "#fffdf9",
+    "panel2": "#f1ece3",
+    "border": "#d9d0c2",
+    "text": "#2b261f",
+    "muted": "#756c60",
+    "accent": "#9a5a13",
+    "accent_dim": "#b2732d",
+    "accent_hover": "#7e4710",
+    "btn_secondary": "#eee7dc",
+    "btn_secondary_hover": "#e3d9ca",
+    "warn": "#a56512",
+    "err": "#a23a2e",
+    "ok": "#3c785c",
+    "slider": "#9a5a13",
+    "viewport": "#fffdf9",
+    "viewport_edge": "#d8cfc1",
+    "plot_text": "#2b261f",
+    "plot_muted": "#756c60",
+    "wall": "#9a5a13",
+    "fluid": "#8fbdb6",
+    "inlet": "#4f8a66",
+    "outlet": "#c25b4c",
+    "clot_cmap": "YlOrRd",
 }
 
 # Labels sit above slider tracks so they are not clipped by the rail edge.
@@ -136,13 +137,13 @@ def _slider_slot(y_bottom: float, *, x: float = 0.042, w: float = 0.215) -> list
     return [x, y_bottom, w, _SLIDER_TRACK_H]
 
 
-# Soft blue lumen -> bright red clot (high-contrast on white viewport).
+# Soft teal lumen -> warm orange/red clot (high-contrast on a quiet viewport).
 _CLOT_CMAP = LinearSegmentedColormap.from_list(
     "hemo_clot_pop",
-    ["#9ecae1", "#6baed6", "#deebf7", "#fc9272", "#ef3b2c", "#a50f15"],
+    ["#d8ebe7", "#8fbdb6", "#f1ede5", "#edc27d", "#c9822e", "#8d3f13"],
     N=256,
 )
-_CLOT_OPEN_COLOR = "#6baed6"
+_CLOT_OPEN_COLOR = "#8fbdb6"
 _CLOT_PHI_THRESHOLD = 0.45
 
 _DEMO_PT = (
@@ -198,7 +199,7 @@ def _style_button(btn: Button, *, primary: bool = False) -> None:
     btn.ax.set_facecolor(face)
     btn.color = face
     btn.hovercolor = C["accent_hover"] if primary else C["btn_secondary_hover"]
-    btn.label.set_color("#ffffff" if primary else C["text"])
+    btn.label.set_color(C["panel"] if primary else C["text"])
     btn.label.set_fontsize(9 if primary else 8.5)
     btn.label.set_fontweight("bold" if primary else "normal")
     for spine in btn.ax.spines.values():
@@ -321,6 +322,7 @@ class PredictApp:
         self._section_labels: dict[str, Any] = {}
         self._rail_widgets: dict[str, Any] = {}
         self._slider_captions: dict[str, Any] = {}
+        self._result_metrics: dict[str, Any] = {}
 
         # Parametric / edit state
         self.vessel_cfg = VesselConfig(phase="kinematics")
@@ -411,7 +413,7 @@ class PredictApp:
             fontsize=15, fontweight="bold", color=C["text"], va="center",
         )
         self.ax_header.text(
-            0.245, 0.52, "Vessel clot forecast", transform=self.ax_header.transAxes,
+            0.245, 0.52, "Customer vessel forecast", transform=self.ax_header.transAxes,
             fontsize=9, color=C["muted"], va="center",
         )
         self.status_text = self.ax_header.text(
@@ -567,6 +569,12 @@ class PredictApp:
             0.98, 0.72, "Preview", transform=self.ax_time_panel.transAxes,
             fontsize=9, color=C["text"], ha="right", va="center",
         )
+        for key, label, x in (("wall", "wall —", 0.19), ("vessel", "vessel —", 0.38),
+                              ("occlusion", "occlusion —", 0.58)):
+            self._result_metrics[key] = self.ax_time_panel.text(
+                x, 0.72, label, transform=self.ax_time_panel.transAxes,
+                fontsize=8.2, color=C["muted"], va="center",
+            )
 
         self._update_param_widgets_visibility()
 
@@ -635,6 +643,8 @@ class PredictApp:
             self.ax_left.set_visible(False)
             self.ax_right.set_visible(False)
             self.time_readout.set_text("Preview")
+            for text in self._result_metrics.values():
+                text.set_text("—")
             self.slider_time.set_active(False)
             self.btn_download.ax.set_visible(False)
         else:
@@ -986,7 +996,7 @@ class PredictApp:
             _style_viewport(self.ax_preview, title=f"Geometry preview - {path.name}")
             self.ax_preview.legend(
                 loc="upper right", fontsize=8, frameon=True,
-                facecolor="#f7fafc", edgecolor=C["viewport_edge"], labelcolor=C["plot_text"],
+                facecolor=C["panel2"], edgecolor=C["viewport_edge"], labelcolor=C["plot_text"],
             )
             self._set_status(f"Preview: {path.name} ({pos.shape[0]:,} nodes).", tone="ok")
         except Exception as exc:
@@ -1140,32 +1150,42 @@ class PredictApp:
             [r.get("max_lumen_hop", 0.0) for r in self._science_rows], dtype=np.float64
         )
 
-        fig, axes = plt.subplots(3, 1, figsize=(9.0, 8.0), sharex=True, facecolor="white")
+        fig, axes = plt.subplots(3, 1, figsize=(9.0, 8.0), sharex=True, facecolor=C["bg"])
         try:
             fig.canvas.manager.set_window_title("HemoRGP Scientific metrics")  # type: ignore[union-attr]
         except Exception:
             pass
         ax0, ax1, ax2 = axes
-        ax0.plot(t_h, wall, color="#1f77b4", lw=2.0)
+        for ax in axes:
+            ax.tick_params(colors=C["muted"], labelcolor=C["muted"])
+            ax.xaxis.label.set_color(C["muted"])
+            ax.yaxis.label.set_color(C["muted"])
+            ax.title.set_color(C["text"])
+            for spine in ax.spines.values():
+                spine.set_color(C["border"])
+        ax0.set_facecolor(C["viewport"])
+        ax0.plot(t_h, wall, color=C["accent"], lw=2.0)
         ax0.set_ylabel("Wall coverage (%)")
         ax0.set_ylim(0.0, max(100.0, float(wall.max()) * 1.05 if wall.size else 100.0))
         ax0.grid(True, alpha=0.3)
         ax0.set_title("Wall coverage over time")
 
-        ax1.plot(t_h, vessel, color="#2bb3a3", lw=2.0)
+        ax1.set_facecolor(C["viewport"])
+        ax1.plot(t_h, vessel, color=C["fluid"], lw=2.0)
         ax1.set_ylabel("Vessel coverage (%)")
         ax1.set_ylim(0.0, max(100.0, float(vessel.max()) * 1.05 if vessel.size else 100.0))
         ax1.grid(True, alpha=0.3)
         ax1.set_title("Vessel coverage over time")
 
-        ax2.plot(t_h, occ, color="#d62728", lw=2.0, label="Max lumen-hop occlusion (%)")
+        ax2.set_facecolor(C["viewport"])
+        ax2.plot(t_h, occ, color=C["outlet"], lw=2.0, label="Max lumen-hop occlusion (%)")
         ax2.set_xlabel("Sim time (hrs)")
         ax2.set_ylabel("Occlusion (%)")
         ax2.set_ylim(0.0, max(100.0, float(occ.max()) * 1.05 if occ.size else 100.0))
         ax2.grid(True, alpha=0.3)
         if lumen_hop.size and float(lumen_hop.max()) > 0:
             ax2_r = ax2.twinx()
-            ax2_r.plot(t_h, clot_hop, color="#9467bd", lw=1.5, ls="--", label="Max clot hop")
+            ax2_r.plot(t_h, clot_hop, color=C["accent_dim"], lw=1.5, ls="--", label="Max clot hop")
             ax2_r.set_ylabel("Max clot lumen hop")
             ax2_r.set_ylim(0.0, max(1.0, float(lumen_hop.max()) * 1.1))
             lines, labels = ax2.get_legend_handles_labels()
@@ -1277,7 +1297,7 @@ class PredictApp:
         self._cbars.append(cbar)
 
     def _plot_clot_field(self, ax: Any, phi: np.ndarray, *, title: str) -> None:
-        """Two-layer clot viz: soft blue lumen, larger bright-red clot nodes on top."""
+        """Two-layer clot viz: soft teal lumen, larger warm clot nodes on top."""
         assert self.traj is not None
         pos = self.traj.pos
         vals = np.asarray(phi, dtype=np.float64).reshape(-1)
@@ -1294,6 +1314,7 @@ class PredictApp:
                 c=_CLOT_OPEN_COLOR,
                 s=4.5,
                 alpha=0.80,
+                marker="s",
                 linewidths=0,
                 rasterized=True,
                 zorder=1,
@@ -1308,6 +1329,7 @@ class PredictApp:
             s=3.0,
             vmin=0.0,
             vmax=1.0,
+            marker="s",
             linewidths=0,
             alpha=0.15,
             rasterized=True,
@@ -1326,11 +1348,20 @@ class PredictApp:
                 s=sizes,
                 vmin=0.0,
                 vmax=1.0,
-                linewidths=0.15,
-                edgecolors="#7f0000",
+                linewidths=0.25,
+                edgecolors=C["accent"],
+                marker="o",
                 alpha=0.95,
                 rasterized=True,
                 zorder=5,
+            )
+
+        wall = self.traj.mask_wall
+        if wall is not None and np.asarray(wall, dtype=bool).any():
+            wall = np.asarray(wall, dtype=bool).reshape(-1)
+            ax.scatter(
+                pos[wall, 0], pos[wall, 1], facecolors="none", edgecolors=C["wall"],
+                s=20.0, linewidths=0.55, marker="o", alpha=0.8, zorder=6,
             )
 
         _style_viewport(ax, title=title)
@@ -1347,13 +1378,21 @@ class PredictApp:
         hours = t_sec / _SECONDS_PER_UI_HOUR
         self.time_readout.set_text(f"t = {t_sec:.0f} s  ({hours:.2f} hrs)")
         if self.field_mode == "scientific" and self._science_rows:
-            last = self._science_rows[-1]
-            self.time_readout.set_text(
-                f"t = {t_sec:.0f} s ({hours:.2f} hrs)  |  "
-                f"final wall={last['wall_clot_pct']:.1f}%  "
-                f"vessel={last['vessel_clot_pct']:.1f}%  "
-                f"occ={last['max_occlusion_pct']:.1f}%"
-            )
+            self.time_readout.set_text(f"t = {t_sec:.0f} s ({hours:.2f} hrs)")
+
+        row = frame_scientific_metrics(
+            pos=self.traj.pos,
+            phi=np.asarray(fr["phi"], dtype=np.float64),
+            vel_mag=None,
+            mask_wall=self.traj.mask_wall,
+            mask_inlet=self.traj.mask_inlet,
+            mask_outlet=self.traj.mask_outlet,
+            t_sec=t_sec,
+            hop_from_wall=self.traj.hop_from_wall,
+        )
+        self._result_metrics["wall"].set_text(f"wall {row['wall_clot_pct']:.1f}%")
+        self._result_metrics["vessel"].set_text(f"vessel {row['vessel_clot_pct']:.1f}%")
+        self._result_metrics["occlusion"].set_text(f"occlusion {row['max_occlusion_pct']:.1f}%")
 
         self._clear_cbars()
         phi = np.asarray(fr["phi"], dtype=np.float64)
@@ -1382,6 +1421,19 @@ class PredictApp:
         h0 = float(fr0["t_sec"]) / _SECONDS_PER_UI_HOUR
         h1 = float(fr1["t_sec"]) / _SECONDS_PER_UI_HOUR
         self.time_readout.set_text(f"Velocity  |  t = {h0:.2f} h  ->  {h1:.2f} h")
+        row = frame_scientific_metrics(
+            pos=self.traj.pos,
+            phi=np.asarray(fr1["phi"], dtype=np.float64),
+            vel_mag=None,
+            mask_wall=self.traj.mask_wall,
+            mask_inlet=self.traj.mask_inlet,
+            mask_outlet=self.traj.mask_outlet,
+            t_sec=float(fr1["t_sec"]),
+            hop_from_wall=self.traj.hop_from_wall,
+        )
+        self._result_metrics["wall"].set_text(f"final wall {row['wall_clot_pct']:.1f}%")
+        self._result_metrics["vessel"].set_text(f"final vessel {row['vessel_clot_pct']:.1f}%")
+        self._result_metrics["occlusion"].set_text(f"final occlusion {row['max_occlusion_pct']:.1f}%")
         self._plot_field(
             self.ax_left,
             vel0,

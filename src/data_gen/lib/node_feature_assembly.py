@@ -20,6 +20,7 @@ from src.data_gen.lib.graph_velocity_priors import (
     smooth_width_nd_on_edges,
     width_nd_to_radius_nd,
 )
+from src.data_gen.lib.mesh_wls import node_type_one_hot
 
 
 def compute_hydraulic_width_nd(
@@ -260,7 +261,12 @@ def build_kinematics_node_x_tensor(
             sdf_nd,
             shear_pot,
             wall_normal,
-            torch.zeros((pos_nd.shape[0], 4), dtype=torch.float32, device=pos_nd.device),
+            # `node_type_*`: [interior, solid, inlet, outlet].  This block was a literal
+            # `torch.zeros((N, 4))` -- declared in KINE_X_SCHEMA, consumed by RGP_DEQ via
+            # NodeFeat.REST, and never populated on any pack (WOUND_PROGRESS 8).  Callers
+            # pass the solid-boundary UNION as `mask_wall`, so a wound node reads as
+            # boundary rather than lumen.
+            node_type_one_hot(mask_wall, mask_inlet, mask_outlet, device=pos_nd.device),
             rheo_flag,
             u_prior.unsqueeze(1),
             v_prior.unsqueeze(1),
@@ -422,6 +428,10 @@ def refresh_kinematics_node_x_on_graph(
     mask_inlet = data.mask_inlet.to(device=device)
     mask_outlet = data.mask_outlet.to(device=device)
     mask_wall = data.mask_wall.to(device=device)
+    mask_wound = getattr(data, "mask_wound", None)
+    if mask_wound is not None and torch.is_tensor(mask_wound) and mask_wound.numel():
+        # Wall-derived features are measured against the solid boundary, wall | wound.
+        mask_wall = mask_wall | mask_wound.to(device=device)
 
     d_bar_si = 0.015
     u_ref = 0.1
@@ -430,9 +440,12 @@ def refresh_kinematics_node_x_on_graph(
     if hasattr(data, "u_ref") and data.u_ref is not None:
         u_ref = float(data.u_ref.reshape(-1)[0].item())
 
-    wall_coords = pos_nd[mask_wall].detach().cpu().numpy()
+    # ``compute_hydraulic_width_nd`` probes this tree with SI coordinates (``probe * d_bar``),
+    # so it must be built in SI too.  Built in ND it never registers a hit and every width
+    # falls back to the 1.0 sentinel -- which is why this path defaulted to preserve_width.
+    wall_coords = pos_nd[mask_wall].detach().cpu().numpy() * d_bar_si
     if wall_coords.size == 0:
-        wall_coords = pos_nd.detach().cpu().numpy()
+        wall_coords = pos_nd.detach().cpu().numpy() * d_bar_si
     wall_tree = cKDTree(wall_coords)
 
     if phys_cfg is None:

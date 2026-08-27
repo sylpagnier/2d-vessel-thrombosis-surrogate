@@ -1,6 +1,6 @@
 """Customer-facing deploy pipeline: kine + corrector + wall/offwall species + clot-phi.
 
-Returns a scrubbable trajectory for the matplotlib Predict app.
+Returns a scrubbable trajectory for the desktop and browser Predict apps.
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ class CustomerTrajectory:
     n_steps: int = 0
     meta: dict[str, Any] = field(default_factory=dict)
     mask_wall: np.ndarray | None = None
+    mask_wound: np.ndarray | None = None
     mask_inlet: np.ndarray | None = None
     mask_outlet: np.ndarray | None = None
     hop_from_wall: np.ndarray | None = None
@@ -234,8 +235,8 @@ def _customer_deploy_env(
                 os.environ[k] = v
 
 
-class CustomerDeployPipeline:
-    """Load once, run many geometries."""
+class LegacySpeciesDeployPipeline:
+    """Previous species-GNN customer stack, retained for explicit research comparisons."""
 
     def __init__(
         self,
@@ -447,6 +448,179 @@ class CustomerDeployPipeline:
                 "extra_env": dict(extra_env) if extra_env else {},
             },
             mask_wall=_mask_np("mask_wall"),
+            mask_wound=_mask_np("mask_wound"),
+            mask_inlet=_mask_np("mask_inlet"),
+            mask_outlet=_mask_np("mask_outlet"),
+            hop_from_wall=hop_from_wall,
+        )
+
+
+# The customer product uses the reviewed C0-tail clot baseline.  The on-disk release
+# is named ``clot_ml_v0``; ``clot_ml_0`` is the customer-facing baseline name.
+DEFAULT_CUSTOMER_CLOT_MODEL = "clot_ml_0"
+_LOCKED_CUSTOMER_CLOT_MODEL = "clot_ml_v0"
+
+
+class CustomerDeployPipeline:
+    """Customer inference with the locked ``clot_ml_0`` baseline and wound complement.
+
+    A single RGP-DEQ solve produces deployable t=0 flow.  The C0-tail temporal GNN then
+    rolls the clot set forward.  This intentionally does not use COMSOL velocity labels.
+    ``LegacySpeciesDeployPipeline`` remains available only for explicit comparisons.
+    """
+
+    def __init__(
+        self,
+        *,
+        device: torch.device | None = None,
+        model_name: str = DEFAULT_CUSTOMER_CLOT_MODEL,
+        require_cuda: bool = True,
+        **_legacy_kwargs: Any,
+    ) -> None:
+        self._legacy: LegacySpeciesDeployPipeline | None = None
+        self.device = device or (require_cuda_device() if require_cuda else torch.device("cpu"))
+        self.model_name = str(model_name)
+        if self.model_name == "legacy_species" or _legacy_kwargs:
+            self._legacy = LegacySpeciesDeployPipeline(
+                device=self.device, require_cuda=require_cuda, **_legacy_kwargs
+            )
+            self.locked_model_name = "legacy_species"
+            self._bundle = None
+            self._flow_provider = None
+            return
+        self.locked_model_name = (
+            _LOCKED_CUSTOMER_CLOT_MODEL if self.model_name in {"clot_ml_0", "clot_ml_v0"}
+            else self.model_name
+        )
+        self._bundle: dict | None = None
+        self._flow_provider: CorrectorCoupledFlow | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        """Keep explicit legacy research callers source-compatible."""
+        legacy = self.__dict__.get("_legacy")
+        if legacy is not None:
+            return getattr(legacy, name)
+        raise AttributeError(name)
+
+    def _ensure_loaded(self) -> None:
+        if self._legacy is not None:
+            self._legacy._ensure_loaded()
+            return
+        if self._bundle is not None:
+            return
+        from src.clot_ml.locked import load_temporal_v4_wound
+
+        self._bundle = load_temporal_v4_wound(name=self.locked_model_name)
+        self._flow_provider = CorrectorCoupledFlow(
+            device=self.device, phys_cfg=PhysicsConfig(phase="biochem")
+        )
+
+    def run(
+        self,
+        data,
+        *,
+        t_final_s: float | None = None,
+        progress: Callable[[str], None] | None = None,
+        include_velocity: bool = True,
+        extra_env: dict[str, str] | None = None,
+    ) -> CustomerTrajectory:
+        """Generate a deploy-flow C0-tail clot trajectory for one new vessel."""
+        if self._legacy is not None:
+            return self._legacy.run(
+                data, t_final_s=t_final_s, progress=progress,
+                include_velocity=include_velocity, extra_env=extra_env,
+            )
+        del extra_env  # Legacy stack-only knob; the locked baseline is immutable.
+        self._ensure_loaded()
+        assert self._bundle is not None and self._flow_provider is not None
+        log = progress or (lambda _msg: None)
+        out = data.clone() if hasattr(data, "clone") else data
+        if t_final_s is not None and hasattr(out, "t") and out.t is not None:
+            n_steps = int(out.y.shape[0])
+            out.t = torch.linspace(0.0, float(t_final_s), steps=n_steps, dtype=torch.float32)
+
+        # One deployable t=0 flow solve.  This also attaches u0_pred/v0_pred, which the
+        # clot baseline consumes through flow="pred"; it never reads data.y velocity labels.
+        log("[i] Solving deployable t=0 kinematics…")
+        from src.core_physics.species_gnn_clot_rollout import prepare_species_gnn_rollout_static
+
+        prepare_species_gnn_rollout_static(out, device=self.device)
+        # ``prepare_*`` evaluates RGP-DEQ on the accelerator and mutates the PyG object
+        # through ``data.to(device)``.  The locked sklearn/PyG clot readout is CPU-based;
+        # keep only the deployable u0_pred/v0_pred fields and return its inputs to CPU.
+        out = out.cpu()
+        n_steps = int(out.t.reshape(-1).numel())
+        indices = list(range(n_steps))
+        log("[i] Rolling out clot_ml_0 C0-tail baseline…")
+        from src.clot_ml.locked import predict_temporal_v4_wound
+
+        result = predict_temporal_v4_wound(self._bundle, out, indices, flow="pred")
+        phi_all = {
+            int(i): np.asarray(result["series"][int(i)], dtype=np.float32)
+            for i in indices
+        }
+        phys = PhysicsConfig(phase="biochem")
+        baseline_mu = float(phys.mu_inf)
+        clot_mu = float(phys.mu_0)
+        mu_all = {
+            int(i): baseline_mu + (clot_mu - baseline_mu) * phi_all[int(i)]
+            for i in indices
+        }
+        vel_all: dict[int, np.ndarray] = {
+            int(i): np.zeros_like(phi_all[int(i)], dtype=np.float32) for i in indices
+        }
+        velocity_indices: list[int] = []
+        if include_velocity and indices:
+            velocity_indices = [indices[0], indices[-1]] if len(indices) > 1 else [indices[0]]
+            velocity_indices = sorted(set(velocity_indices))
+            log(f"[i] Coupling local flow at {len(velocity_indices)} bookend step(s)…")
+            flow_data = out.clone().to(self.device)
+            self._flow_provider.invalidate_base_cache()
+            for i in velocity_indices:
+                mu = torch.as_tensor(mu_all[int(i)], dtype=torch.float32, device=self.device)
+                bulk = torch.full_like(mu, baseline_mu)
+                u, v, _ = self._flow_provider.couple(
+                    flow_data, mu, mu_bulk_si=bulk, publish=False
+                )
+                vel_all[int(i)] = torch.sqrt(u**2 + v**2).detach().cpu().numpy()
+
+        def _mask_np(name: str) -> np.ndarray | None:
+            value = getattr(out, name, None)
+            return None if value is None else value.reshape(-1).bool().detach().cpu().numpy()
+
+        hop_from_wall: np.ndarray | None = None
+        try:
+            from src.core_physics.species_pushforward_continuous import compute_hop_distances
+            from src.clot_ml.wound import solid_mask
+
+            hop_from_wall = compute_hop_distances(
+                out.edge_index, torch.as_tensor(solid_mask(out), device=out.edge_index.device), int(out.num_nodes)
+            ).detach().cpu().numpy().astype(np.int32)
+        except Exception as exc:
+            log(f"[WARN] wall-hop distances unavailable: {exc}")
+
+        log(f"[OK] clot_ml_0 rollout done ({n_steps} steps)")
+        return CustomerTrajectory(
+            t_sec=out.t.detach().cpu().numpy().astype(np.float64),
+            pos=out.x[:, :2].detach().cpu().numpy(),
+            vel_mag=vel_all,
+            mu_eff_si=mu_all,
+            phi=phi_all,
+            n_steps=n_steps,
+            meta={
+                "model": DEFAULT_CUSTOMER_CLOT_MODEL,
+                "locked_artifact": self.locked_model_name,
+                "flow_source": "pred",
+                "include_velocity": bool(include_velocity),
+                "velocity_indices": velocity_indices,
+                "velocity_mode": "bookends" if include_velocity else "none",
+                "wound_enabled": bool(getattr(out, "customer_wound_enabled", False)),
+                "wound_position_frac": getattr(out, "customer_wound_position_frac", None),
+                "wound_width_frac": getattr(out, "customer_wound_width_frac", None),
+                "geometry": dict(getattr(out, "customer_parametric_spec", {}) or {}),
+            },
+            mask_wall=_mask_np("mask_wall"),
+            mask_wound=_mask_np("mask_wound"),
             mask_inlet=_mask_np("mask_inlet"),
             mask_outlet=_mask_np("mask_outlet"),
             hop_from_wall=hop_from_wall,

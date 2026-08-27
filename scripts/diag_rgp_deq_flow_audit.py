@@ -22,6 +22,7 @@ close and have lost the recirculation topology that carries the signal (s16.3/s1
 Usage:
     python scripts/diag_rgp_deq_flow_audit.py --anchors patient041,patient043
     python scripts/diag_rgp_deq_flow_audit.py --all --out outputs/logs/z1_flow_audit.json
+    python scripts/diag_rgp_deq_flow_audit.py --checkpoint outputs/kinematics/production_allfix/kinematics_best.pth
 """
 from __future__ import annotations
 
@@ -73,6 +74,11 @@ def main() -> int:
     ap.add_argument("--anchors", default="", help="comma list; default = the s9 cohort")
     ap.add_argument("--all", action="store_true", help="every pack with >=20 clotted nodes")
     ap.add_argument("--sources", default=",".join(PRIOR_SOURCES))
+    ap.add_argument(
+        "--checkpoint",
+        default="",
+        help="RGP-DEQ checkpoint to audit; defaults to the resolved promoted checkpoint.",
+    )
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -91,7 +97,7 @@ def main() -> int:
     )
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = resolve_kinematics_checkpoint()
+    ckpt = resolve_kinematics_checkpoint(args.checkpoint or None)
     print(f"[i] RGP-DEQ ckpt: {ckpt}")
     print(f"[i] device: {dev}")
     model = load_kinematics_predictor(ckpt, dev)

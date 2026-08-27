@@ -106,6 +106,29 @@ def potential_flow_direction(
     return dx / mag, dy / mag
 
 
+def _shallow_view(data):
+    """A new ``Data`` object with its own attribute store but the caller's tensors.
+
+    ``Data.clone()`` deep-copies every tensor, which on these packs means duplicating a ~335 MB
+    ``y``.  All this module ever rewrites is ``x``, so a fresh store over shared tensors is
+    both cheaper and sufficient -- and, unlike returning ``data`` itself, a later ``.to(dev)``
+    on the result cannot reach back and mutate the caller's pack.
+
+    Anything that is not a PyG ``Data`` (duck-typed stand-ins in the tests, plain namespaces)
+    is returned as-is: there is nothing to alias-protect and no store to rebuild.
+    """
+    to_dict = getattr(data, "to_dict", None)
+    if not callable(to_dict):
+        return data
+    try:
+        out = data.__class__()
+        for key, value in to_dict().items():
+            out[key] = value
+    except Exception:
+        return data
+    return out
+
+
 def _mask(data, name: str, n: int, dev) -> torch.Tensor:
     m = getattr(data, name, None)
     if m is None:
@@ -113,27 +136,126 @@ def _mask(data, name: str, n: int, dev) -> torch.Tensor:
     return m.reshape(-1).to(dev).bool()
 
 
+#: Relative eigenvalue floor below which a node's 2x2 LSQ normal matrix is treated as rank-1.
+#: COMSOL exports ``triangle6``: 74.5% of biochem mesh nodes are P2 mid-side nodes of degree 2,
+#: and their two edge vectors are EXACTLY antiparallel (measured ``cos = -1.0000`` on 100% of
+#: them), so ``A`` is rank-1 by construction, not by accident.
+GRAD_RCOND = 1e-6
+
+#: Passes of neighbour-fill for rank-deficient rows.  A P2 mid-side node is the exact midpoint
+#: of its two corner neighbours, so one pass is 2nd-order exact; the extra passes only cover
+#: the rare deficient node with no well-conditioned neighbour.
+GRAD_FILL_PASSES = 3
+
+
 def _lsq_gradient(f, pos, row, col, n, dev):
-    """Per-node least-squares gradient of a scalar field over graph edges."""
+    """Per-node least-squares gradient of a scalar field over graph edges.
+
+    **Rank-aware** (RGP_DEQ_REPAIR_PLAN.md B3).  The previous implementation added a
+    scale-relative ridge ``A + 1e-6 * |A|max * I`` and inverted.  On a collinear stencil that
+    lifts the null direction *just above* the solver's tolerance, so the transverse gradient
+    component is inverted rather than truncated and comes back as amplified noise.  Measured
+    consequence on :func:`potential_flow_direction`: ``cos`` vs COMSOL read **+1.00 on P1
+    corner nodes and +0.65 on the 74.5% of nodes that are P2 mid-side** -- a ~50 degree error
+    on three quarters of every biochem mesh.
+
+    The fix is two steps, both cheap:
+
+    1. **Truncate, do not ridge.**  Eigen-decompose the symmetric 2x2 and solve only in the
+       directions whose eigenvalue clears :data:`GRAD_RCOND` relative to the largest.  That is
+       the minimum-norm solution: along a collinear stencil the gradient is resolved, and the
+       transverse component is honestly 0 instead of noise.
+    2. **Fill the deficient rows from well-conditioned neighbours.**  A truncated mid-side
+       gradient is unbiased but incomplete.  Since a P2 mid-side node lies exactly on the
+       segment between its two corner neighbours, averaging their (well-conditioned) gradients
+       is 2nd-order exact and recovers the transverse component the stencil cannot see.
+    """
     dv = pos[col] - pos[row]
     df = f[col] - f[row]
     w = 1.0 / dv.norm(dim=1).clamp(min=1e-9) ** 2
-    A = torch.zeros(n, 2, 2, device=dev)
-    b = torch.zeros(n, 2, device=dev)
+    # Follow the inputs' dtype: hard-coding float32 here raises `index_add_(): self (Float) and
+    # source (Double) must have the same scalar type` the moment a caller passes float64
+    # positions, which is the natural thing to do when checking this operator's accuracy.
+    dt = torch.promote_types(dv.dtype, df.dtype)
+    dv, df, w = dv.to(dt), df.to(dt), w.to(dt)
+    A = torch.zeros(n, 2, 2, device=dev, dtype=dt)
+    b = torch.zeros(n, 2, device=dev, dtype=dt)
     for k in range(2):
         for j in range(2):
             A[:, k, j].index_add_(0, row, w * dv[:, k] * dv[:, j])
         b[:, k].index_add_(0, row, w * dv[:, k] * df)
-    # Scale-aware ridge: nodes whose edge vectors are collinear (common on boundary rows)
-    # give a singular 2x2, so regularise relative to the local matrix magnitude rather than
-    # with a fixed epsilon, and fall back to the pseudo-inverse if anything is still singular.
-    scale = A.abs().amax(dim=(1, 2)).clamp(min=1e-30).reshape(-1, 1, 1)
-    A = A + torch.eye(2, device=dev).unsqueeze(0) * scale * 1e-6
-    try:
-        g = torch.linalg.solve(A, b.unsqueeze(-1)).squeeze(-1)
-    except Exception:
-        g = (torch.linalg.pinv(A) @ b.unsqueeze(-1)).squeeze(-1)
+
+    # Symmetric by construction; eigh is stable on the 2x2 and gives the null direction.
+    evals, evecs = torch.linalg.eigh(A.double())
+    lam_max = evals.abs().amax(dim=1, keepdim=True).clamp(min=1e-300)
+    keep = (evals.abs() / lam_max) > GRAD_RCOND
+    inv = torch.where(keep, 1.0 / torch.where(keep, evals, torch.ones_like(evals)),
+                      torch.zeros_like(evals))
+    # g = V diag(inv) V^T b, computed without materialising the pseudo-inverse.
+    bt = torch.einsum("nij,nj->ni", evecs.transpose(1, 2), b.double())
+    g = torch.einsum("nij,nj->ni", evecs, inv * bt).to(b.dtype)
+
+    deficient = ~keep.all(dim=1)
+    if bool(deficient.any()):
+        good = (~deficient).to(g.dtype)
+        for _ in range(GRAD_FILL_PASSES):
+            if not bool(deficient.any()):
+                break
+            acc = torch.zeros_like(g)
+            cnt = torch.zeros(n, device=dev, dtype=g.dtype)
+            acc.index_add_(0, row, g[col] * good[col].unsqueeze(1))
+            cnt.index_add_(0, row, good[col])
+            fillable = deficient & (cnt > 0)
+            if not bool(fillable.any()):
+                break
+            g = torch.where(
+                fillable.unsqueeze(1), acc / cnt.clamp(min=1.0).unsqueeze(1), g
+            )
+            good = good.clone()
+            good[fillable] = 1.0
+            deficient = deficient & ~fillable
     return g[:, 0], g[:, 1]
+
+
+#: Peak ND velocity cap, expressed as a MULTIPLE of the vessel's own inlet peak rather than as
+#: the absolute 2.0 in ``graph_velocity_priors``.  The absolute cap was set because uncapped
+#: ``1/R`` reached ~8 ND on tight stenoses; but the vessels it clips are precisely the stenoses
+#: and wound packs the clot model exists to score.  Measured inlet-to-throat radius ratios:
+#: patient020 1.10, patient001 1.51, wound_patient001 3.50, patient041 4.55 -- and COMSOL's own
+#: peak on patient041 is 5.32 ND against the 2.0 clip, a 2.7x truncation of a real physical
+#: acceleration.  A relative cap keeps the blow-up guard without deleting the signal.
+UMAX_CAP_X_INLET = 6.0
+
+
+def inlet_anchored_umax_nd(data, r_nd: torch.Tensor, *, device=None) -> torch.Tensor:
+    """Poiseuille peak from 2D mass conservation, anchored on the vessel's OWN inlet BC.
+
+    ``mass_conserving_umax_nd`` uses fixed module constants (``U_MAX_BASE_ND = 1.5``,
+    ``R_REF_ND = 0.5``) and never reads the pack.  The inlet Dirichlet BC *is* available under
+    the s17 Z2 deploy contract -- ``data.u_inlet_bc`` on the inlet mask is exactly the COMSOL
+    inlet profile -- so the reference peak and reference radius should both come from it.
+
+    ``u_max(x) = u_peak_inlet * (R_inlet / R(x))`` is exact for 2D planar mass conservation.
+    Falls back to the module constants when the pack carries no usable inlet BC.
+    """
+    dev = device or r_nd.device
+    n = int(data.num_nodes)
+    inlet = _mask(data, "mask_inlet", n, dev)
+    bc = getattr(data, "u_inlet_bc", None)
+    u_peak = None
+    if bc is not None and torch.is_tensor(bc) and bool(inlet.any()):
+        b = bc.to(dev).reshape(n, -1).float()
+        speed = b.norm(dim=1) if b.shape[1] >= 2 else b[:, 0].abs()
+        cand = speed[inlet]
+        if cand.numel() > 0 and float(cand.max()) > 0.0:
+            u_peak = cand.max()
+    if u_peak is None:
+        return mass_conserving_umax_nd(r_nd).reshape(-1)
+
+    r_in = r_nd[inlet]
+    r_ref = r_in.median() if r_in.numel() > 0 else r_nd.median()
+    u_max = u_peak * (r_ref.clamp(min=1e-6) / r_nd.clamp(min=1e-6))
+    return u_max.clamp(max=float(u_peak) * UMAX_CAP_X_INLET).reshape(-1)
 
 
 def build_analytic_priors(
@@ -142,8 +264,8 @@ def build_analytic_priors(
     """Analytical Poiseuille priors from geometry + BCs only. Returns (u, v, mu, wss).
 
     The magnitude, shear rate, Carreau viscosity and wall shear stress are pure functions of
-    ``(sdf_nd, width_nd)`` -- no flow direction needed. Direction is supplied by
-    :func:`potential_flow_direction` and only sets the sign/orientation of ``u``/``v``.
+    ``(sdf_nd, width_nd)`` and the inlet BC -- no flow direction needed. Direction is supplied
+    by :func:`potential_flow_direction` and only sets the sign/orientation of ``u``/``v``.
     """
     dev = device or data.x.device
     ph = phys_cfg or PhysicsConfig()
@@ -152,7 +274,7 @@ def build_analytic_priors(
     width = x[:, COL_WIDTH].reshape(-1)
 
     r_nd = width_nd_to_radius_nd(width).reshape(-1)
-    u_max = mass_conserving_umax_nd(r_nd).reshape(-1)
+    u_max = inlet_anchored_umax_nd(data, r_nd, device=dev)
     r_lane = (r_nd - torch.minimum(sdf, r_nd)).clamp_min(0.0)
 
     mag = torch.clamp(u_max * (1.0 - (r_lane**2 / (r_nd**2 + 1e-12))), min=0.0)
@@ -214,15 +336,22 @@ def apply_prior_source(data, source: str = "analytic", *, phys_cfg: PhysicsConfi
     * ``analytic`` -- Poiseuille magnitude + potential-flow direction. Legal.
     * ``zero``     -- all four columns zeroed. The ablation control for Z1.
 
-    Mutates a shallow clone, never the caller's object, so cached packs stay clean.
+    Always returns a NEW ``Data`` object whose tensors are shared with ``data`` except for the
+    rewritten ``x`` (RGP_DEQ_REPAIR_PLAN.md B12).  The old code returned the caller's own
+    object for ``stored`` and a full ``.clone()`` otherwise, so a loop of the form
+    ``apply_prior_source(pack, src).to(device)`` moved the caller's pack to the GPU on the
+    ``stored`` pass and then silently compared the next source against a mutated original.
+    Sharing rather than deep-cloning also avoids duplicating ``y`` -- these packs run ~335 MB
+    and ``y`` is nearly all of it.
     """
     src = (source or "stored").strip().lower()
     if src not in PRIOR_SOURCES:
         raise ValueError(f"prior source must be one of {PRIOR_SOURCES}, got {source!r}")
-    if src == "stored":
-        return data
 
-    out = data.clone()
+    out = _shallow_view(data)
+    if src == "stored":
+        return out
+
     x = out.x.clone()
     if src == "zero":
         x[:, COL_U_PRIOR] = 0.0

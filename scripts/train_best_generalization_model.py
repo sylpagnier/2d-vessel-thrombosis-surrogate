@@ -4,6 +4,13 @@ import torch.nn.functional as F
 import time
 from pathlib import Path
 
+import sys
+
+# Run directly (`python scripts/train_best_generalization_model.py`) needs the repo root importable.
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from src.differentiable_wall_model.temporal_models import (
     TemporalDifferentiableWallModel,
     PseudoCGNODE

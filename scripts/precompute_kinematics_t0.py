@@ -1,4 +1,12 @@
 import torch
+import sys
+from pathlib import Path
+
+# Run directly (`python scripts/precompute_kinematics_t0.py`) needs the repo root importable.
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 from src.utils.kinematics_inference import predict_kinematics_and_latent
 from src.biochem_gnn.config import apply_deploy_env
 from src.inference.corrector_coupling import resolve_kinematics_checkpoint

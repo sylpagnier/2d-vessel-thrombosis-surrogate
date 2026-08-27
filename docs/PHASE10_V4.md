@@ -1,5 +1,49 @@
 # PHASE 10 — a strict protocol for `clot_gnn`, and what survives it
 
+> **SUPERSEDED IN PART, 2026-08-22.**  Every score in this document was measured on the
+> **19-vessel pre-repair** cohort.  The packs were then repaired (`wall_normal` and
+> `node_type_*` were identically zero), the cohort grew to 23 clot-carrying + 8 clot-free, and
+> the clot-ML geometry took the wall/wound union.  The re-baseline is in
+> [MODEL_REVIEW_2026-08-22.md](MODEL_REVIEW_2026-08-22.md) §8f:
+>
+> | | this document (n=19, pre-repair) | 2026-08-22 rebuild | **+ C0, shipped 2026-08-23** |
+> |---|---|---|---|
+> | final, wall | 0.9176 | 0.9008 | **0.9203** |
+> | final, off | 0.7366 | 0.5812 | **0.7078** |
+> | mean-over-time, wall | 0.8750 | 0.8716 | 0.8694 |
+> | mean-over-time, off | 0.7188 | 0.5713 | 0.5792 |
+> | off readout gap vs oracle | 0.120 | 0.193 | **0.045** |
+> | noise floor | ±0.024 / ±0.091 | ±0.024 / ±0.074 | ±0.024 / ±0.074 |
+>
+> The middle column is the honest re-baseline; the right column adds the **C0 distributional
+> constraint** (MODEL_REVIEW §9b), a ~10-line training term that closed 77% of the readout
+> gap. Final-time off-wall is back above this document's pre-repair figure under the same
+> protocol (0.7059 here → 0.7078), on four more vessels. **Mean-over-time is not** — C0 is a
+> final-time result and §9b.7 says why.
+>
+> **The MECHANISMS, diagnoses and negative results below all stand** — several were
+> re-confirmed by the rebuild (the noise floor, the ~0.99 off-wall AUC, §4's readout ceiling).
+> **§4 in particular was right and is now acted on**: it measured the per-vessel oracle gap
+> and concluded "the network already separates these vessels; one cohort constant does not sit
+> in the right place on any of them". C0 is the answer to that sentence, and it works by
+> moving the field rather than the constant.
+
+> **What changed, in more detail** (all of it in
+> [MODEL_REVIEW_2026-08-22.md](MODEL_REVIEW_2026-08-22.md)):
+>
+> 1. **The pool is 23 clot-carrying vessels, not 19.**  VIZ_HALF (`001/010/014/042`) was
+>    released from SEALED into TRAIN, and the 8 clot-free vessels were admitted for
+>    false-positive scoring.  SEALED is now `007/013/031/043` only.
+> 2. **Every pack's `data.x` changed.**  `wall_normal` and `node_type_*` were populated, which
+>    moved `width_nd`/`width_d1`/`width_d2` on 11–22% of nodes.  **`clot_gnn_v4`, `v4w` and
+>    `outputs/clot_ml_cache_v5` are stale and must be rebuilt and re-promoted.**
+> 3. **The stenosis geometry cut no longer fires**, because it was calibrated against the
+>    degenerate width channel — so every *priority-class stenosis* number below is currently
+>    unlabelled.  The aneurysm cut is unaffected.
+>
+> The protocol, the mechanisms and the negative results in this document all stand.  The
+> **numbers** need re-running.
+
 Opened 2026-08-17.  Two things were asked for: a **strict validation set** (v3 was selected
 without one), and a **v4 that scores better on-wall and/or off-wall, mean-over-time and
 especially at the last time point**.
@@ -797,6 +841,133 @@ Two attempts, both nested honestly:
 So the wall-onset error is real, is worth 0.114 off-wall, and is not reachable by
 re-parameterising the wall clock.  `PHASE9` 13.7 said why: the remaining wall-timing
 information is a per-vessel onset *distribution shape*, and 19 vessels do not determine one.
+
+> **§16 qualifies this.**  "Re-parameterising the wall clock" fails because it aims at the
+> nodes the ODE *does* ignite.  Half the error is in the nodes it **never** ignites, which
+> never had a clock to re-parameterise -- they are handed one constant.
+
+---
+
+## 16. HALF THE WALL-TIMING ERROR IS IN THE NODES THE ODE NEVER IGNITES
+
+Opened 2026-08-21, from the wound work: `docs/WOUND_PROGRESS.md` §11 needed the wall's early
+onsets and found them badly wrong on one vessel, which sent this back to the cohort.
+
+### 16.1 The wall clock is not slow — it is missing a fifth of its nodes
+
+Measured on 13 full-horizon FIT/DEV vessels, GT flow at t=0, wall nodes that clot in GT:
+
+```
+                        FIT      DEV
+never ignites          22.3%    42.6%     <- the defect
+bias, on nodes that do -0.047   +0.017    <- NOT systematically late
+rank rho, same         +0.662   +0.457
+earliest onset         slightly EARLY on both splits
+```
+
+So the popular reading — "the ODE is too slow" — is wrong, and PHASE6_RESULTS §12 already
+said so (bias −0.007).  The nodes that ignite are timed about right.  **A fifth to nearly
+half of the clotting wall never ignites at all**: every one has `gate == 0`, so its
+trajectory never moves, and the scoring convention hands all of them the *same number*, the
+median igniter onset.
+
+Splitting the timing prize by class, SET held at the GT wall set so this is timing only:
+
+```
+                       FIT       DEV
+base (ships)          0.8077    0.8381
++ GT on stitch        0.8652    0.9096     (+0.0575 / +0.0715)
++ GT on ODE-timed     0.8879    0.9034     (+0.0802 / +0.0653)
+oracle                0.9687    0.9991
+```
+
+Roughly an even split, and the stitch half is the one nobody has ever modelled.
+
+### 16.2 What the constant gets wrong: place, then spread
+
+**Place.**  The stitch nodes' true median onset is **+0.267 of the horizon later** than the
+constant (FIT mean; DEV +0.196), and the sign is the same on **13 of 13** vessels, +0.060 to
++0.363.  That is what it should be — these are the nodes outside the admission gate, reached
+later by growth.
+
+**Spread.**  A constant is the extreme of the compressed-onset defect §12 priced at −0.13.
+The ordering to spread them by is **their own t=0 shear**, rank +0.809 FIT / +0.658 DEV —
+better than hop distance to the nearest igniter (+0.50 / +0.34).  **The obvious front-arrival
+model is therefore the wrong shape**: `onset = nearest igniter + hops/speed` was measured,
+FIT selects speed 0.1 and DEV rejects it (−0.011).  Dropped.
+
+`stitch_onset` in `src/core_physics/physics_wall_model.py`:
+
+```
+onset(stitch) = median(igniter onsets) + offset*T + spread*(sr_rank_pct - 0.5)*T
+```
+
+### 16.3 What it is worth, and the nulls it beats
+
+```
+median-igniter constant (ships)              0.8164
+best degenerate null, all stitch at 0.75*T   0.8417
+offset only, no spread                       0.8478
+offset 0.25 spread 0.6                       0.8636
+the same spread with a RANDOM order          0.8339   <- worse than a plain shift
+GT on the stitch nodes (ceiling)             0.9011
+```
+
+The shear ordering is doing real work: **+0.030 over a random order at identical spread**,
+and a random spread is *worse* than not spreading at all.
+
+Leave-one-vessel-out, `(offset, spread)` refitted on the other 12 each time
+(`scripts/eval_stitch_onset.py`):
+
+```
+LOVO mean delta  +0.0422   95% CI [+0.0252, +0.0613]   P(delta<=0) 0.0000   12/13 vessels
+```
+
+**The CI's lower bound clears the ±0.024 wall noise floor**, which nothing else aimed at wall
+timing in this repo has done.  It collects 55% of the stitch prize.  The fold-chosen
+parameters are stable: (0.25, 0.6) on 8 folds, (0.35, 0.8) on 4, (0.30, 0.8) on 1.
+
+### 16.4 IT DOES NOT TRANSFER TO THE DEPLOYED MASK — measured, and not wired in
+
+The §16.3 numbers hold the SET at the GT wall set, which isolates timing but is not what
+ships.  Re-run on the **real** `predict_wall_clot` mask (the two t=0 gates plus
+*shear-admitted* graph growth), same 19 vessels, GT t=0 flow:
+
+```
+arm                                          FIT       DEV
+shipped: never-crossers -> median igniter   0.7537    0.8403
+best degenerate null (all stitch at 0.5*T)  0.7616    0.8225
+stitch_onset, FIT-fitted (0.25, 0.6)        0.7686    0.8231     FIT +0.0149, DEV -0.0172
+
+LOVO mean +0.0076   95% CI [-0.0035, +0.0211]   P(delta<=0) 0.109   positive on 4/19
+```
+
+**That is noise, and `stitch_onset` is therefore NOT wired into any deploy path.**  The
+reason is the admission band: on the deployed mask the stitch class is **0% on 8 of the 19
+vessels** and small on most of the rest, because shear-admitted growth already excludes the
+nodes the GT-set experiment was full of.  The defect §16.1-16.3 measures is real, and the
+shipped mask has largely already avoided it.
+
+`stitch_onset` stays in `physics_wall_model.py` as a documented, tested component with its
+cohort numbers, for the day a mask admits those nodes again (a wound mask does).  Do not
+quote §16.3 as a deploy gain.
+
+### 16.5 Two more things this result is NOT
+* **Not the over-grown-set number.**  On a reconstructed set (igniters + 20-hop along-wall
+  growth, no admission band) the apparent gain is +0.176 — and **94% of it is a degenerate
+  null**, simply withholding graph-grown nodes until the end of the horizon (0.5580 → 0.7234,
+  against 0.7343 for the full model).  That is a precision effect on an over-grown mask.
+* **Not a fix for the wound.**  `WOUND_PROGRESS` §11 needs `wound_patient003`'s near-wound
+  wall nodes to gel **earlier**; this pushes stitch nodes **later**.  That vessel is
+  anti-correlated locally (rho −0.246) and remains an outlier, unexplained.
+
+### 16.6 Also measured and rejected
+
+* **`da_scale_auto`, the two-rate split.**  PHASE6_RESULTS §12: +0.0000, and the mechanism
+  runs the wrong way (a faster autocatalytic term commits nodes *earlier*).  Still unused,
+  correctly.
+* **Scaling the wall gate.**  Fixes `wound_patient003` (wound onset MAE 18.0 → 4.7 at ×20)
+  and takes cohort wall-onset MAE from 18.1% of the horizon to 43.7%.  ×1 is best on 8 of 12.
 
 ---
 

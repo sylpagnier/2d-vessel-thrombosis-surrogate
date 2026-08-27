@@ -40,9 +40,32 @@ def soft_dilate(p: torch.Tensor, D: torch.Tensor) -> torch.Tensor:
     return 1.0 - torch.exp(s)
 
 
+#: matches `severity_metric.SeverityConfig.empty_gt_fp_tol` and `fastscore.EMPTY_GT_FP_TOL`.
+EMPTY_GT_FP_TOL = 8.0
+
+
+def soft_empty_gt_score(p: torch.Tensor, domain: torch.Tensor,
+                        tol: float = EMPTY_GT_FP_TOL) -> torch.Tensor:
+    """The metric's empty-GT branch, made differentiable: ``1 / (1 + E[n_pred] / tol)``.
+
+    There is no recall to optimise when a domain holds no GT clot, so the hard metric grades
+    the false-positive VOLUME instead.  The expected count ``sum(p * domain)`` is already the
+    smooth analogue of ``n_pred``, so the branch is differentiable as written -- no dilation,
+    no relaxation, and exact at ``p in {0, 1}``.
+
+    This is what the 8 clot-free vessels contribute to the objective
+    (`wall_cohort_splits.CLOT_FREE`).  Without it their whole training signal is per-node BCE,
+    and the loss stops being the metric on exactly the vessels whose only evidence is about
+    over-commitment -- the failure mode the readout actually exhibits
+    (MODEL_REVIEW_2026-08-22 3.2).
+    """
+    n_p = (p * domain).sum()
+    return 1.0 / (1.0 + n_p / max(float(tol), 1e-6))
+
+
 def soft_score(p: torch.Tensor, gt: torch.Tensor, D: torch.Tensor,
                domain: torch.Tensor, gt_dil: torch.Tensor,
-               shape_w: float = 0.5) -> torch.Tensor:
+               shape_w: float = 0.5, *, empty_gt: str = "none") -> torch.Tensor:
     """Differentiable `shape_w*dilation_IoU + (1-shape_w)*relaxed_F0.5` over ``domain``.
 
     ``shape_w`` exists because the two halves are NOT equally binding.  Measured per vessel
@@ -56,6 +79,14 @@ def soft_score(p: torch.Tensor, gt: torch.Tensor, D: torch.Tensor,
     g = gt * domain
     n_gt = g.sum()
     if float(n_gt) <= 0:
+        # `"none"` (default) drops the term, which is right for a clot-CARRYING vessel whose
+        # off-wall domain happens to be empty -- 6 of 19 -- because folding those in would
+        # silently redefine the off-wall objective.  `"score"` is for a vessel with no clot
+        # ANYWHERE; see `soft_empty_gt_score`.
+        if empty_gt == "score":
+            return soft_empty_gt_score(p, domain)
+        if empty_gt != "none":
+            raise ValueError("empty_gt must be 'none' or 'score', got %r" % (empty_gt,))
         return None
     p_dil = soft_dilate(p, D) * domain
     gd = gt_dil * domain

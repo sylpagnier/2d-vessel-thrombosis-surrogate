@@ -114,11 +114,66 @@ Corollary: prefer levers that do not need a per-config effect to be detectable �
 and deterministic readout fixes. Adding selection layers (inner-CV family choice, per-domain
 family choice, rule selection) was measured and all of it **loses** at this n.
 
+### COHORT AND PACKS CHANGED 2026-08-22 — read before quoting any clot number
+
+Full review: [docs/MODEL_REVIEW_2026-08-22.md](docs/MODEL_REVIEW_2026-08-22.md).
+
+1. **SEALED is now FINAL_HALF only** (`patient007/013/031/043`). VIZ_HALF
+   (`001/010/014/042`) was released into `WALL_COHORT_V2_TRAIN` and may be trained and
+   selected on; `042` is DEV-train. See the amendment at the top of
+   [docs/SEALED_SPLIT.md](docs/SEALED_SPLIT.md). **Provenance tests for artifacts promoted
+   before that date must use `WALL_COHORT_V2_SEALED_PRE_20260822`**, not the live `SEALED`.
+2. **The 8 clot-free vessels are in** (`WALL_COHORT_V2_CLOT_FREE` /
+   `wall_cohort_splits.CLOT_FREE`): trainable, and scored for false positives only via
+   `SeverityScorer.score(..., empty_gt="score")`. Never put them in a recall-bearing mean;
+   the `empty_gt="nan"` default is unchanged and is what keeps off-wall means comparable.
+3. **`wall_normal` and `node_type_*` are populated on all 45 packs**
+   (`scripts/repair_pack_wall_normals.py`; backups at `*.pt.prenormalfix`). This changed
+   `data.x` everywhere, so **`clot_gnn_v4` / `clot_gnn_v4w`, `outputs/clot_ml_cache_v5` and
+   every pack's `u0_pred` are STALE.** Rebuild the cache, re-run CV and re-promote before
+   quoting a score; re-run `precache_rgp_deq` before any `--flow pred` result.
+
 **Wound vessels: [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md)** — the wound is the wall
 law with the shear gates deleted; 100% of wound nodes clot and the t=0 gate fires on 0% of
-them. Also records the solid-boundary pack fix (`solid_boundary_mask`) and why
+them. **Shipped: `clot_gnn_v4w`** (`kind: temporal_v4_wound`, promote with
+`scripts/promote_clot_gnn_v4_wound.py --repoint`) — `clot_gnn_v4` plus a wound
+boundary-condition branch, byte-identical base, and **bit-identical to v4 on any pack without
+a wound mask** (asserted at promotion, pinned by `src/tests/test_wound_complement.py`). When
+comparing against it, pin the baseline: `eval_wound_complement.py --base clot_gnn_v4`, never
+the locked pointer. The complement to `clot_gnn_v4` is `src/clot_ml/wound.py` (train:
+`scripts/train_wound_rate.py`, score: `scripts/eval_wound_complement.py`) — a two-regime
+gate inside COMSOL's own surface ODE. **It is a complement, never a retrain: it must stay a
+bit-identical no-op on every no-wound pack**, which `src/tests/test_wound_complement.py`
+pins. The per-node rate net loses LOVO at n=3; ship the two constants. Also records the solid-boundary pack fix (`solid_boundary_mask`) and why
 `comsol_models/phase2_template_*.mph` no longer exist — **read the `.mph` off the latest
 `phase2_wound_*` / `phase2_nowound_*` patient runs**, which are always the format in use.
+
+**v6 learned `Mat` field ([docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) §17–18):**
+`src/clot_ml/mat_field.py` + `scripts/go_mat_field_v6.py` replace the ODE's `Mat` in the
+off-wall rule and leave every other component fixed. Three results to know before touching
+off-wall scoring. **(1) The off-wall readout must be REPLACED, not unioned** — a *perfect*
+field unioned with v4w's off-wall verdict scores 0.6558 on `wound_patient003` where the same
+field alone scores 0.7897; §16.2's original number was a replacement and had been read as a
+union. **(2) The reachable ceiling on 003 is 0.9240**, not §16.5's shell-1 bound of 0.8667,
+using shells off the whole solid boundary at depth 3. **(3) It generalizes** — held-out
+`wound_patient001` goes 0.4755 → **0.9489** — but `wound_patient003` does not, because its
+wall `Mat` p90 is 27.78x crit, the largest of all 52 packs, and no non-wound vessel exceeds
+11.13x. Its learned residual collapses onto the ODE base and **no threshold recovers it**
+(flat 0.42-0.53 from 0.33x to 12x crit). **§18:** GT chemistry + `da_scale_auto=123`
+(COMSOL's own 3.07x Damköhler split) scores **0.8512** off-wall on 003 through that
+replace+depth readout — target met as an oracle. Frozen AP cannot be scaled there
+(ceiling 0.6125), and 003's AP contrast is also OOD (CV 1.23 vs non-wound max 0.31), so
+the next build is a time-varying wall AP (upwind renewal on the existing Damköhler
+closure) feeding the ODE, **not** another `Mat` GNN and not a species GNN as the first
+move.
+
+**Unified stack: `clot_ml_v0`** (`kind: unified_v0`, promote with
+`scripts/promote_clot_ml_v0.py`) — one artifact for wounded and non-wounded vessels. Wall
+SET and non-wound off-wall stay the C0 GNN (`clot_gnn_v5w`); on a wound pack true-lumen is
+**replaced** (not unioned) by the chemistry ODE through solid-anchored replace+depth.
+Bit-identical to the base GNN without a wound mask. Compare with
+`python scripts/eval_clot_ml_v0.py --baseline clot_gnn_v5w` before `--repoint`. See
+[docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) §19.
 
 **Active findings: [docs/PHASE7_FINDINGS.md](docs/PHASE7_FINDINGS.md)** — the off-wall
 problem, `.mph` reading, and the corrections it makes to Phase 6. Read it first.
@@ -140,6 +195,7 @@ production physics — see [docs/PHASE7_FINDINGS.md](docs/PHASE7_FINDINGS.md) §
 - On eval / load: `PushforwardConfig.from_meta(meta)` + `BiochemRuntimeConfig.from_meta(meta)` — do not inject into `os.environ`
 - Off-wall: hop >= 1 helpers (`deploy_clot_offwall_relaxed_f1`, …)
 - **Wall-cohort physics** (`predict_wall_clot`, Phase 3–8 scalars): FIT / DEV / SEALED from [`src/core_physics/wall_cohort_splits.py`](src/core_physics/wall_cohort_splits.py), same lists as `scripts/sweep_ml_clean_protocol.py`. Fit on **FIT**, select on **DEV** (039/040/041/044). `patient020` is FIT, not a holdout. **SEALED** (`WALL_COHORT_V2_GENERALIZATION`) is spent once — do not tune against it. Do not quote a TRAIN-mean (27, or the 19 eligible full-horizon subset) as a decision metric; it mixes FIT with DEV. Comparison table: `python scripts/eval_wall_protocol.py`.
+- **SEALED is split.** [`docs/SEALED_SPLIT.md`](docs/SEALED_SPLIT.md) — `patient001/010/014/042` (VIZ_HALF) may be opened and shown in visualizations, repeatedly, for any model, but **never used to select or tune**. `patient007/013/031/043` (FINAL_HALF) stay exactly as closed as SEALED always was — reserved for the project's one true final read. Read the doc before touching any of these 8 vessels.
 
 ## Hardware
 

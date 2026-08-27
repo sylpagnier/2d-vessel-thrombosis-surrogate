@@ -250,6 +250,7 @@ def test_v3_manifest_is_consistent_and_excludes_sealed():
     assert (root / man["clf_file"]).exists()
     base_root = repo / "outputs/clot_ml/locked" / man["base_set_model"]
     assert (base_root / "manifest.json").exists(), "base SET model must still be on disk"
-    from src.core_physics.wall_cohort_splits import SEALED
-    assert not (set(man["training_pool"]) & set(SEALED))
+    from src.biochem_gnn.mat_growth_simple import WALL_COHORT_V2_SEALED_PRE_20260822
+    # historical 8-vessel SEALED -- see the constant's docstring
+    assert not (set(man["training_pool"]) & set(WALL_COHORT_V2_SEALED_PRE_20260822))
     assert 0.0 <= man["thresh_wall"] <= 1.0 and 0.0 <= man["thresh_off"] <= 1.0

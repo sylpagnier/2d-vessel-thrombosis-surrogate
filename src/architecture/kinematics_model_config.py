@@ -266,6 +266,7 @@ def save_kinematics_checkpoint_file(
     run_id: str = "",
     run_note: str = "",
     training_manifest: Mapping[str, Any] | None = None,
+    prior_source: str = "",
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +282,10 @@ def save_kinematics_checkpoint_file(
         "best_val_composite_loss": float(composite),
         "run_id": (run_id or "").strip(),
         "run_note": (run_note or "").strip(),
+        # RGP_DEQ_REPAIR_PLAN.md B2/D6: the prior block a checkpoint was TRAINED with, so
+        # `precache_rgp_deq` can refuse a train/deploy mismatch instead of discovering it
+        # months later as an unexplained score collapse.
+        "prior_source": (prior_source or "").strip().lower(),
     }
     if model_config:
         payload["model_config"] = model_config

@@ -13,7 +13,6 @@ import math
 import os
 import random
 import re
-import shutil
 import sys
 import time
 import warnings
@@ -39,6 +38,7 @@ from src.architecture.kinematics_model_config import (
 )
 from src.config import VesselConfig, PhysicsConfig, PredChannels
 from src.core_physics.physics_kernels import PhysicsKernels
+from src.data_gen.lib.legal_priors import apply_prior_source, resolve_prior_source
 from src.utils.anchor_mask import graph_has_anchor, anchor_node_mask
 from src.utils.kinematics_physics_terms import compute_kinematics_physics_terms
 from src.utils.metrics import DynamicLossWeighter, quantify_performance
@@ -336,7 +336,36 @@ def load_dataset(
                 f"[kin] Merged {len(added)} clinical patient kine anchors "
                 f"(KINEMATICS_INCLUDE_PATIENT_ANCHORS=1)."
             )
-    return dataset
+    return _apply_prior_source_to_dataset(dataset)
+
+
+def _apply_prior_source_to_dataset(dataset):
+    """Rewrite every graph's prior block to the configured source (RGP_DEQ_REPAIR_PLAN.md B2).
+
+    The RGP-DEQ consumes ``x[:, UV_PRIOR|MU_PRIOR]`` three times over -- encoder input, the
+    ``z_prior_proj`` warm start, and the hard BC ``u = uv_prior + sdf * uvp`` -- and on the
+    clinical anchor packs those columns are bit-identical to COMSOL's ``t=0`` velocity on 43 of
+    43 vessels.  Training against them teaches a near-identity map that no deploy-time input
+    can reproduce.  ``legal_priors`` has existed to fix this since the s17 Z2 decision; nothing
+    ever called it from here.
+
+    Default stays ``stored`` so an unset environment reproduces historical runs bit-for-bit.
+    """
+    source = resolve_prior_source()
+    if source == "stored":
+        print("[kin] prior_source=stored -- training on the LEAKED CFD prior block (s17 Z2). "
+              "Set SPECIES_PRIOR_SOURCE=analytic for a deployable model.")
+        return dataset
+    print(f"[kin] Rewriting prior block on {len(dataset)} graphs to prior_source={source} ...")
+    out = []
+    for i, d in enumerate(dataset):
+        rebuilt = apply_prior_source(d, source)
+        # `apply_prior_source` returns a fresh store over shared tensors; graph_stem and the
+        # geometry metadata ride along in `to_dict()`, so nothing needs re-attaching.
+        out.append(rebuilt)
+        if not kinematics_tqdm_enabled() and (i + 1) % 50 == 0:
+            print(f"[kin]   priors rewritten {i + 1}/{len(dataset)}")
+    return out
 
 
 def split_anchor_physics(dataset, seed=42, train_ratio=0.9):
@@ -533,6 +562,16 @@ def compute_step_loss(
                 torch.log1p(gt_shear[node_is_anchor])
             )
             
+    # RGP_DEQ_REPAIR_PLAN.md D2.  `clot_ml` reads `sr` and `dsrx` in the wall band and nothing
+    # else; these two terms are the only place training is scored on them.  Both are normalised
+    # by the GT's own spread on the band, so the model cannot reduce them by shrinking -- which
+    # matters because every measured `sr`/`dsrx` scale is < 1 against COMSOL.  Off by default:
+    # set KINEMATICS_WALL_SHEAR_WEIGHT to enable, so an unset environment reproduces the
+    # historical loss exactly.
+    w_band = float(os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "0.0"))
+    l_band_sr = terms.get("l_band_sr", torch.tensor(0.0, device=device))
+    l_band_dsrx = terms.get("l_band_dsrx", torch.tensor(0.0, device=device))
+
     loss = (
         weighted_pdes
         + (weight_data * l_data_kine)
@@ -542,6 +581,7 @@ def compute_step_loss(
         + (1.0 * p_grad_loss)
         + (weight_wss * l_wss)
         + (50.0 * l_shear_grad)
+        + (w_band * (l_band_sr + l_band_dsrx))
         + (w_shear * l_shear)
         + (0.1 * jac_loss)
     )
@@ -553,11 +593,15 @@ def compute_step_loss(
     weighted_pgrad = 1.0 * p_grad_loss
     weighted_wss = weight_wss * l_wss
     weighted_shear_grad = 50.0 * l_shear_grad
+    weighted_band = w_band * (l_band_sr + l_band_dsrx)
     weighted_shear = w_shear * l_shear
     weighted_jac = 0.1 * jac_loss
     metrics = {
         "L_mom": l_mom.item(),
         "L_cont": l_cont.item(),
+        "L_band_sr": float(l_band_sr.item()),
+        "L_band_dsrx": float(l_band_dsrx.item()),
+        "C_band_shear": float(weighted_band.item()) if torch.is_tensor(weighted_band) else float(weighted_band),
         "L_data": l_data_kine.item(),
         "L_mu": l_data_mu.item(),
         "L_bc": l_bc.item(),
@@ -677,6 +721,13 @@ def train_kinematics(
     static_batches = []
     n_anchors, n_physics = 0, 0
     best_val_composite_loss = float("inf")
+    # Last validation actually observed.  Carried onto periodic checkpoints (B5) and used to
+    # detect a run that never validated at all (B6).
+    last_val_rel_l2 = float("nan")
+    last_val_continuity = float("nan")
+    last_val_composite = float("nan")
+    n_validations = 0
+    train_prior_source = resolve_prior_source()
     accum_steps = max(1, int(accum_steps))
     max_lbfgs_graphs = max(1, int(max_lbfgs_graphs))
     start_epoch = 0
@@ -701,7 +752,16 @@ def train_kinematics(
             )
             model.load_state_dict(resume_state, strict=False)
             if isinstance(ckpt.get("training_manifest"), dict):
-                training_manifest.update(ckpt["training_manifest"])
+                # RGP_DEQ_REPAIR_PLAN.md B9.  This used to be
+                # `training_manifest.update(ckpt["training_manifest"])`, which let the RESUMED
+                # run's settings overwrite the CURRENT run's -- so the 2026-08-27 finetunes
+                # shipped a manifest reading `epochs: 40` on a checkpoint sitting at epoch 75.
+                # The parent's settings are history, not configuration: record them as such.
+                training_manifest["resumed_from"] = {
+                    "path": str(resume_from),
+                    "epoch": ckpt.get("epoch", ckpt.get("best_epoch")),
+                    "manifest": dict(ckpt["training_manifest"]),
+                }
             if "loss_weighter_state_dict" in ckpt:
                 loss_weighter.load_state_dict(ckpt["loss_weighter_state_dict"])
             if "optimizer_state_dict" in ckpt and ckpt.get("optimizer_name", "AdamW") == "AdamW":
@@ -1056,19 +1116,34 @@ def train_kinematics(
         if epoch % 5 == 0 or epoch == epochs - 1:
             os.makedirs(kinematics_dir(), exist_ok=True)
             ckpt_path = kinematics_dir() / f"kinematics_ckpt_{epoch + 1}.pth"
+            # RGP_DEQ_REPAIR_PLAN.md B5.  These two saves used to pass no metrics at all, so
+            # `rel_l2` / `continuity` / `composite` defaulted to NaN.  A periodic checkpoint is
+            # routinely copied over `kinematics_best.pth` by hand, and the result is a "best"
+            # that carries no selection evidence -- exactly what both 2026-08-27 artifacts are.
+            # Stamping the most recent validation makes such a copy self-describing instead.
             save_kinematics_checkpoint_file(
                 ckpt_path,
                 model,
                 checkpoint_role=f"kinematics_ckpt_{epoch + 1}",
                 best_epoch=int(epoch),
+                rel_l2=last_val_rel_l2,
+                continuity=last_val_continuity,
+                composite=last_val_composite,
+                run_id=str(getattr(diary, "run_dir", Path(".")).name),
                 training_manifest=training_manifest,
+                prior_source=train_prior_source,
             )
             save_kinematics_checkpoint_file(
                 kinematics_dir() / "kinematics_ckpt_latest.pth",
                 model,
                 checkpoint_role="kinematics_ckpt_latest",
                 best_epoch=int(epoch),
+                rel_l2=last_val_rel_l2,
+                continuity=last_val_continuity,
+                composite=last_val_composite,
+                run_id=str(getattr(diary, "run_dir", Path(".")).name),
                 training_manifest=training_manifest,
+                prior_source=train_prior_source,
             )
             state_path = kinematics_dir() / f"kinematics_state_{epoch + 1}.pth"
             state_payload = {
@@ -1105,6 +1180,11 @@ def train_kinematics(
             rel_l2 = float(scores.get("rel_l2", float("nan")))
             continuity = float(scores.get("continuity", float("nan")))
             val_comp = rel_l2 + 100.0 * continuity
+            n_validations += 1
+            if math.isfinite(rel_l2) and math.isfinite(continuity):
+                last_val_rel_l2, last_val_continuity, last_val_composite = (
+                    rel_l2, continuity, val_comp,
+                )
             level_bits = []
             for lvl in (0, 1, 2):
                 key = f"rel_l2_level_{lvl}"
@@ -1287,14 +1367,35 @@ def train_kinematics(
             ),
         )
 
+    # RGP_DEQ_REPAIR_PLAN.md B6.  This used to `shutil.copy2(latest, best_path)` whenever no
+    # best had been saved -- which is how BOTH 2026-08-27 artifacts came to sit at
+    # `kinematics_best.pth` carrying `checkpoint_role=kinematics_ckpt_latest` and NaN metrics.
+    # A run that never cleared a promotion gate has not produced a best model, and silently
+    # minting one erases the only signal that model selection did not happen.  Say so instead:
+    # the weights are still on disk as `kinematics_ckpt_latest.pth` for anyone who wants them.
     best_path = kinematics_dir() / "kinematics_best.pth"
-    if not best_path.exists():
-        latest = kinematics_dir() / "kinematics_ckpt_latest.pth"
-        if latest.exists():
-            shutil.copy2(latest, best_path)
-            print(f"[kin] WARN no Carreau best saved; copied {latest.name} -> kinematics_best.pth")
+    promoted = math.isfinite(best_val_composite_loss)
+    if not promoted:
+        reason = (
+            "validation never ran (empty val split, or val_every never hit)"
+            if n_validations == 0
+            else f"{n_validations} validation(s) ran but none passed the promotion gates"
+        )
+        print(
+            "\n[kin] " + "=" * 72 +
+            f"\n[kin] NO BEST CHECKPOINT PROMOTED: {reason}."
+            f"\n[kin] `{best_path.name}` was NOT written or updated by this run."
+            "\n[kin] The final weights are in `kinematics_ckpt_latest.pth`. Do NOT copy them"
+            "\n[kin] over kinematics_best.pth: they carry no selection evidence, and anything"
+            "\n[kin] downstream that resolves a 'best' checkpoint would silently consume them."
+            "\n[kin] " + "=" * 72
+        )
+    elif not best_path.exists():
+        print(f"[kin] WARN promotion recorded but {best_path} is missing; check KINEMATICS_OUTPUT_DIR")
 
     diary.log_run_end(best_val_composite_loss=float(best_val_composite_loss))
+    return {"promoted": bool(promoted), "n_validations": int(n_validations),
+            "best_val_composite_loss": float(best_val_composite_loss)}
 
 
 if __name__ == "__main__":

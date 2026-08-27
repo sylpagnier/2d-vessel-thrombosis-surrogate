@@ -283,6 +283,51 @@ def first_corner_shell(pos: np.ndarray, wall: np.ndarray, edge_index: np.ndarray
     return row | along
 
 
+def solid_boundary_shells(
+    pos: np.ndarray,
+    solid: np.ndarray,
+    edge_index: np.ndarray,
+    *,
+    shell1: np.ndarray | None = None,
+    town: np.ndarray | None = None,
+    max_depth: int = 3,
+) -> tuple[list[np.ndarray], np.ndarray]:
+    """Corner shells off the WHOLE solid boundary, plus a nearest-solid owner.
+
+    Two departures from a wound-anchored ring, both forced by ``wound_patient003``
+    (docs/WOUND_PROGRESS.md 17.1): shells are taken off ``solid`` (wall union wound),
+    because 003's missing lumen clot sits ~14 hops from the wound beside the healthy
+    wall; and shell 1 stays exactly :func:`first_corner_shell` -- a hop-2 ring is a
+    different, smaller set.  Deeper rings are hop ``2k`` because the mesh is quadratic,
+    so odd hops are P2 mid-side nodes that carry structurally zero ``Mat``.
+    """
+    from scipy.spatial import cKDTree
+
+    from src.clot_ml.features import adjacency as feat_adj, hop_distance
+
+    solid = np.asarray(solid, dtype=bool)
+    pos = np.asarray(pos, dtype=np.float64)
+    ei = np.asarray(edge_index)
+    n = len(solid)
+    A = feat_adj(ei, n)
+    hop = hop_distance(solid, A)
+    first = (np.asarray(shell1, dtype=bool) if shell1 is not None
+             else first_corner_shell(pos, solid, ei))
+    shells = [first & ~solid]
+    seen = solid | shells[0]
+    for k in range(2, int(max_depth) + 1):
+        add = (hop == 2 * k) & ~seen
+        shells.append(add)
+        seen = seen | add
+    si = np.flatnonzero(solid)
+    owner = si[cKDTree(pos[si]).query(pos)[1]] if si.size else np.zeros(n, np.int64)
+    if town is None:
+        town = topological_owner(pos, solid, ei)
+    town = np.asarray(town)
+    owner = np.where(town >= 0, np.maximum(town, 0), owner)
+    return shells, owner.astype(np.int64)
+
+
 def lumen_thickness_layer(
     wall_clot: np.ndarray,
     wall: np.ndarray,
@@ -371,7 +416,7 @@ def autocatalytic_lumen(
 # MAT-MAGNITUDE LUMEN ARM (docs/PHASE7_FINDINGS.md)
 # ---------------------------------------------------------------------------
 #
-# In the production COMSOL model (``comsol_models/phase2_template_nowound.mph``) M/Mas/Mat
+# In the production COMSOL model (``comsol_models/phase2_nowound_011.mph``) M/Mas/Mat
 # are a 3-species *Transport of Diluted Species* DOMAIN field with ``D_M = D_Mas = D_Mat = 0``,
 # advected by the Reacting Flow coupling, sourced only by the wall inward flux ``J0_Mat``.
 # The clot label is ``mu1(Mat) > `` step, i.e. a threshold on that domain field.  So an

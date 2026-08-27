@@ -12,7 +12,9 @@ for a learned model with a real held-out set, including the FIT/DEV badging in p
 below: `scripts/gen_gnn_viz_data.py` + `scripts/build_gnn_temporal_artifact.py`
 (`clot_gnn_v1`). Reference implementation for a learned model with NO held-out set left
 (point 8 below) and genuine per-timestep predictions in both windows:
-`scripts/gen_v3_temporal_data.py` + `scripts/build_v3_temporal_artifact.py` (`clot_gnn_v3`).
+`scripts/gen_v3_temporal_data.py` + `scripts/build_v3_temporal_artifact.py` (`clot_gnn_v3`);
+updated for a stricter nested-CV protocol with reported noise floor and significance:
+`scripts/gen_v4_temporal_data.py` + `scripts/build_v4_temporal_artifact.py` (`clot_gnn_v4`).
 Run the relevant pair, then publish the resulting `outputs/*.html` file as an Artifact
 (Claude Code's hosted-page tool). Note this is unrelated to
 [docs/PUBLISHING.md](PUBLISHING.md), which is this repo's git tracking policy — nothing

@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from src.clot_ml.data import eval_domains
 from src.evaluation.clot_relaxed_metrics import (
     clot_score_from_deploy_dict, compute_clot_relaxed_metrics, metrics_to_deploy_prefix,
 )
@@ -47,13 +48,17 @@ def f1(pred: np.ndarray, gt: np.ndarray) -> float:
 def score_vessel(pred: np.ndarray, S: dict) -> dict:
     """``S`` is a sample dict from the cache; ``pred`` a boolean full-mesh mask."""
     ei = torch.tensor(S["edge_index"])
-    wall, gt = S["wall"], S["y"] > 0.5
+    gt = S["y"] > 0.5
+    # `off` is TRUE LUMEN (`~solid`), not `~wall` -- see `src/clot_ml/data.eval_domains`.
+    # Identical on every no-wound pack; on a wound pack it keeps the wound's 100%-GT nodes
+    # out of the off-wall score, which is the whole point of the A3 decision.
+    wall, off = eval_domains(S)
     return dict(
         wall=domain_score(pred, gt, ei, wall, wall),
-        off=domain_score(pred, gt, ei, ~wall, wall),
+        off=domain_score(pred, gt, ei, off, wall),
         full=full_score(pred, gt, ei, wall),
         wall_f1=f1(pred & wall, gt & wall),
-        off_f1=f1(pred & ~wall, gt & ~wall),
+        off_f1=f1(pred & off, gt & off),
     )
 
 

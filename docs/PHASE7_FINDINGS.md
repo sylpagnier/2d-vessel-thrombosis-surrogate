@@ -74,7 +74,7 @@ parameters, variables, every physics node, every boundary condition, the materia
 
 ```python
 import zipfile, json
-sm = json.loads(zipfile.ZipFile("comsol_models/phase2_template_nowound.mph").read("smodel.json"))
+sm = json.loads(zipfile.ZipFile("comsol_models/phase2_nowound_011.mph").read("smodel.json"))
 ```
 
 This is strictly better than reverse-engineering from exports. Two of the repo's standing
@@ -618,11 +618,18 @@ Four things it settles:
 **The ungated `srf2` node is not a missing source, and this is worth recording because it looked
 like one.** The tree has *two* active surface-reaction nodes: `srf1`
 (`wall_surface_reactions_3spec`, gated) and `srf2` (`SfcRxn_3spec`), whose `J0_Mat` has **no
-shear gate at all**. But `srf2` appears only in `phase2_template_wound.mph`; the actual
-production patient models (`phase2_nowound_011.mph`, and the cohort is all `nowound`) carry
-`srf1` **only**. The repo's gated law is complete for this cohort. Forward-looking risk: if a
-wound case ever enters the cohort, `srf2` deposits regardless of shear and a gate-based model
-cannot produce clot there at all.
+shear gate at all**. But the `nowound` production models
+(`phase2_nowound_011.mph`, and this cohort is all `nowound`) carry `srf1` **only**. The repo's
+gated law is complete for this cohort. Forward-looking risk: if a wound case ever enters the
+cohort, `srf2` deposits regardless of shear and a gate-based model cannot produce clot there
+at all.
+
+> **This risk has since materialised and been measured — see
+> [WOUND_PROGRESS.md](WOUND_PROGRESS.md).** `phase2_wound_001/002/003.mph` carry `srf2` on the
+> wound selection, 100% of wound nodes clot, and the t=0 gate fires on 0% of them. (The two
+> `phase2_template_*.mph` files this section originally cited were mislabelled and have been
+> deleted; read the physics off the latest `phase2_wound_*` / `phase2_nowound_*` runs, which
+> are always the format actually in use.)
 
 ### 9.2 The per-node ODE cannot order GT `Mat` even with perfect inputs
 

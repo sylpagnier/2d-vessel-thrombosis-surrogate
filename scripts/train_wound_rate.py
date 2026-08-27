@@ -1,0 +1,208 @@
+"""Fit the wound rate model, leave-one-vessel-out, and save the artifact.
+
+The learned quantity is a **rate coefficient inside COMSOL's own surface ODE**, not a label:
+``src/clot_ml/wound.py`` runs the ungated wound law with a two-regime gate and this script
+fits ``(G_pre, G_post)`` -- globally, and optionally with a per-node network residual --
+against GT ``Mat`` in log space over the whole trajectory.
+
+Three arms, all evaluated leave-one-vessel-out on 3 wound vessels:
+
+    physics    G == 1              COMSOL-faithful, zero parameters
+    const      G_pre, G_post       two global scalars
+    net        + WoundRateNet      per-node residual on both
+
+At n=3 the honest expectation is that ``const`` is the arm that survives; ``net`` is fitted
+and reported so the comparison exists rather than being assumed. Read the numbers, not the
+architecture.
+
+Usage:
+    python scripts/train_wound_rate.py
+    python scripts/train_wound_rate.py --epochs 400 --hidden 32
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+import torch
+
+import sys
+
+# Run directly (`python scripts/train_wound_rate.py`) needs the repo root importable.
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from src.clot_ml.wound import (
+    G_POST0, G_PRE0, WOUND_FEATURES, WoundRateNet, mat_trajectory_torch, onset_from_traj,
+    prepare_vessel,
+)
+from src.config import BiochemConfig
+
+GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
+OUT_DIR = Path("outputs/clot_ml/wound_rate")
+WOUND_STEMS = ("wound_patient001", "wound_patient002", "wound_patient003")
+EPS = 1e-3  # floor in Mat/crit units, so log10 is finite where nothing has deposited
+
+
+def load_vessel(stem: str, bio) -> dict:
+    from src.core_physics.clot_phi_simple import mat_si_for_gelation_from_log1p
+
+    data = torch.load(GRAPH_DIR / f"{stem}.pt", map_location="cpu", weights_only=False)
+    V = prepare_vessel(data, bio)
+    V["stem"] = stem
+    V["data"] = data
+    T = int(data.y.shape[0])
+    mi = data.y_channel_names.split(",").index("Mat_log1p_nd")
+    mat_gt = mat_si_for_gelation_from_log1p(data.y[:, :, mi], bio).reshape(T, -1)
+    w = V["wound"]
+    V["idx"] = np.flatnonzero(w)
+    V["mat_gt_w"] = mat_gt[:, w].double()
+    V["T"] = T
+    return V
+
+
+def subset(V: dict) -> dict:
+    """The per-node ODE is uncoupled, so training only needs the wound rows."""
+    i = V["idx"]
+    return dict(t=V["t"], rp=V["rp"][i], ap=V["ap"][i], sr=V["sr"][i], C=V["C"])
+
+
+def curve_loss(traj: torch.Tensor, mat_gt: torch.Tensor, crit: float) -> torch.Tensor:
+    a = torch.log10(traj / crit + EPS)
+    b = torch.log10(mat_gt / crit + EPS)
+    return (a - b).abs().mean()
+
+
+def fold_metrics(traj_np: np.ndarray, V: dict, crit: float) -> dict:
+    gt = V["mat_gt_w"].numpy()
+    T = V["T"]
+    on_p, on_g = onset_from_traj(traj_np, crit), onset_from_traj(gt, crit)
+    live = on_g < T
+    a = np.log10(traj_np / crit + EPS)
+    b = np.log10(gt / crit + EPS)
+    return dict(
+        curve_l1=float(np.abs(a - b).mean()),
+        onset_err_med=float(np.median(on_p[live] - on_g[live])) if live.any() else float("nan"),
+        onset_mae=float(np.abs(on_p[live] - on_g[live]).mean()) if live.any() else float("nan"),
+        onset_mae_frac=float(np.abs(on_p[live] - on_g[live]).mean() / T) if live.any() else float("nan"),
+        recall=float((traj_np[-1] >= crit).mean()),
+        final_ratio=float(np.median(traj_np[-1]) / max(np.median(gt[-1]), 1e-30)),
+        T=T,
+    )
+
+
+def train_fold(train_V: list, hidden: int, epochs: int, lr: float, mu, sd, crit: float):
+    net = WoundRateNet(len(WOUND_FEATURES), hidden=hidden, g_pre0=G_PRE0, g_post0=G_POST0)
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    packs = []
+    for V in train_V:
+        x = torch.tensor((V["feats"][V["idx"]] - mu) / sd, dtype=torch.float32)
+        packs.append((x, subset(V), V["mat_gt_w"]))
+    for _ in range(epochs):
+        opt.zero_grad()
+        loss = 0.0
+        for x, sub, gt in packs:
+            g_pre, g_post = net(x)
+            traj = mat_trajectory_torch(gate_pre=g_pre.double(), gate_post=g_post.double(),
+                                        **sub)
+            loss = loss + curve_loss(traj, gt, crit)
+        loss = loss / len(packs)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
+        opt.step()
+    return net, float(loss.detach())
+
+
+@torch.no_grad()
+def apply_net(net, V, mu, sd) -> np.ndarray:
+    x = torch.tensor((V["feats"][V["idx"]] - mu) / sd, dtype=torch.float32)
+    g_pre, g_post = net(x)
+    return mat_trajectory_torch(gate_pre=g_pre.double(), gate_post=g_post.double(),
+                                **subset(V)).numpy()
+
+
+@torch.no_grad()
+def flat_gate(V, g: float) -> np.ndarray:
+    n = len(V["idx"])
+    gg = torch.full((n,), float(g), dtype=torch.float64)
+    return mat_trajectory_torch(gate_pre=gg, gate_post=gg, **subset(V)).numpy()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--epochs", type=int, default=400)
+    ap.add_argument("--hidden", type=int, default=32)
+    ap.add_argument("--lr", type=float, default=0.02)
+    ap.add_argument("--out", default=str(OUT_DIR))
+    args = ap.parse_args()
+
+    bio = BiochemConfig(phase="biochem")
+    crit = float(bio.viscosity_mat_crit)
+    print("[i] loading wound vessels")
+    Vs = [load_vessel(s, bio) for s in WOUND_STEMS]
+    for V in Vs:
+        print(f"    {V['stem']:20s} T={V['T']:4d} wound_nodes={len(V['idx']):4d}")
+
+    rows: dict[str, dict[str, dict]] = {"physics": {}, "const": {}, "net": {}}
+    folds: dict[str, dict] = {}
+    for k, held in enumerate(Vs):
+        train_V = [V for V in Vs if V is not held]
+        feats = np.concatenate([V["feats"][V["idx"]] for V in train_V], axis=0)
+        mu, sd = feats.mean(0), feats.std(0) + 1e-6
+
+        const_net, l_const = train_fold(train_V, 0, args.epochs, args.lr, mu, sd, crit)
+        net, l_net = train_fold(train_V, args.hidden, args.epochs, args.lr, mu, sd, crit)
+
+        rows["physics"][held["stem"]] = fold_metrics(flat_gate(held, 1.0), held, crit)
+        rows["const"][held["stem"]] = fold_metrics(apply_net(const_net, held, mu, sd), held, crit)
+        rows["net"][held["stem"]] = fold_metrics(apply_net(net, held, mu, sd), held, crit)
+
+        gp = float(torch.exp(const_net.log_g_pre0)); gq = float(torch.exp(const_net.log_g_post0))
+        print(f"\n[fold {k}] held out {held['stem']}   train loss const={l_const:.4f} net={l_net:.4f}"
+              f"   fitted G_pre={gp:.2f} G_post={gq:.2f}")
+        for arm in ("physics", "const", "net"):
+            m = rows[arm][held["stem"]]
+            print(f"    {arm:8s} curveL1={m['curve_l1']:.3f}  onset_MAE={m['onset_mae']:6.1f} "
+                  f"({m['onset_mae_frac']*100:5.1f}% of horizon)  recall={m['recall']:.3f} "
+                  f"  final Mat ratio={m['final_ratio']:.2f}")
+        folds[held["stem"]] = dict(g_pre=gp, g_post=gq,
+                                   train_loss_const=l_const, train_loss_net=l_net)
+
+    print("\n" + "=" * 84)
+    print(f"{'LEAVE-ONE-VESSEL-OUT MEAN':34s} {'curveL1':>9s} {'onset MAE':>11s} {'% horizon':>11s} {'recall':>8s}")
+    summary = {}
+    for arm in ("physics", "const", "net"):
+        cl = float(np.mean([m["curve_l1"] for m in rows[arm].values()]))
+        om = float(np.mean([m["onset_mae"] for m in rows[arm].values()]))
+        of = float(np.mean([m["onset_mae_frac"] for m in rows[arm].values()]))
+        rc = float(np.mean([m["recall"] for m in rows[arm].values()]))
+        summary[arm] = dict(curve_l1=cl, onset_mae=om, onset_mae_frac=of, recall=rc)
+        print(f"{arm:34s} {cl:9.3f} {om:11.1f} {of*100:10.1f}% {rc:8.3f}")
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    # The deploy artifact refits the constants on ALL THREE vessels; the LOVO table above is
+    # what says whether that is worth anything, and is reported next to it.
+    feats = np.concatenate([V["feats"][V["idx"]] for V in Vs], axis=0)
+    mu, sd = feats.mean(0), feats.std(0) + 1e-6
+    final_const, _ = train_fold(Vs, 0, args.epochs, args.lr, mu, sd, crit)
+    final_net, _ = train_fold(Vs, args.hidden, args.epochs, args.lr, mu, sd, crit)
+    torch.save(dict(const=final_const.state_dict(), net=final_net.state_dict(),
+                    mu=mu, sd=sd, hidden=args.hidden, features=list(WOUND_FEATURES)),
+               out / "wound_rate.pt")
+    (out / "lovo.json").write_text(json.dumps(
+        dict(summary=summary, per_vessel=rows, folds=folds,
+             fitted_all=dict(g_pre=float(torch.exp(final_const.log_g_pre0)),
+                             g_post=float(torch.exp(final_const.log_g_post0))),
+             epochs=args.epochs, hidden=args.hidden, n_vessels=len(Vs)), indent=2))
+    print(f"\n[save] {out/'wound_rate.pt'}")
+    print(f"[save] {out/'lovo.json'}")
+    print(f"[i] refit on all 3: G_pre={float(torch.exp(final_const.log_g_pre0)):.2f} "
+          f"G_post={float(torch.exp(final_const.log_g_post0)):.2f}")
+
+
+if __name__ == "__main__":
+    main()

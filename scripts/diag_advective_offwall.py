@@ -25,6 +25,13 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.clot_ml.data import load_cache  # noqa: E402
+
+
+def solid_of(S):
+    """The sample's solid-boundary mask, with the pre-2026-08-22 fallback."""
+    import numpy as _np
+    return _np.asarray(S.get("solid", S["wall"]), dtype=bool)
+
 from src.clot_ml.transport import transport_fields  # noqa: E402
 
 
@@ -47,7 +54,10 @@ def main() -> int:
         # horizon in the same nondimensional length/velocity units the pack uses: the
         # domain crossing time at the mean speed, times a factor for the run length.
         L = float(np.ptp(pos[:, 0]) + np.ptp(pos[:, 1]))
-        spd = float(np.median(np.hypot(u, v)[~wall])) + 1e-12
+        # `~solid`, via the shared definition: the bulk-speed median must exclude every
+        # no-slip node, not just healthy wall, or a wound pack gets a different horizon here
+        # than the cache builder uses (`features_v4.horizon_for`).
+        spd = float(np.median(np.hypot(u, v)[~solid_of(S)])) + 1e-12
         H = L / spd
 
         T = transport_fields(pos, ei, u, v, wall, mat_phys, horizon=H)

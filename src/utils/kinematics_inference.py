@@ -9,6 +9,7 @@ so pack-build / coupling paths never pay for a second Anderson solve on the same
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from src.architecture.kinematics_model_config import (
     kinematics_checkpoint_tensors,
     resolve_rgp_deq_ctor_kwargs,
 )
-from src.config import PhysicsConfig
+from src.config import NodeFeat, PhysicsConfig
 from src.utils.paths import resolve_checkpoint
 
 KINEMATICS_CKPT_CANDIDATES = (
@@ -33,7 +34,18 @@ KINEMATICS_CKPT_CANDIDATES = (
 
 
 def resolve_kinematics_checkpoint(explicit: Path | str | None = None) -> Path:
-    """Return an existing kinematics checkpoint path (explicit or search candidates)."""
+    """Return an existing kinematics checkpoint path (explicit or search candidates).
+
+    Training runs write into ``KINEMATICS_OUTPUT_DIR`` subdirectories, but this resolver only
+    ever looked at the stage-A root -- so a freshly trained model is invisible to every deploy
+    path unless it is passed explicitly.  On 2026-08-27 two runs finished into
+    ``outputs/kinematics/{production_allfix,clinical_anchor_finetune}/`` while every consumer
+    kept loading the 2026-08-12 root checkpoint (RGP_DEQ_REPAIR_PLAN.md B7).
+
+    The resolution order is unchanged -- silently switching to a subdirectory checkpoint would
+    be its own surprise -- but newer candidates are now *named* so the mismatch is visible at
+    the point of use rather than months later.
+    """
     if explicit is not None:
         path = Path(explicit)
         if path.is_file():
@@ -46,6 +58,7 @@ def resolve_kinematics_checkpoint(explicit: Path | str | None = None) -> Path:
     for ckpt_name in KINEMATICS_CKPT_CANDIDATES:
         candidate = resolve_checkpoint("a", ckpt_name)
         if candidate.exists():
+            _warn_newer_run_checkpoints(candidate)
             return candidate
 
     expected_dir = resolve_checkpoint("a", KINEMATICS_CKPT_CANDIDATES[0]).parent
@@ -53,6 +66,59 @@ def resolve_kinematics_checkpoint(explicit: Path | str | None = None) -> Path:
         "No kinematics checkpoint found. Tried: "
         + ", ".join(str(expected_dir / name) for name in KINEMATICS_CKPT_CANDIDATES)
     )
+
+
+def _warn_newer_run_checkpoints(chosen: Path) -> None:
+    """Name any run-directory checkpoint newer than the one actually being loaded."""
+    try:
+        root = chosen.parent
+        chosen_mtime = chosen.stat().st_mtime
+        newer = [
+            p
+            for sub in root.iterdir() if sub.is_dir()
+            for p in sub.glob("kinematics_*.pth")
+            if p.stat().st_mtime > chosen_mtime
+        ]
+    except OSError:
+        return
+    if not newer:
+        return
+    print(
+        f"[kine] NOTE loading {chosen.name} from {chosen.parent}, but "
+        f"{len(newer)} newer checkpoint(s) exist in run subdirectories: "
+        + ", ".join(str(p.relative_to(chosen.parent)) for p in sorted(newer)[:5])
+        + ". Pass one explicitly if that is the model you meant."
+    )
+
+
+def assert_promotable_checkpoint(path: Path | str) -> dict:
+    """Reject a checkpoint that carries no evidence it was ever selected.
+
+    RGP_DEQ_REPAIR_PLAN.md D7.  A periodic/latest checkpoint records the weights but not a
+    passed promotion gate; copying one over ``kinematics_best.pth`` produces an artifact that
+    looks promoted and is not.  Both 2026-08-27 checkpoints are exactly that:
+    ``checkpoint_role='kinematics_ckpt_latest'`` with ``rel_l2/continuity/composite = nan``.
+    """
+    import math
+
+    p = Path(path)
+    raw = torch.load(p, map_location="cpu", weights_only=False)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{p}: model-only checkpoint carries no promotion metadata")
+    role = str(raw.get("checkpoint_role", ""))
+    comp = float(raw.get("composite", float("nan")))
+    problems = []
+    if role != "kinematics_best":
+        problems.append(f"checkpoint_role={role!r} (expected 'kinematics_best')")
+    if not math.isfinite(comp):
+        problems.append("composite is NaN -- no validation backed this checkpoint")
+    if not str(raw.get("run_id", "")).strip():
+        problems.append("run_id is empty -- no run provenance")
+    if problems:
+        raise ValueError(f"{p} is not promotable: " + "; ".join(problems))
+    return {k: raw.get(k) for k in
+            ("checkpoint_role", "best_epoch", "rel_l2", "continuity", "composite", "run_id",
+             "prior_source")}
 
 
 def _load_torch_checkpoint(path: Path) -> Any:
@@ -135,23 +201,82 @@ def _store_joint_cache(model: RGP_DEQ, key: tuple[int, int, int], pred: torch.Te
     model._cache_latent = z
 
 
+#: Largest ``|width_d1|`` / ``|width_d2|`` the Stage-A checkpoint was trained against --
+#: the 95th percentile of the per-vessel maximum over ``graphs_kinematics/carreau`` (n=40).
+WIDTH_D1_MAX = 4.14
+WIDTH_D2_MAX = 73.8
+
+
+@contextlib.contextmanager
+def clamped_width_priors(data: Data, *, d1_max: float = WIDTH_D1_MAX, d2_max: float = WIDTH_D2_MAX):
+    """Hold ``width_d1``/``width_d2`` inside the range the checkpoint was trained on.
+
+    **Why this is not cosmetic.**  ``width_d1 = G @ width_nd`` and ``width_d2 = G @ width_d1``
+    apply the stored WLS gradient operator twice.  COMSOL exports ``triangle6``, so 74.5% of
+    biochem graph nodes are P2 mid-side nodes of degree 2, and a 2nd-order WLS fitted from two
+    COLLINEAR neighbours is rank-deficient -- ``precompute_wls_operators`` regularises with
+    ``M + 1e-6*I`` before ``pinv(rcond=1e-5)``, which lifts the null directions just above the
+    truncation cut so they get inverted instead of dropped.  On 34 of 52 packs that leaves
+    mid-side rows with three near-cancelling coefficients (row norms to 3296 against the
+    training set's max of 83) and ``|width_d2|`` reaching 1.8e5.  The 18 packs built from a
+    corner-only edge list are unaffected: their mid-side rows are a single zero.
+
+    Those values are the ONLY unnormalised inputs the model has -- ``_apply_fourier_encoding``
+    appends the three width channels raw to ``Linear(178, 256)``.  Measured 2026-08-23:
+    encoder latents reach ``|z| = 64,387`` against a median of 27, those nodes then take
+    **76-90%** of the Perceiver global-token read mass (10% clamped), and the poisoned tokens
+    are broadcast back to every node with ``x_enc`` re-injected at each of the 25 Anderson
+    iterations.  So 0.01-0.6% of the mesh destroys the whole field: rel L2 vs COMSOL t=0
+    **0.375 -> 0.138** with this clamp (affected vessels 0.448 -> 0.150), against the
+    checkpoint's own recorded benchmark of 0.1007.  Cross-section flux CV returns to GT's
+    0.147 exactly.
+
+    An input already inside the range is passed through untouched.  The 18 corner-edge packs
+    still trip the ``d1`` bound (patient001 reads 6.90 against 4.14) and clamping them is
+    measurably inert -- rel L2 0.130 -> 0.131 -- so the operation only ever bites where there
+    is something to fix.  Restores ``data.x`` on exit: callers, and ``_graph_key``, keep the
+    tensor they passed in.
+    """
+    x = getattr(data, "x", None)
+    if not torch.is_tensor(x) or x.dim() != 2 or x.shape[1] < NodeFeat.WIDTH_D2.stop:
+        yield data
+        return
+    d1, d2 = x[:, NodeFeat.WIDTH_D1], x[:, NodeFeat.WIDTH_D2]
+    if float(d1.abs().max()) <= d1_max and float(d2.abs().max()) <= d2_max:
+        yield data
+        return
+    clamped = x.clone()
+    clamped[:, NodeFeat.WIDTH_D1] = d1.clamp(-d1_max, d1_max)
+    clamped[:, NodeFeat.WIDTH_D2] = d2.clamp(-d2_max, d2_max)
+    data.x = clamped
+    try:
+        yield data
+    finally:
+        data.x = x
+
+
 def _run_joint_solve(model: RGP_DEQ, data: Data) -> tuple[torch.Tensor, torch.Tensor]:
     """One Anderson solve on ``data``; returns ``(pred, z_kin)``."""
     orig_device = next(model.parameters()).device
     kwargs = _kin_solver_kwargs()
     if orig_device.type == "cuda":
+        moved = data.to(orig_device)
         try:
-            return model.predict_uv_and_latent(data.to(orig_device), **kwargs)
+            with clamped_width_priors(moved) as g:
+                return model.predict_uv_and_latent(g, **kwargs)
         except torch.cuda.OutOfMemoryError as e:
             torch.cuda.empty_cache()
             try:
-                return model.predict_uv_and_latent(data.to(orig_device), **kwargs)
+                moved = data.to(orig_device)
+                with clamped_width_priors(moved) as g:
+                    return model.predict_uv_and_latent(g, **kwargs)
             except torch.cuda.OutOfMemoryError:
                 raise RuntimeError(
                     "predict_kinematics_and_latent OOM on CUDA. Silent fallbacks to CPU are "
                     "disabled by Hardware Execution Policy to prevent hangs."
                 ) from e
-    return model.predict_uv_and_latent(data, **kwargs)
+    with clamped_width_priors(data) as g:
+        return model.predict_uv_and_latent(g, **kwargs)
 
 
 @torch.no_grad()

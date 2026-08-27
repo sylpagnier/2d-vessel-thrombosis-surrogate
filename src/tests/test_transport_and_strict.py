@@ -4,6 +4,29 @@ See `docs/PHASE10_V4.md`.  These are pure-function tests -- no weights, no cache
 """
 from __future__ import annotations
 
+#: The VIZ_HALF release (docs/SEALED_SPLIT.md, 2026-08-22) moved `001/010/014/042` out of
+#: SEALED and into TRAIN.  An artifact promoted BEFORE that date must be clean against the
+#: historical 8-vessel SEALED -- that is what makes its "never seen" provenance meaningful.
+#: An artifact promoted AFTER it is *supposed* to train on those four, and must be clean
+#: against the current 4-vessel SEALED instead.  Asserting the historical set against a new
+#: artifact is not a stricter test, it is the wrong test: it fails on the vessels the release
+#: deliberately handed over.
+VIZ_RELEASE_DATE = "2026-08-22"
+
+
+def sealed_at_promotion(manifest: dict) -> set:
+    """The SEALED set that applied when this artifact was promoted."""
+    from src.biochem_gnn.mat_growth_simple import (
+        WALL_COHORT_V2_GENERALIZATION,
+        WALL_COHORT_V2_SEALED_PRE_20260822,
+    )
+
+    at = str(manifest.get("promoted_at", ""))[:10]
+    if at and at >= VIZ_RELEASE_DATE:
+        return set(WALL_COHORT_V2_GENERALIZATION)
+    return set(WALL_COHORT_V2_SEALED_PRE_20260822)
+
+
 import sys
 from pathlib import Path
 
@@ -141,7 +164,6 @@ def test_v4_manifest_is_consistent_and_excludes_sealed():
     import json
 
     from src.clot_ml.features_v4 import V4_CHANNELS
-    from src.core_physics.wall_cohort_splits import SEALED
 
     root = REPO / "outputs/clot_ml/locked/clot_gnn_v4"
     if not root.exists():
@@ -150,7 +172,9 @@ def test_v4_manifest_is_consistent_and_excludes_sealed():
     assert m["n_members"] == len(m["members"]) == 9
     for mem in m["members"]:
         assert (root / mem["file"]).exists(), mem["file"]
-    assert not set(m["training_pool"]) & set(SEALED), "SEALED leaked into training"
+    sealed = sealed_at_promotion(m)
+    leak = set(m["training_pool"]) & sealed
+    assert not leak, "SEALED leaked into training: %s" % sorted(leak)
     assert list(m["v4_channels"]) == list(V4_CHANNELS)
     norm = np.load(root / "feature_norm.npz", allow_pickle=True)
     cols = [str(c) for c in norm["cols"]]
@@ -170,8 +194,8 @@ def test_temporal_v4_manifest_is_consistent_and_excludes_sealed():
     man = json.loads((root / "manifest.json").read_text())
     assert man["kind"] == "temporal_v4"
     assert (root / man["temporal_file"]).exists()
-    from src.core_physics.wall_cohort_splits import SEALED
-    assert not (set(man["training_pool"]) & set(SEALED))
+    leak = set(man["training_pool"]) & sealed_at_promotion(man)
+    assert not leak, "SEALED leaked into the temporal head: %s" % sorted(leak)
     # the pickle must hold only plain sklearn estimators, not a custom wrapper class --
     # unlike a class instance, these unpickle without scripts/ on sys.path (docs/PHASE10_V4.md)
     import pickle
@@ -189,4 +213,5 @@ def test_default_pointer_dispatches_to_a_known_kind():
     if not ptr_path.exists():
         pytest.skip("clot_gnn_locked not promoted in this checkout")
     ptr = json.loads(ptr_path.read_text())
-    assert ptr.get("kind") in ("gnn_ensemble", "temporal_v3", "temporal_v4")
+    assert ptr.get("kind") in ("gnn_ensemble", "temporal_v3", "temporal_v4",
+                               "temporal_v4_wound", "unified_v0")

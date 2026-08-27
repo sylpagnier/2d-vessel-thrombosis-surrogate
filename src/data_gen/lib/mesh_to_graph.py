@@ -24,7 +24,11 @@ if __name__ == "__main__":
         sys.path.insert(0, _ps)
 
 from src.config import NodeFeat, PhysicsConfig, VesselConfig
-from src.data_gen.lib.mesh_wls import gmsh_line_boundary_masks, precompute_wls_operators
+from src.data_gen.lib.mesh_wls import (
+    gmsh_line_boundary_masks,
+    precompute_wls_operators,
+    solid_boundary_mask,
+)
 from src.data_gen.lib.graph_velocity_priors import (
     mass_conserving_umax_nd,
     smooth_width_nd_on_edges,
@@ -268,7 +272,10 @@ class MeshToGraph(MeshToGraphComplete):
         p_ref_scale = self.phys_cfg.get_p_ref(u_ref)
 
         # --- ROBUST WALL Normal & Distance Calculation ---
-        wall_node_indices = np.where(mask_wall.numpy())[0]
+        # Geometry uses the solid boundary (wall | wound); only the deposition law
+        # distinguishes the two.  See ``solid_boundary_mask``.
+        mask_solid = solid_boundary_mask(mask_wall, mask_wound)
+        wall_node_indices = np.where(mask_solid.numpy())[0]
         if len(wall_node_indices) == 0: return
         wall_pts = nodes[wall_node_indices]
 
@@ -281,6 +288,8 @@ class MeshToGraph(MeshToGraphComplete):
 
         # 2. Exact Mathematical Normals for Wall Nodes using Gmsh Line Segments
         t_wall = self.vessel_cfg.TAGS["Walls"]
+        t_wound = self.vessel_cfg.TAGS.get("Wound")
+        solid_tags = {int(t_wall)} | ({int(t_wound)} if t_wound is not None else set())
         wall_lines = []
 
         try:
@@ -292,7 +301,7 @@ class MeshToGraph(MeshToGraphComplete):
                 l_tags = mesh.get_cell_data("gmsh:physical", "line")
 
             for i, tag in enumerate(l_tags):
-                if tag == t_wall:
+                if int(tag) in solid_tags:
                     wall_lines.append(l_cells[i])
         except Exception:
             pass
@@ -365,8 +374,8 @@ class MeshToGraph(MeshToGraphComplete):
 
                 # 2. Hard-enforce No-Slip Condition
                 # This prevents interpolation bleed from the interior fluid nodes
-                u_raw[mask_wall] = 0.0
-                v_raw[mask_wall] = 0.0
+                u_raw[mask_solid] = 0.0
+                v_raw[mask_solid] = 0.0
 
                 # 3. Proceed with non-dimensionalization
                 u_nd, v_nd = u_raw / u_ref, v_raw / u_ref
@@ -399,8 +408,8 @@ class MeshToGraph(MeshToGraphComplete):
                 t_y = tau_xy * n_x + tau_yy * n_y
 
                 # True WSS magnitude is the magnitude of the traction vector at the wall
-                wss_mag = torch.sqrt(t_x ** 2 + t_y ** 2) * mask_wall.float()
-                wss_mag = _clip_wss_magnitude_quantile(wss_mag, mask_wall, q=0.995)
+                wss_mag = torch.sqrt(t_x ** 2 + t_y ** 2) * mask_solid.float()
+                wss_mag = _clip_wss_magnitude_quantile(wss_mag, mask_solid, q=0.995)
                 y_labels = torch.stack([u_nd, v_nd, p_nd, mu_nd, wss_mag], dim=1)
                 is_anchor = True
             except Exception as e:
@@ -511,7 +520,7 @@ class MeshToGraph(MeshToGraphComplete):
                        (1.0 + (lambda_nd * gamma_dot_prior) ** self.phys_cfg.a) ** (
                                (self.phys_cfg.n - 1.0) / self.phys_cfg.a)
 
-        wss_prior = (mu_prior * gamma_dot_prior) * mask_wall.float()
+        wss_prior = (mu_prior * gamma_dot_prior) * mask_solid.float()
 
         grad_w_x = torch.sparse.mm(G_x, width_nd)
         grad_w_y = torch.sparse.mm(G_y, width_nd)

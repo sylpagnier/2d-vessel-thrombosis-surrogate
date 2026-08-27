@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 
 SCRATCH = Path(r"C:\Users\pgssy\AppData\Local\Temp\claude\C--Users-pgssy-thrombus-ml-model\27b9191e-449c-42c9-b376-54782ca8e919\scratchpad")
-IMG_JSON = Path("scratch_b64.json")
+# Written by hand into the repo ROOT originally, which is why a 1.4 MB base64 blob sat next
+# to `requirements.txt`.  Lives under `outputs/` now; the root path is still accepted so an
+# existing checkout does not break.
+IMG_JSON = next((p for p in (Path("outputs/viz/scratch_b64.json"),
+                             Path("scratch_b64.json")) if p.exists()),
+                Path("outputs/viz/scratch_b64.json"))
 
 VESSELS = [
     # id, split, gt_score, gt_pred_n, gt_gt_n, pred_score, pred_pred_n, has_pred

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import pickle
+from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
@@ -116,12 +117,13 @@ def build_sample(data, bio_cfg=None, phys_cfg=None, *, flow: str = "gt",
     S = build_features(data, bio, phys, flow=flow)
     X, cols = feature_matrix(S["F"])
     out = dict(X=X, cols=np.array(cols), y=S["y"], mat_gt=S["mat_gt"], wall=S["wall"],
-               shell=S["shell"], owner=S["owner"], edge_index=S["edge_index"],
+               solid=S["solid"], shell=S["shell"], owner=S["owner"],
+               edge_index=S["edge_index"],
                pos=S["pos"], mat_phys=S["mat_phys"], gate=S["gate"], sr=S["sr"],
                spd=S["spd"], u=S["u"], v=S["v"])
     if variant == "v4":
         from src.clot_ml.features_v4 import augment_sample
-        Xv, colsv = augment_sample(data, out, bio)
+        Xv, colsv = augment_sample(data, out, bio, flow=flow)
         out["X"], out["cols"] = Xv, np.array(colsv)
     m = physics_mask(out)
     out["phys_mask"] = m
@@ -298,8 +300,12 @@ def _committed_set_v4(S: dict, sc: np.ndarray, temporal: dict) -> np.ndarray:
         if spec["kind"] == "resid":
             return d & readout_resid(S, sc, tuple(spec["th"]))
         if spec["kind"] == "resid_adapt":
+            # `lo`/`hi` bound the vessel statistic to the support the slope was fitted on.
+            # Specs promoted before that was recorded simply lack the keys and behave
+            # exactly as they always did (docs/PHASE10_V4.md; scripts/eval_adapt_clamp.py).
             return d & apply_adapt(S, sc, "resid", tuple(spec["th"]), dom_of,
-                                   spec["b"], spec["med"])
+                                   spec["b"], spec["med"],
+                                   spec.get("lo"), spec.get("hi"))
         if spec["kind"] == "expected_tuned":
             dev = torch.device("cpu")
             Dt = to_torch_sparse(dilation_operator(S["edge_index"], len(S["wall"]), 2), dev)
@@ -313,7 +319,33 @@ def _committed_set_v4(S: dict, sc: np.ndarray, temporal: dict) -> np.ndarray:
             return m
         raise ValueError(spec["kind"])
 
-    wall_of, off_of = (lambda S_: S_["wall"]), (lambda S_: ~S_["wall"])
+    # The committed set now uses the SAME domains the score is computed on (A3,
+    # `src/clot_ml/data.eval_domains`): off-wall is TRUE LUMEN, `~solid`.  This was deferred
+    # at A3 because the artifact was stale and could not be re-verified against its promotion
+    # gates; closed after the Phase B and C0 re-promotions, whose gates pass.
+    #
+    # Measured before changing it: the two conventions differ on exactly the wound nodes
+    # (80 / 80 / 26) and on ZERO cohort nodes, so no published figure moves.  On a wound pack
+    # the base no longer commits into a region the wound module owns and would override.
+    from src.clot_ml.data import off_domain, wall_domain  # noqa: PLC0415
+
+    wall_of, off_of = wall_domain, off_domain
+
+    # REGIME-CONDITIONED READOUT.  The shipped cuts are ABSOLUTE (0.95/0.53/0.98/0.92) and
+    # they are only valid in the regime they were fitted in.  On a wound pack the score
+    # field's calibration collapses while its RANKING survives: off-wall p99 reads
+    # 0.001-0.53 against a 0.92 cut, and yet w_lum AUC is 0.95-0.97 -- so the committed set
+    # is empty for a field that ranks the thrombus almost perfectly
+    # (docs/WOUND_PROGRESS.md 14.7).  `wound_spec` swaps in a RANK-based readout there.
+    #
+    # It cannot touch any published cohort figure: the branch is taken only when the pack
+    # carries wound nodes, and no cohort, clot-free or SEALED vessel does.  A global swap was
+    # measured and rejected -- it costs the 23-vessel cohort -0.0222 wall / -0.1616 off-wall
+    # to buy +0.0982 / +0.0922 on the three wound vessels.
+    spec = temporal.get("wound_spec")
+    if spec is not None and bool((np.asarray(S.get("solid", S["wall"]), dtype=bool)
+                                  & ~np.asarray(S["wall"], dtype=bool)).any()):
+        return apply_spec(spec, wall_of) | apply_spec(spec, off_of)
     return (apply_spec(temporal["wall_spec"], wall_of)
             | apply_spec(temporal["off_spec"], off_of))
 
@@ -331,8 +363,11 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
         lag_features, node_features, ode_wall_series, offwall_by_learned_lag, series_masks,
         time_block,
     )
+    from src.clot_ml.features_v4 import horizon_for  # noqa: PLC0415
     from src.clot_ml.temporal import ode_trajectory  # noqa: PLC0415
-    from src.clot_ml.transport import _node_volume, _solve_upwind, upwind_operator  # noqa: PLC0415,E501
+    from src.clot_ml.transport import (  # noqa: PLC0415
+        _node_volume, _solve_upwind, upwind_operator,
+    )
     from src.config import BiochemConfig  # noqa: PLC0415
 
     temporal = bundle["temporal"]
@@ -345,7 +380,15 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
     gm = _committed_set_v4(S, sc, temporal)
 
     grid = sorted({int(t) for t in times})
-    traj, t_grid = ode_trajectory(data, bio, flow=flow)
+    # The ODE clock must be the SAME OBJECT the head was fitted against, so the flag travels
+    # on the artifact rather than being a call-site choice.  Absent (every shipped artifact
+    # to date) means the wake-free trajectory, bit-for-bit.
+    wr = temporal.get("wound_rate")
+    traj, t_grid = ode_trajectory(data, bio, flow=flow,
+                                  wake=bool(temporal.get("wake_ode", False)),
+                                  stall=bool(temporal.get("stall_ode", False)),
+                                  wound_source=bool(temporal.get("wound_source", True)),
+                                  wound_rate=None if wr is None else tuple(wr))
     T_raw = traj.shape[0]
     r0 = traj[1] / max(float(t_grid[1] - t_grid[0]), 1e-9)
     hot = traj >= crit
@@ -356,18 +399,25 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
     # time-independent, only the wall source `traj[ti]` changes per query time.
     pos = S["pos"].astype(np.float64)
     u, v = S["u"].astype(np.float64), S["v"].astype(np.float64)
-    L = float(np.ptp(pos[:, 0]) + np.ptp(pos[:, 1]))
-    H = L / (float(np.median(np.hypot(u, v)[~wall])) + 1e-12)
+    # ONE definition of the transport horizon (`features_v4.horizon_for`).  It excludes
+    # the SOLID boundary from the bulk-speed median, not just the healthy wall -- an
+    # inline `~wall` copy here would compute a different horizon than the cache builder
+    # on a wound pack, i.e. a silent train/deploy skew in the v4 transport channels.
+    H = horizon_for(pos, u, v, np.asarray(S.get("solid", wall), dtype=bool))
     F, out = upwind_operator(pos, S["edge_index"], u, v)
     vol = _node_volume(pos, S["edge_index"])
     n_grid = len(grid)
     adv = np.zeros((n_grid, len(wall)), dtype=np.float32)
     own = np.zeros_like(adv)
     slf = np.zeros_like(adv)
+    # The advective source is every SOLID boundary node, not just the healthy wall.  On a
+    # wound pack the two differ and the wound is the larger source (WOUND_PROGRESS 14.6);
+    # off a wound pack `solid` IS `wall`, so this is a no-op on every cohort vessel.
+    src_mask = np.asarray(S.get("solid", wall), dtype=bool)
     for j, ti in enumerate(grid):
         ti_c = int(np.clip(ti, 0, T_raw - 1))
         src = np.zeros(len(wall))
-        src[wall] = np.maximum(traj[ti_c][wall], 0.0)
+        src[src_mask] = np.maximum(traj[ti_c][src_mask], 0.0)
         adv[j] = _solve_upwind(F, out, src * vol, vol, H).astype(np.float32)
         own[j] = traj[ti_c][owner].astype(np.float32)
         slf[j] = traj[ti_c].astype(np.float32)
@@ -413,14 +463,151 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
     return dict(score=score, mask=series[grid[-1]], onset=onset, series=series)
 
 
+# ---------------------------------------------------------------------------
+# v4w: v4 plus the wound complement (docs/WOUND_PROGRESS.md 10)
+# ---------------------------------------------------------------------------
+def load_temporal_v4_wound(name: str | None = None) -> dict:
+    """Load a ``temporal_v4_wound`` artifact: an unmodified v4 plus the wound module.
+
+    The base ensemble and readout are byte-identical to ``clot_gnn_v4`` -- this artifact adds
+    a boundary-condition branch, not a retrained model. It exists because COMSOL's wound law
+    is the wall law with the shear gates deleted, which v4 has no channel for: 100% of wound
+    nodes clot and the t=0 gate fires on 0% of them.
+    """
+    ptr = json.loads(POINTER.read_text())
+    root = REPO / (ptr["path"] if name is None else f"outputs/clot_ml/locked/{name}")
+    manifest = json.loads((root / "manifest.json").read_text())
+    base = load_temporal_v4(name=manifest["base_model"])
+    _assert_wound_alias_integrity(manifest, base)
+    return dict(base=base, wound=dict(manifest["wound"]), manifest=manifest)
+
+
+def _assert_wound_alias_integrity(manifest: dict, base: dict) -> None:
+    """Fail closed if a named wound-baseline alias drifts from its locked source.
+
+    An alias is deliberately lightweight—it must not duplicate nine checkpoints—but that
+    makes silent source drift especially dangerous.  The optional ``source`` block binds an
+    alias to the exact base-manifest bytes and to the exact wound constants it was reviewed
+    with.  Ordinary wound artifacts have no block and preserve their historical behaviour.
+    """
+    source = manifest.get("source")
+    if not source:
+        return
+    base_name = str(source.get("base_artifact", ""))
+    if base_name and base_name != str(manifest.get("base_model", "")):
+        raise ValueError(
+            f"{manifest.get('name', 'wound artifact')} aliases {base_name!r} but resolves "
+            f"base_model={manifest.get('base_model')!r}")
+    base_path = REPO / "outputs" / "clot_ml" / "locked" / str(manifest["base_model"]) / "manifest.json"
+    expected_hash = source.get("base_manifest_sha256")
+    if expected_hash:
+        got_hash = sha256(base_path.read_bytes()).hexdigest().upper()
+        if got_hash != str(expected_hash).upper():
+            raise ValueError(
+                f"{manifest.get('name', 'wound artifact')} base manifest changed: "
+                f"expected {expected_hash}, got {got_hash}")
+    expected_fp = source.get("base_fingerprint")
+    got_fp = base.get("manifest", {}).get("fingerprint")
+    if expected_fp and got_fp != expected_fp:
+        raise ValueError(
+            f"{manifest.get('name', 'wound artifact')} base fingerprint changed: "
+            f"expected {expected_fp!r}, got {got_fp!r}")
+    wound_source = source.get("wound_artifact")
+    if wound_source:
+        wound_path = REPO / "outputs" / "clot_ml" / "locked" / str(wound_source) / "manifest.json"
+        source_manifest = json.loads(wound_path.read_text())
+        lhs = json.dumps(manifest["wound"], sort_keys=True, separators=(",", ":"))
+        rhs = json.dumps(source_manifest["wound"], sort_keys=True, separators=(",", ":"))
+        if lhs != rhs:
+            raise ValueError(
+                f"{manifest.get('name', 'wound artifact')} wound constants differ from "
+                f"its declared source {wound_source!r}")
+
+
+def predict_temporal_v4_wound(bundle: dict, data, times, *, flow: str = "gt",
+                              sample: dict | None = None) -> dict:
+    """v4 everywhere, the wound module on the nodes it owns.
+
+    **On a pack with no wound this returns v4's own output unchanged**, which is the property
+    that lets the artifact supersede v4 outright rather than sit beside it;
+    ``src/tests/test_wound_complement.py`` pins it at the dispatcher level.
+
+    On a wound pack, after compose, OR hop-2 stall-opened t=0-ungated wall into the series.
+    That is the only 0-FP SET gain measured on ``wound_patient003`` (blinds the GNN never
+    ranks); it is inert on 001/002 and does not add owner-basin lumen.
+    """
+    from src.clot_ml.temporal import union_ungated_stall_series
+    from src.clot_ml.wound import compose_with_v4, has_wound, predict_wound_series
+    from src.config import BiochemConfig
+
+    if not has_wound(data):
+        return predict_temporal_v4(bundle["base"], data, times, flow=flow, sample=sample)
+    w = bundle["wound"]
+    # The wound-regime readout AND the wound's deposition rate travel on the WOUND artifact,
+    # not on the base one: v5's temporal.pkl stays byte-identical and neither branch can fire
+    # without a wound mask.  `wound_rate` makes the shared ODE integrate the same two-regime
+    # law the complement does, instead of the static `srf2` prefactor of 1 -- without it the
+    # injured patch reads 1.35x crit against GT's 9.04x and no wound-owned lumen node can ever
+    # clear the `crit / off_att` magnitude bar (docs/WOUND_PROGRESS.md 15).
+    over = {}
+    if w.get("readout"):
+        over["wound_spec"] = dict(w["readout"])
+    if bool(w.get("rate_in_ode", True)):
+        over["wound_rate"] = (float(w["g_pre"]), float(w["g_post"]))
+    if over:
+        bundle = dict(bundle)
+        bundle["base"] = dict(bundle["base"],
+                              temporal=dict(bundle["base"]["temporal"], **over))
+    bio = BiochemConfig(phase="biochem")
+    wr = bundle["base"]["temporal"].get("wound_rate")
+    base = predict_temporal_v4(bundle["base"], data, times, flow=flow, sample=sample)
+    out = predict_wound_series(
+        data, bio, times,
+        g_pre=float(w["g_pre"]), g_post=float(w["g_post"]),
+        flow=flow, off_att=float(w["off_att"]), lag_frac=float(w["lag_frac"]),
+        trigger=str(w.get("trigger", "self")), k_hops=int(w.get("k_hops", 25)),
+        # The off-boundary DEPTH rule travels on the artifact like every other wound scalar.
+        # It defaults to `shell` -- one corner shell -- so an artifact without the key is
+        # bit-identical, which is every artifact promoted before 2026-08-24 because this
+        # dispatcher never passed the argument at all.  `recursive` is safe but currently
+        # buys nothing: shell 2 needs `Mat >= crit / off_att**2` = 39x crit and the ODE's
+        # wound reaches 17x, so no deeper ring clears its bar on any of the three wound
+        # vessels (docs/WOUND_PROGRESS.md 16.4).
+        lumen=str(w.get("lumen", "shell")),
+    )
+    comp = compose_with_v4(base, out, times)
+    series = union_ungated_stall_series(data, bio, comp["series"], times, flow=flow,
+                                        wound_rate=wr)
+    last = int(max(times))
+    mask = series[last]
+    onset = np.asarray(comp["onset"]).copy()
+    newly = mask & ~np.asarray(comp["mask"], dtype=bool)
+    if newly.any():
+        for ti in sorted(int(t) for t in times):
+            hit = newly & series[int(ti)] & (onset < 0)
+            onset[hit] = int(ti)
+    comp = dict(comp)
+    comp["series"] = series
+    comp["mask"] = mask
+    comp["onset"] = onset
+    return comp
+
+
+
 def load_default(device=None) -> tuple[dict, str]:
     """Follow the pointer and load whatever generation is currently shipped.
 
-    Returns ``(bundle, kind)``; ``kind`` is ``"gnn_ensemble"`` (v1/v2, ODE-only timing) or
-    ``"temporal_v3"``.  Use with :func:`predict_default_series`.
+    Returns ``(bundle, kind)``; ``kind`` is ``"gnn_ensemble"`` (v1/v2, ODE-only timing),
+    ``"temporal_v3"``, ``"temporal_v4"``, ``"temporal_v4_wound"``, or ``"unified_v0"``.
+    Use with :func:`predict_default_series`.
     """
     ptr = json.loads(POINTER.read_text())
     kind = ptr.get("kind", "gnn_ensemble")
+    if kind == "unified_v0":
+        from src.clot_ml.v0 import load_v0_bundle
+        return load_v0_bundle(), kind
+    if kind == "temporal_v4_wound":
+        return load_temporal_v4_wound(), kind
     if kind == "temporal_v4":
         return load_temporal_v4(), kind
     if kind == "temporal_v3":
@@ -430,6 +617,11 @@ def load_default(device=None) -> tuple[dict, str]:
 
 def predict_default_series(bundle: dict, kind: str, data, times, *, flow: str = "gt",
                            sample: dict | None = None) -> dict:
+    if kind == "unified_v0":
+        from src.clot_ml.v0 import predict_clot_ml_v0
+        return predict_clot_ml_v0(bundle, data, times, flow=flow, sample=sample)
+    if kind == "temporal_v4_wound":
+        return predict_temporal_v4_wound(bundle, data, times, flow=flow, sample=sample)
     if kind == "temporal_v4":
         return predict_temporal_v4(bundle, data, times, flow=flow, sample=sample)
     if kind == "temporal_v3":

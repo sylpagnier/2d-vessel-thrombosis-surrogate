@@ -36,6 +36,8 @@ ever quoted the first:
 """
 from __future__ import annotations
 
+import os
+
 import argparse
 import json
 import sys
@@ -54,8 +56,28 @@ from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: E402
 
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
 from src.clot_ml.geometry_splits import classes_for, is_priority  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
+from src.clot_ml.data import off_domain, wall_domain  # noqa: E402
+
+# EVAL DOMAINS (roadmap item A3, `src/clot_ml/data.eval_domains`): off-wall is TRUE LUMEN,
+# `~solid`, not `~wall` -- on a wound pack the wound's nodes are 100% GT clot and belong to
+# neither global domain.  Every SCORING domain in this file goes through `off_domain`.
+#
+# A few mask-BUILDING helpers below still take a bare `wall` array as a parameter and use
+# `~wall` (`_lag_masks`, `_owner_lag_masks`).  They are correct as written because of two
+# facts, both pinned by `src/tests/test_eval_domains.py`: no cohort pack carries a wound, and
+# this script excludes the clot-free and wound packs outright.  If a wound ever enters the
+# cohort, that test fires and these are the call sites to fix.
 from src.clot_ml.severity_metric import DEFAULT, SeverityScorer  # noqa: E402
 from src.clot_ml.temporal import ode_trajectory  # noqa: E402
+
+#: Close the flow loop when building the ODE clock features (src/core_physics/gelation_wake).
+#: OFF reproduces every shipped number bit-for-bit.  A head fitted with this ON is a NEW
+#: artifact generation -- the clock it learns against is a different object -- so it must be
+#: promoted under its own name and never mixed with wake-free members.
+#: Set by `--wake` on the promote/eval entry points, or WAKE_ODE=1 in the environment.
+USE_WAKE_ODE: bool = bool(int(os.environ.get("WAKE_ODE", "0")))
+USE_STALL_ODE: bool = bool(int(os.environ.get("STALL_ODE", "0")))
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 
@@ -100,7 +122,7 @@ def precompute(pool, cache, n_times):
         go = np.full(len(S["wall"]), T, dtype=int)          # GT onset index
         for ti in reversed(times):
             go[gt[ti]] = ti
-        traj, t = ode_trajectory(d, bio, flow="gt")
+        traj, t = ode_trajectory(d, bio, flow="gt", wake=USE_WAKE_ODE, stall=USE_STALL_ODE)
         # The owner's crossing of c*crit, for several c.  Off-wall commits when
         # att*Mat_owner >= crit, i.e. when the owner reaches crit/att -- PHASE9 12.2 found
         # crit/att unreachable as a hard RULE because the ODE's Mat is biased low, but as
@@ -205,6 +227,19 @@ def fit_head(V, anchors, oofs, set_th, seeds=1):
     it has been tried (`docs/PHASE9_ML.md` 4 for the GNN); the temporal head was the last
     place still fitting a single model.
     """
+    # A MISSING AUXILIARY CACHE MUST NOT SURFACE AS A SHAPE ERROR.  `time_block` adds three
+    # columns only when `v["tt"]` is present, so one vessel without an
+    # `outputs/temporal_transport/*.npz` silently produces a 74-wide table next to 77-wide
+    # ones, and `np.concatenate` then fails with a bare dimension mismatch that names neither
+    # the vessel nor the cache.  That is exactly what happened when the 2026-08-22 cohort
+    # released four vessels the transport cache had never been built for.
+    have = [a for a in anchors if V[a]["tt"] is not None]
+    if have and len(have) != len(anchors):
+        raise SystemExit(
+            "temporal transport cache is incomplete: %d of %d vessels have it; missing %s. "
+            "Run `python scripts/build_temporal_transport.py --force` -- it must cover every "
+            "vessel in the pool, and it is stale whenever the packs or the feature cache "
+            "change." % (len(have), len(anchors), sorted(set(anchors) - set(have))))
     Xs, ys = [], []
     for a in anchors:
         v, S = V[a], V[a]["S"]
@@ -330,7 +365,7 @@ def fit_lag_model(V, anchors, oofs, seeds=3, anchor="pred"):
     Xs, ys = [], []
     for a in anchors:
         v, S = V[a], V[a]["S"]
-        off = (~S["wall"]) & (v["go"] < v["T"])
+        off = off_domain(S) & (v["go"] < v["T"])
         if not off.any():
             continue
         # the GT lag in GRID steps: where each node sits relative to its owner
@@ -444,9 +479,9 @@ def offwall_from_adv(V, a, gm, resid, n_t, commit_final=True):
     on = V[a]["t_adv"] + np.rint(np.asarray(resid, float))
     M = np.zeros((n_t, len(S["wall"])), dtype=bool)
     for j in range(n_t):
-        M[j] = gm & ~S["wall"] & (on <= j)
+        M[j] = gm & off_domain(S) & (on <= j)
     if commit_final:
-        M[-1] = gm & ~S["wall"]
+        M[-1] = gm & off_domain(S)
     return np.maximum.accumulate(M, axis=0)
 
 
@@ -528,29 +563,42 @@ def series_masks(gm, P, th, commit_final=True, owner=None, wall=None):
     return M
 
 
-def score_vessel(V, a, P, oofs, set_th, time_th, prefix="", lag=None,
-                 wall_resid=None, owner_cut=None):
-    """-> (mean-over-time, final) per domain."""
+def predict_masks(V, a, P, oofs, set_th, time_th, lag=None, wall_resid=None,
+                  owner_cut=None):
+    """Return the strict fold's combined committed mask at every time-grid point.
+
+    This is the same model prediction that :func:`score_vessel` grades.  Keeping it lets a
+    visualization render a vessel with the outer-fold model that never trained on it, rather
+    than rerunning the promoted full-pool model after the fact.
+    """
     v, S = V[a], V[a]["S"]
     gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
-    out = {}
     M_wall = (wall_by_residual(V, a, gm, wall_resid, len(v["times"]))
               if wall_resid is not None
               else series_masks(gm, P, time_th[0][0], time_th[0][1], S["owner"], S["wall"]))
-    for key, dom in (("wall", S["wall"]), ("off", ~S["wall"])):
-        th, cf = time_th[0] if key == "wall" else time_th[1]
-        if key == "wall" and wall_resid is not None:
-            M = M_wall
-        elif key == "off" and lag is not None:
-            Mw = M_wall & S["wall"]
-            if isinstance(lag, tuple) and LAG_ANCHOR[0] == "adv":
-                M = offwall_from_adv(V, a, gm, lag[1], len(v["times"]), cf)
-            elif isinstance(lag, tuple):        # ("learned", per-node prediction)
-                M = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag[1], cf)
-            else:
-                M = offwall_by_lag(Mw, gm, S["owner"], S["wall"], lag, cf)
+    th, cf = time_th[1]
+    if lag is not None:
+        Mw = M_wall & S["wall"]
+        if isinstance(lag, tuple) and LAG_ANCHOR[0] == "adv":
+            M_off = offwall_from_adv(V, a, gm, lag[1], len(v["times"]), cf)
+        elif isinstance(lag, tuple):        # ("learned", per-node prediction)
+            M_off = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag[1], cf)
         else:
-            M = series_masks(gm, P, th, cf, S["owner"], S["wall"])
+            M_off = offwall_by_lag(Mw, gm, S["owner"], S["wall"], lag, cf)
+    else:
+        M_off = series_masks(gm, P, th, cf, S["owner"], S["wall"])
+    return (M_wall & wall_domain(S)[None, :]) | (M_off & off_domain(S)[None, :])
+
+
+def score_vessel(V, a, P, oofs, set_th, time_th, prefix="", lag=None,
+                 wall_resid=None, owner_cut=None, masks=None):
+    """-> (mean-over-time, final) per domain."""
+    v, S = V[a], V[a]["S"]
+    M = (predict_masks(V, a, P, oofs, set_th, time_th, lag=lag,
+                       wall_resid=wall_resid, owner_cut=owner_cut)
+         if masks is None else masks)
+    out = {}
+    for key, dom in (("wall", wall_domain(S)), ("off", off_domain(S))):
         vals = []
         for j, ti in enumerate(v["times"]):
             vals.append(v["scorer"][ti].score(M[j] & dom, dom))
@@ -574,7 +622,7 @@ def tune_set(cache, V, anchors, oofs):
     vs = {a: SeverityScorer(cache[a]["edge_index"], cache[a]["y"] > 0.5,
                             len(cache[a]["wall"]), DEFAULT) for a in anchors}
     out = {}
-    for key, dom_of in (("wall", lambda S: S["wall"]), ("off", lambda S: ~S["wall"])):
+    for key, dom_of in (("wall", wall_domain), ("off", off_domain)):
         best = None
         for arm in sorted(oofs):
             sub = {a: oofs[arm][a] for a in anchors}
@@ -597,7 +645,8 @@ def tune_set(cache, V, anchors, oofs):
 def offwall_burden(V, a, oofs, set_th):
     """How many off-wall nodes this vessel's committed set holds -- label-free."""
     S = V[a]["S"]
-    return int((candidate_mask(S, arm_scores(oofs, a), set_th, a) & ~S["wall"]).sum())
+    return int((candidate_mask(S, arm_scores(oofs, a), set_th, a)
+                & off_domain(S)).sum())
 
 
 def _lag_quality(V, anchors, Pin, oofs, set_th, time_th, lag_pred, lag):
@@ -605,7 +654,7 @@ def _lag_quality(V, anchors, Pin, oofs, set_th, time_th, lag_pred, lag):
     vals = []
     for a in anchors:
         v, S = V[a], V[a]["S"]
-        dom = ~S["wall"]
+        dom = off_domain(S)
         gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
         th, cf = time_th[1]
         use = isinstance(lag, tuple) and a in lag_pred and             offwall_burden(V, a, oofs, set_th) >= lag[1]
@@ -634,7 +683,7 @@ def tune_owner_cut(V, anchors, Pin, oofs, set_th, time_th, lag_pred):
         vals = []
         for a in anchors:
             v, S = V[a], V[a]["S"]
-            dom = ~S["wall"]
+            dom = off_domain(S)
             gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
             Mw = series_masks(gm, Pin[a], t_o, time_th[0][1], S["owner"], S["wall"]) & S["wall"]
             M = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag_pred[a],
@@ -669,7 +718,7 @@ def tune_lag(V, anchors, Pin, oofs, set_th, time_th, lag_pred=None):
         vals = []
         for a in anchors:
             v, S = V[a], V[a]["S"]
-            dom = ~S["wall"]
+            dom = off_domain(S)
             gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
             th, cf = time_th[1]
             use_learned = (isinstance(lag, tuple)
@@ -712,7 +761,7 @@ def tune_time(V, anchors, Pin, oofs, set_th):
                 vals = []
                 for a in anchors:
                     v, S = V[a], V[a]["S"]
-                    dom = S["wall"] if di == 0 else ~S["wall"]
+                    dom = wall_domain(S) if di == 0 else off_domain(S)
                     M = series_masks(candidate_mask(S, arm_scores(oofs, a), set_th, a),
                                      Pin[a], t_th, cf, S["owner"], S["wall"])
                     for j, ti in enumerate(v["times"]):
@@ -733,6 +782,10 @@ def main() -> int:
     ap.add_argument("--n-times", type=int, default=11)
     ap.add_argument("--inner", type=int, default=3)
     ap.add_argument("--save", default="")
+    ap.add_argument("--save-oof-series", default="",
+                    help=("write the held-out fold's committed masks and provenance as a "
+                          "compressed NPZ for a generalization-only visualization. This is "
+                          "not a deploy artifact and refuses FINAL_HALF vessels."))
     ap.add_argument("--wall-resid", action="store_true",
                     help="wall onset = the ODE's grid onset + a learned residual")
     ap.add_argument("--lag-seeds", type=int, default=3,
@@ -761,16 +814,44 @@ def main() -> int:
                           "training vessels rather than learn a transferable one."))
     ap.add_argument("--no-tt", action="store_true",
                     help="ablate the time-resolved transport channels")
+    ode_group = ap.add_mutually_exclusive_group()
+    ode_group.add_argument("--wake", action="store_true",
+                           help="fit/evaluate against the flow-coupled wake ODE clock")
+    ode_group.add_argument("--stall", action="store_true",
+                           help="fit/evaluate against the near-stall ODE clock")
     args = ap.parse_args()
+
+    # New runs bind the ODE clock through explicit CLI state.  The environment fallback is
+    # retained only to replay old commands; no new architecture flag should use it.
+    global USE_WAKE_ODE, USE_STALL_ODE
+    if args.wake:
+        USE_WAKE_ODE, USE_STALL_ODE = True, False
+    elif args.stall:
+        USE_WAKE_ODE, USE_STALL_ODE = False, True
 
     from eval_strict import load_scores
 
     cache = attach_physics(load_cache(args.cache))
     oofs, pool, folds = {}, None, None
+    score_pool, score_folds = None, None
     for arm in args.arms:
         p_, f_, sc_ = load_scores(arm.split(","))
         if pool is None:
-            pool, folds = [a for a in p_ if a in cache], f_
+            score_pool = list(p_)
+            score_folds = {int(k): list(v) for k, v in f_.items()}
+            # CLOT-FREE vessels are excluded HERE and nowhere else in this file.  This script
+            # measures ONSET TIMING, and a vessel that never clots has no onset -- every
+            # per-time cell it contributes is empty-GT, so it would enter `precompute` as
+            # pure cost and every mean below as a `nan` that still inflates the reported `n`.
+            # Their false-positive evidence is reported by `eval_strict.py`, which has the
+            # branch for it (`--clot-free`).
+            pool = [a for a in p_ if a in cache and a not in CLOT_FREE]
+            folds = {k: [a for a in held if a in pool] for k, held in f_.items()}
+            n_free = len([a for a in p_ if a in CLOT_FREE])
+            if n_free:
+                print("[i] %d clot-free vessels excluded: this is the TIMING protocol; see "
+                      "eval_strict.py --clot-free for their false-positive row" % n_free,
+                      flush=True)
         fo = {a: k for k, held in f_.items() for a in held}
         oofs[arm] = {a: sc_[(fo[a], a)] for a in pool}
     classes = classes_for(pool, PACKS)
@@ -790,7 +871,7 @@ def main() -> int:
         for v in V.values():
             v["clock"] = []
 
-    rows, t0 = {}, time.time()
+    rows, t0, oof_series = {}, time.time(), {}
     for k, held in sorted(folds.items()):
         sel = [a for a in pool if a not in held]
         # --- inner CV over the selection set, to get honest predictions for tuning ------
@@ -938,8 +1019,24 @@ def main() -> int:
                           & S_["wall"]).sum())
                 if nb >= wres:
                     wr = wm.predict(lag_features(V, a, oofs))
+            masks = predict_masks(V, a, P, oofs, set_th, time_th, lag=lag_a,
+                                  wall_resid=wr, owner_cut=owner_cut)
             r = score_vessel(V, a, P, oofs, set_th, time_th, lag=lag_a, wall_resid=wr,
-                             owner_cut=owner_cut)
+                             owner_cut=owner_cut, masks=masks)
+            # The raw score archive retains predictions for every vessel, including the
+            # in-fold ones that were useful to tune this fold.  For visualization we retain
+            # only the OUTER held-out trajectories and prove the exclusion in the payload.
+            assert score_pool is not None and score_folds is not None
+            base_held = list(score_folds[k])
+            assert a in base_held
+            assert a not in [x for x in score_pool if x not in base_held]
+            oof_series[a] = dict(
+                masks=masks.astype(bool),
+                times=np.asarray(V[a]["times"], dtype=np.int32),
+                fold=int(k),
+                base_train=[x for x in score_pool if x not in base_held],
+                temporal_train=list(sel),
+            )
             # the STATIC readout on the same set, as the reference the temporal arm must
             # beat: frozen mask, replayed at every timestep
             r.update(score_vessel(V, a, np.ones_like(P), oofs, set_th,
@@ -989,6 +1086,31 @@ def main() -> int:
     if args.save:
         Path(args.save).write_text(json.dumps(rows, indent=2, default=float))
         print("\nwrote %s" % args.save)
+    if args.save_oof_series:
+        sealed = sorted(set(oof_series) & set(SEALED))
+        if sealed:
+            raise RuntimeError("refusing to export FINAL_HALF trajectories: %s" % sealed)
+        payload = dict(
+            meta=np.asarray([json.dumps(dict(
+                schema_version=1,
+                purpose="strict nested out-of-fold temporal trajectories for visualization",
+                arms=list(args.arms), cache=args.cache, flow="gt",
+                n_times=int(args.n_times), inner=int(args.inner),
+                vessels=sorted(oof_series), final_half_excluded=sorted(SEALED),
+            ))]),
+        )
+        for a, row in sorted(oof_series.items()):
+            payload[f"masks|{a}"] = row["masks"]
+            payload[f"times|{a}"] = row["times"]
+            payload[f"provenance|{a}"] = np.asarray([json.dumps(dict(
+                fold=row["fold"], base_train=row["base_train"],
+                temporal_train=row["temporal_train"], held_out=a,
+            ))])
+        out_path = Path(args.save_oof_series)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path, **payload)
+        print("wrote held-out temporal series -> %s (%d vessels)" %
+              (out_path, len(oof_series)))
     return 0
 
 

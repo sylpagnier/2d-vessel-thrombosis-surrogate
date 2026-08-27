@@ -140,9 +140,38 @@ class SeverityScorer:
         self.gt = gt.astype(bool)
         self.cfg = cfg
 
-    def score(self, pred: np.ndarray, domain: np.ndarray | None = None) -> float:
+    def score(self, pred: np.ndarray, domain: np.ndarray | None = None, *,
+              empty_gt: str = "nan") -> float:
+        """Domain-restricted score.  ``empty_gt`` decides what "no GT here" means.
+
+        ``"nan"`` (default, and the historical behaviour) excludes the cell from the mean.
+        That is right at the DOMAIN level: 6 of the 19 clot-carrying vessels have no
+        off-wall GT, and folding them in would silently redefine every off-wall number in
+        the project.
+
+        ``"score"`` returns the false-positive grading ``1/(1 + n_pred/empty_gt_fp_tol)``
+        instead -- commit nothing and score 1.0, a few and lose a little, many and it
+        tanks.  This is what the 8 clot-free vessels are for (`wall_cohort_splits.CLOT_FREE`):
+        they carry no recall but they are real evidence about over-commitment, which is the
+        failure mode the readout actually exhibits.  Never mix the two in one mean.
+        """
+        if empty_gt not in ("nan", "score"):
+            raise ValueError("empty_gt must be 'nan' or 'score', got %r" % (empty_gt,))
         r = severity_components(pred, self.gt, self.D, domain, self.cfg)
-        return float("nan") if r.get("empty_gt") else r["score"]
+        if not r.get("empty_gt"):
+            return r["score"]
+        return float("nan") if empty_gt == "nan" else float(r["score"])
+
+    def sel(self, pred: np.ndarray, domain: np.ndarray | None = None) -> float:
+        """The score a THRESHOLD TUNER should see.
+
+        Identical to :meth:`score` here -- a bare scorer has one convention.  It exists so the
+        tuners in `scripts/eval_strict.py` can be called with either this class or
+        `eval_strict.BoundScorer`, which DOES separate the reporting convention from the
+        selection one (see its docstring).  Without this, adding that separation silently
+        broke every other caller of those tuners.
+        """
+        return self.score(pred, domain)
 
     def components(self, pred: np.ndarray, domain: np.ndarray | None = None) -> dict:
         return severity_components(pred, self.gt, self.D, domain, self.cfg)
@@ -151,7 +180,8 @@ class SeverityScorer:
 # ---------------------------------------------------------------------------
 # differentiable form -- the loss must be the metric (docs/PHASE9_ML.md 2a)
 # ---------------------------------------------------------------------------
-def soft_severity(p, gt, D_t, domain, gt_dil, cfg: SeverityConfig = DEFAULT):
+def soft_severity(p, gt, D_t, domain, gt_dil, cfg: SeverityConfig = DEFAULT, *,
+                  empty_gt: str = "none"):
     """Torch version of :func:`severity_components`'s ``score``.
 
     ``p`` is a probability field; the counts become expectations, the graces become the
@@ -164,6 +194,14 @@ def soft_severity(p, gt, D_t, domain, gt_dil, cfg: SeverityConfig = DEFAULT):
     g = gt * domain
     n_g = g.sum()
     if float(n_g) <= 0:
+        # See `softmetric.soft_score` for why the default drops the term rather than scoring
+        # it: an empty DOMAIN on a clot-carrying vessel is not the same case as a clot-free
+        # VESSEL, and only the latter should grade false positives into the objective.
+        if empty_gt == "score":
+            from src.clot_ml.softmetric import soft_empty_gt_score
+            return soft_empty_gt_score(p, domain, cfg.empty_gt_fp_tol)
+        if empty_gt != "none":
+            raise ValueError("empty_gt must be 'none' or 'score', got %r" % (empty_gt,))
         return None
     n_p = p.sum()
     s = torch.sparse.mm(D_t, torch.log1p(-p.clamp(0, 1 - 1e-5)).reshape(-1, 1)).reshape(-1)
