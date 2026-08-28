@@ -1554,3 +1554,35 @@ Re-draws run at the **default** mesh: an easier vessel does not also need a fine
 pairing both doubled the cost for nothing.  Preflight reports what each substitution gave up --
 median severity kept, p10, and how many are still at ratio >= 2.0 -- so the cost to the tail is
 visible rather than assumed.
+
+
+### 15.4 B32 — the repair rounds never attempted the vessels they repaired
+
+The log that exposed it:
+
+```
+--- Anchor repair 2/4: 7 unsolved, RE-DRAWING easier vessels at 0.70x severity ---
+Anchor batch: existing .npz=43, target new successes=7, candidate pool=50, will attempt 50
+Sample 0: Loaded Mesh with 4968 vertices.   Finished solving study.
+Sample 1: Loaded Mesh with 7188 vertices.   Finished solving study.
+Sample 10: ...
+```
+
+Seven vessels to fix, fifty attempted, and the ones being solved are `vessel_0`, `vessel_1`,
+`vessel_10` -- none of which were broken.
+
+`run_batch` builds its own pool with `include_existing_npz=allow_overwrite`, and the repair
+inherits `allow_overwrite=True` from a `--overwrite` cohort.  So the pool is the **whole
+cohort**, already-solved vessels included, walked in index order.  `max_new` is the number of
+rebuilt vessels (7), and it counts **successes** -- so the batch re-solved seven healthy
+geometries, hit its target, and stopped.  **Not one repaired vessel was ever attempted**, in any
+round, in either the mesh or the reshape stage.
+
+This is the whole of "slow and doesn't help": every repair round paid a full COMSOL pass over
+healthy vessels and then stopped short of its actual work.  It also invalidates the recovery
+counts the earlier stages were judged on -- `2 of 39` for refinement, `2 of 38` for same-severity
+re-draws.  Those numbers measured a repair that was never run; the descending ladder in §15.2 is
+still the right design, but its first honest measurement is the next cohort run.
+
+`run_batch` now takes `only_stems`, and the repair passes exactly the stems it rebuilt.  The pool
+selection is extracted as `select_anchor_candidates` so the behaviour is testable without COMSOL.

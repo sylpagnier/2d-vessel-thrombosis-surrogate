@@ -7,7 +7,7 @@ import mph
 import meshio
 from pathlib import Path
 from tqdm import tqdm
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from src.config import VesselConfig, PhysicsConfig
 from src.utils.paths import (
     get_project_root,
@@ -125,6 +125,31 @@ def _get_import_feature_tag(mesh_j) -> str:
     if 'imp1' in all_tags:
         return 'imp1'
     raise RuntimeError("No 'Import' feature found in the COMSOL model mesh sequence.")
+
+
+
+def select_anchor_candidates(
+    mesh_dir: "Path",
+    target_output_dir: "Path",
+    *,
+    allow_overwrite: bool = False,
+    only_stems: Optional[Iterable[str]] = None,
+) -> Tuple[List["Path"], List[str]]:
+    """The pool of geometries a batch will attempt, and any requested stems that are not ready.
+
+    ``allow_overwrite`` widens the pool to stems that ALREADY have a ``.npz``.  That is right for
+    a full cohort refresh and wrong for a repair round, which must touch only the vessels it
+    rebuilt -- otherwise the batch spends its ``max_new`` budget re-solving healthy geometries
+    and stops before reaching a single repaired one.  ``only_stems`` is how a repair says so.
+    """
+    cands = list_anchor_candidate_json_paths(
+        mesh_dir, target_output_dir, include_existing_npz=allow_overwrite
+    )
+    if only_stems is None:
+        return list(cands), []
+    want = {str(x) for x in only_stems}
+    keep = [p for p in cands if p.stem in want]
+    return keep, sorted(want - {p.stem for p in keep})
 
 
 class AnchorGenerator:
@@ -567,6 +592,7 @@ class AnchorGenerator:
         shuffle_seed: Optional[int] = None,
         allow_overwrite: bool = False,
         continuation_steps: Optional[List[float]] = None,
+        only_stems: Optional[Iterable[str]] = None,
     ) -> Dict[str, Any]:
         """Write up to ``max_new`` new healthy ``vessel_*.npz`` files.
 
@@ -592,6 +618,14 @@ class AnchorGenerator:
             Seed for shuffling; only used when ``shuffle_candidates`` is True.
         allow_overwrite
             If True, include stems that already have ``.npz`` and replace files after a successful solve.
+        only_stems
+            Restrict the pool to exactly these vessel stems.  Required by the repair rounds: they
+            run with ``allow_overwrite=True`` (inherited from a ``--overwrite`` cohort), which
+            puts every ALREADY-SOLVED vessel back in the pool.  Combined with a small ``max_new``
+            that silently broke the repair -- with 43 solved and 7 to fix, the batch re-solved
+            healthy vessels, hit its 7 successes on those, and stopped without attempting a
+            single repaired geometry.  It looked like "7 unsolved" followed by a screen of
+            "Finished solving study".
         """
         if not self.model:
             raise RuntimeError("Model not loaded.")
@@ -600,9 +634,13 @@ class AnchorGenerator:
         target_output_dir = self._final_target_output_dir()
         target_output_dir.mkdir(parents=True, exist_ok=True)
         existing_npz = len(list(target_output_dir.glob("vessel_*.npz")))
-        candidates = list_anchor_candidate_json_paths(
-            self.mesh_dir, target_output_dir, include_existing_npz=allow_overwrite
+        candidates, missing = select_anchor_candidates(
+            self.mesh_dir, target_output_dir,
+            allow_overwrite=allow_overwrite, only_stems=only_stems,
         )
+        if missing:
+            _safe_log("warning", "only_stems: %d requested stem(s) are not CFD-ready: %s",
+                      len(missing), ", ".join(sorted(missing)[:10]))
         pool_full = len(candidates)
 
         if shuffle_candidates:
@@ -612,9 +650,11 @@ class AnchorGenerator:
         if max_json_to_scan is not None:
             candidates = candidates[: int(max_json_to_scan)]
 
+        scope = ("restricted to %d named stem(s)" % len(candidates)) if only_stems is not None \
+            else ("no .npz, has .nas+.msh" if not allow_overwrite else "including existing .npz")
         logger.info(
             f"Anchor batch: existing .npz={existing_npz}, target new successes={max_new}, "
-            f"candidate pool (no .npz, has .nas+.msh)={pool_full}, "
+            f"candidate pool ({scope})={pool_full}, "
             f"will attempt min(len(pool), cap)={len(candidates)} geometries."
         )
         logger.info(

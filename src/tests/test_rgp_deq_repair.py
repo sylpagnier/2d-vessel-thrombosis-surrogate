@@ -1415,3 +1415,59 @@ def test_severity_scale_softens_a_max_stenosis_draw():
     assert np.allclose(np.asarray(p_plain["offsets"], dtype=float),
                        np.asarray(p_full["offsets"], dtype=float)), \
         "severity_scale=1.0 changed a normal draw"
+
+
+# --- B32: a repair round must attempt the vessels it repaired --------------------------------
+
+def _fake_cohort(root: Path, n: int, solved: set[int]):
+    """`n` CFD-ready vessels; those in `solved` also have a .npz."""
+    meshes = root / "meshes"
+    out = root / "npz"
+    meshes.mkdir(parents=True)
+    out.mkdir(parents=True)
+    for i in range(n):
+        (meshes / f"vessel_{i}.json").write_text("{}")
+        (meshes / f"vessel_{i}.nas").write_text("x")
+        (meshes / f"vessel_{i}.msh").write_text("x")
+        if i in solved:
+            (out / f"vessel_{i}.npz").write_bytes(b"x")
+    return meshes, out
+
+
+def test_repair_round_targets_only_the_rebuilt_vessels(tmp_path):
+    """B32: with `allow_overwrite=True` the pool includes ALREADY-SOLVED vessels.
+
+    A repair round runs with overwrite on (it inherits it from a `--overwrite` cohort) and a
+    small `max_new` -- one per vessel it rebuilt.  Without `only_stems` the batch walks the whole
+    cohort in index order, spends its budget re-solving healthy geometries, and stops before
+    attempting a single repaired one.  Observed as `target new successes=7, candidate pool=50`
+    followed by a screen of `Finished solving study` on vessels that were never broken.
+    """
+    from src.data_gen.lib.anchor_generator import select_anchor_candidates
+
+    meshes, out = _fake_cohort(tmp_path, n=50, solved=set(range(43)))
+    broken = [f"vessel_{i}" for i in range(43, 50)]
+
+    # the bug: overwrite widens the pool to everything, and index order puts the healthy first
+    wide, _ = select_anchor_candidates(meshes, out, allow_overwrite=True)
+    assert len(wide) == 50
+    assert [p.stem for p in wide][:5] != broken[:5], (
+        "the first candidates are healthy vessels -- a max_new of 7 is spent before the "
+        "repaired ones are reached"
+    )
+
+    # the fix
+    got, missing = select_anchor_candidates(
+        meshes, out, allow_overwrite=True, only_stems=broken)
+    assert sorted(p.stem for p in got) == sorted(broken)
+    assert missing == []
+
+    # and a stem that is not CFD-ready is reported, not silently dropped
+    got2, missing2 = select_anchor_candidates(
+        meshes, out, allow_overwrite=True, only_stems=broken + ["vessel_999"])
+    assert sorted(p.stem for p in got2) == sorted(broken)
+    assert missing2 == ["vessel_999"]
+
+    # without overwrite the pool is already just the unsolved ones
+    narrow, _ = select_anchor_candidates(meshes, out, allow_overwrite=False)
+    assert sorted(p.stem for p in narrow) == sorted(broken)

@@ -907,13 +907,18 @@ def _repair_unsolved_anchors(gen, *, rounds: int, allow_overwrite: bool,
             _safe_print("    nothing could be rebuilt; stopping repair.\n")
             break
 
+        # `only_stems` is not optional here.  These rounds run with `allow_overwrite=True`, which
+        # puts every already-solved vessel back in the candidate pool; the batch would then spend
+        # its `max_new` budget re-solving healthy geometries and stop before reaching a single
+        # repaired one.  That is what made the repair look slow AND useless.
         gen.run_batch(
             max_new=len(rebuilt),
             max_json_to_scan=max_json_to_scan,
             shuffle_candidates=False,
             shuffle_seed=None,
-            allow_overwrite=allow_overwrite,
+            allow_overwrite=True,
             continuation_steps=None,
+            only_stems=rebuilt,
         )
         still = _unsolved_stems(gen)
         recovered = len(pending) - len(still)
