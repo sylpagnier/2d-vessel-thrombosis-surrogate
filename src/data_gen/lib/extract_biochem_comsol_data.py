@@ -13,7 +13,10 @@ import re
 from src.config import NodeFeat, VesselConfig, PhysicsConfig, BiochemConfig, biochem_comsol_time_cap_s
 from src.utils.kinematics_paths import BIOCHEM_ANCHOR_KINE_RHEOLOGY, kinematics_anchor_graph_dir
 from src.utils.paths import get_project_root
-from src.data_gen.lib.node_feature_assembly import build_biochem_bc_x_tensor
+from src.data_gen.lib.node_feature_assembly import (
+    build_biochem_bc_x_tensor,
+    kinematics_uv_prior_max,
+)
 from src.utils.channel_schema import BIO_Y_SCHEMA, attach_patient_anchor_graph_metadata
 from src.data_gen.lib.centerline_utils import write_anchor_sidecar_from_masks
 from src.data_gen.lib.kinematics_graph_builder import (
@@ -446,11 +449,6 @@ class PatientDataExtractor:
         t_cap = biochem_comsol_time_cap_s()
         if t_cap is None:
             times = [float(x) for x in times_arr]
-            print(
-                f"[i]  {filepath.name}: keeping full COMSOL horizon "
-                f"({len(times)} steps, t_max={float(times_arr.max()):.1f} s).",
-                flush=True,
-            )
         else:
             valid_time_indices = times_arr <= float(t_cap)
             n_kept = int(valid_time_indices.sum())
@@ -494,8 +492,6 @@ class PatientDataExtractor:
                 col_mapping[(t_val, name)] = col_idx + 2
             except (ValueError, IndexError):
                 continue
-
-        print(f"[i] Dynamic column parser: mapped {len(col_mapping)} variables across {len(times)} time steps for {filepath.name}.")
 
         static_x = df_full.iloc[:, 0].copy()
         static_y = df_full.iloc[:, 1].copy()
@@ -651,11 +647,6 @@ class PatientDataExtractor:
         except ValueError:
             print(f"[WARN] {stem}: Unsupported cell type.", flush=True)
             return
-        print(
-            f"[i] {stem}: P2 triangle6 edges={edge_index.shape[1] // 2} "
-            f"nodes={len(mesh.points)}",
-            flush=True,
-        )
         row, col = edge_index
 
         needs_sidecar = (
@@ -687,7 +678,6 @@ class PatientDataExtractor:
                 mesh_nodes_si=mesh_nodes,
                 mask_inlet=mask_inlet,
             )
-            print(f"[i] {stem}: wrote sidecar (d_bar, centerline) from COMSOL boundary masks", flush=True)
 
         # --- 5. DYNAMIC EULERIAN FIELD MAPPING (TRAJECTORY EXTRACTION) ---
         trajectory_file = self.label_dir / f"{stem}.txt"
@@ -696,7 +686,6 @@ class PatientDataExtractor:
             print(f"[ERR] Skipping {stem}: Trajectory file not found.", flush=True)
             return
 
-        print(f"Parsing transient trajectory for {stem}...")
         time_blocks = self.load_comsol_trajectory(trajectory_file)
 
         eval_times = sorted(list(time_blocks.keys()))
@@ -870,7 +859,7 @@ class PatientDataExtractor:
             phys_cfg=kine_phys,
             raw_sidecar_dir=self.raw_dir,
             geometry_level=geometry_level,
-            prior_mode=os.environ.get("KINE_ANCHOR_PRIOR_MODE", "gt_flow"),
+            prior_mode=(os.environ.get("KINE_ANCHOR_PRIOR_MODE") or "analytic").strip() or "analytic",
         )
         x_kine = kine_data.x
         u_prior = kine_data.u_prior
@@ -987,11 +976,30 @@ class PatientDataExtractor:
         validate_graph_physical_integrity(data, stem, avg_flux_imbalance)
 
         torch.save(data, self.proc_dir / f"{stem}.pt")
-        print(
-            f"[OK] Saved {stem} ({biochem_variant}): D={d_bar * 1000:.1f}mm | Re_ML={re_actual:.0f} | "
-            f"Imbal={avg_flux_imbalance:.2%} | centerline={centerline_source} | "
-            f"uv_prior_max={float(x_kine[:, 11:13].abs().max()):.3f}"
+        n_in = int(mask_inlet.reshape(-1).sum())
+        n_out = int(mask_outlet.reshape(-1).sum())
+        n_wall = int(mask_wall.reshape(-1).sum())
+        n_wound = int(mask_wound.reshape(-1).sum()) if mask_wound is not None else 0
+        tmax = float(eval_times_tensor.max()) if eval_times_tensor.numel() else 0.0
+        inlet_match = diag_inlet.get("csv_match_rate")
+        parts = [
+            f"[OK] {stem} {biochem_variant}",
+            f"N={num_nodes}",
+            f"T={len(eval_times)}/{tmax:.0f}s",
+            f"in/out/wall={n_in}/{n_out}/{n_wall}",
+        ]
+        if n_wound:
+            parts.append(f"wound={n_wound}")
+        parts.extend(
+            [
+                f"D={d_bar * 1000:.1f}mm",
+                f"Re={re_actual:.0f}",
+                f"imbal={avg_flux_imbalance:.2%}",
+            ]
         )
+        if inlet_match is not None:
+            parts.append(f"inlet_match={float(inlet_match):.0%}")
+        parts.append(f"prior={kinematics_uv_prior_max(x_kine):.3f}")
         from src.data_gen.lib.biochem_extract_transfer import stage_extract_transfer_bundle
 
         bundle = stage_extract_transfer_bundle(
@@ -1002,7 +1010,8 @@ class PatientDataExtractor:
             kine_dir=self.kine_anchor_dir,
         )
         if bundle is not None:
-            print(f"[save] transfer bundle -> {bundle}")
+            parts.append(f"packed={bundle.name}")
+        print("  ".join(parts), flush=True)
 
     def run(
         self,
@@ -1012,6 +1021,9 @@ class PatientDataExtractor:
         stems: list[str] | None = None,
     ) -> None:
         """Batch-extract all anchor meshes (optionally pull COMSOL fields first)."""
+        from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+        quiet_comsol_extract_logs()
         if stems is None:
             from src.data_gen.lib.biochem_comsol_auto_export import stems_from_phase2_mph
 
@@ -1061,7 +1073,10 @@ class PatientDataExtractor:
                     (self.raw_dir / f"{stem}.msh").is_file()
                     or (self.raw_dir / f"{stem}.nas").is_file()
                 ):
-                    print(f"[i] COMSOL pull {stem} <- {mph_path.name}", flush=True)
+                    from src.data_gen.lib.extract_logging import extract_verbose_requested
+
+                    if extract_verbose_requested():
+                        print(f"[i] COMSOL pull {stem} <- {mph_path.name}", flush=True)
                     try:
                         self.pull_comsol_exports(stem, model_path=mph_path, force=force_comsol_pull)
                     except Exception as exc:
@@ -1096,11 +1111,19 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--force", action="store_true", help="Re-pull COMSOL txt and overwrite graphs.")
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Keep COMSOL/mph session and per-file export logs.",
+    )
+    parser.add_argument(
         "--no-from-comsol",
         action="store_true",
         help="Require manual cfd_results_biochem/*.txt exports (legacy).",
     )
     args = parser.parse_args(argv)
+    from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+    quiet_comsol_extract_logs(verbose=True if args.verbose else None)
 
     from src.data_gen.pipeline_biochem import _auto_scaffold_anchor_sidecars
 

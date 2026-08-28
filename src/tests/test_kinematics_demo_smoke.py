@@ -94,7 +94,11 @@ def test_process_mesh_minimal_contract(tmp_path):
     assert data is not None
     assert data.x.shape[1] == NodeFeat.WIDTH_D2.stop
     assert hasattr(data, "mask_inlet") and hasattr(data, "mask_wall")
-    assert data.G_x.is_sparse and data.G_y.is_sparse
+    # B25: the sparse (N, N) gradient operators are no longer serialised -- 98.4% of a pack,
+    # and nothing reads them outside BIOCHEM_GRAD_OPERATOR=legacy.
+    assert not hasattr(data, "G_x") and not hasattr(data, "G_y")
+    # B24: node_type must be a real one-hot, not the old zeros placeholder.
+    assert float(data.x[:, 6:10].abs().max()) == 1.0
 
 
 def test_load_predictor_smoke():

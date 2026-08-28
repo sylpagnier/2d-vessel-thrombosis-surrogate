@@ -42,7 +42,14 @@ def _diag_sparse_grad(n: int) -> torch.Tensor:
 
 
 def test_kinematics_saved_graph_includes_wls_and_sparse_gradients_without_laplacian(tmp_path):
-    """Kinematics/2 ``*.pt`` graphs carry WLS blocks + ``G_x``/``G_y``; Laplacian is not serialized."""
+    """Kinematics/2 ``*.pt`` graphs carry the WLS blocks; ``G_x``/``G_y`` are NOT serialised.
+
+    RGP_DEQ_REPAIR_PLAN.md B25.  The two sparse ``(N, N)`` gradient operators are 98.4% of a
+    pack (64.6 MB each on a 4k-node vessel) and nothing reads them: `graph_gradient_operators`
+    defaults to MLS and rebuilds from positions + connectivity, touching the stored ones only
+    under ``BIOCHEM_GRAD_OPERATOR=legacy``.  Storing them made a 250-vessel cohort a 33 GB
+    transfer instead of 500 MB.  ``KINEMATICS_STORE_G_OPERATORS=1`` puts them back.
+    """
     ctx = _base_context(num_nodes=3)
     priors = {
         "u_prior": torch.zeros(3, dtype=torch.float32),
@@ -53,7 +60,7 @@ def test_kinematics_saved_graph_includes_wls_and_sparse_gradients_without_laplac
     gx = _diag_sparse_grad(3)
     gy = _diag_sparse_grad(3)
 
-    data = assemble_kinematics_graph_data(
+    _kwargs = dict(
         x_tensor=x_tensor,
         edge_index=ctx["edge_index"],
         edge_attr=ctx["edge_attr"],
@@ -72,13 +79,30 @@ def test_kinematics_saved_graph_includes_wls_and_sparse_gradients_without_laplac
         G_x=gx,
         G_y=gy,
     )
+    data = assemble_kinematics_graph_data(**_kwargs)
 
     assert data.V.shape == ctx["V"].shape
     assert data.W.shape == ctx["W"].shape
     assert data.M_inv.shape == ctx["M_inv"].shape
-    assert data.G_x.is_sparse and data.G_y.is_sparse
-    assert data.G_x.shape == (3, 3) and data.G_y.shape == (3, 3)
+    assert not hasattr(data, "G_x") and not hasattr(data, "G_y"), (
+        "the dead sparse operators are being serialised again"
+    )
     assert not hasattr(data, "Laplacian")
+
+    # ... and the opt-in still restores them, for legacy reproduction.
+    import os as _os
+
+    _prev = _os.environ.get("KINEMATICS_STORE_G_OPERATORS")
+    _os.environ["KINEMATICS_STORE_G_OPERATORS"] = "1"
+    try:
+        kept = assemble_kinematics_graph_data(**_kwargs)
+    finally:
+        if _prev is None:
+            _os.environ.pop("KINEMATICS_STORE_G_OPERATORS", None)
+        else:
+            _os.environ["KINEMATICS_STORE_G_OPERATORS"] = _prev
+    assert kept.G_x.is_sparse and kept.G_y.is_sparse
+    assert kept.G_x.shape == (3, 3) and kept.G_y.shape == (3, 3)
 
 
 def test_biochem_non_anchor_transient_graph_matches_process_file_shape(tmp_path):
@@ -267,5 +291,9 @@ def test_process_mesh_returns_kinematics_contract(tmp_path):
     data = builder.process_mesh(mesh, meta, stem="vessel_0")
     assert data is not None
     assert data.x.shape[1] == NodeFeat.WIDTH_D2.stop
-    assert data.G_x.is_sparse and data.G_y.is_sparse
+    # B25: G_x/G_y are no longer serialised (see the contract test above).
+    assert not hasattr(data, "G_x")
+    # B24: node_type must be a real one-hot, not the old `torch.zeros((N, 4))` placeholder.
+    assert float(data.x[:, 6:10].abs().max()) == 1.0, "node_type is dead"
+    assert torch.allclose(data.x[:, 6:10].sum(dim=1), torch.ones(data.x.shape[0]))
     assert hasattr(data, "mask_inlet")

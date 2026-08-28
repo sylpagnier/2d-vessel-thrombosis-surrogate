@@ -287,7 +287,10 @@ def build_kinematics_graph_from_comsol_steady(
 
     mode = str(prior_mode or "analytic").strip().lower()
     if mode in ("gt", "gt_flow", "gt_t0"):
-        print("WARNING: 'gt_flow' prior mode is deprecated. GT input leakage is forbidden. Using analytic priors instead.")
+        print(
+            "[WARN] prior_mode=%s is deprecated (GT input leakage). Using analytic priors."
+            % mode
+        )
 
     u_nd = u_nd.clone()
     v_nd = v_nd.clone()

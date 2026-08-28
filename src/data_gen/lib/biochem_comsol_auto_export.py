@@ -634,7 +634,9 @@ class BiochemComsolAutoExporter:
         model_path = getattr(self, "_model_path", None)
         if model_path is None:
             raise RuntimeError("Set _model_path before entering context.")
-        logger.info("[i] Connecting to COMSOL for %s", model_path.name)
+        from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+        quiet_comsol_extract_logs()
         self._client = mph.start()
         self._model = self._client.load(str(model_path))
         return self

@@ -33,6 +33,8 @@ CLI::
     python -m src.data_gen.lib.extract_biochem_comsol_data --stem patient007
     python -m src.data_gen.lib.extract_biochem_comsol_data --stem wound_patient007
     python -m src.tools.extract_biochem_comsol --list-only
+    python -m src.tools.extract_biochem_comsol --stem patient048 --force
+    python -m src.tools.extract_biochem_comsol --verbose   # mph/JVM + per-file export logs
     python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer
     python -m src.tools.extract_biochem_comsol --install-bundles
     python -m src.data_gen.lib.extract_biochem_comsol_data --no-from-comsol
@@ -221,15 +223,8 @@ def print_status_table(
             f"{_exports_label(s):<14}  {graph:<20}  {kine:<6}  {mph:<28}"
         )
     print(
-        "\n[i] [ready] = mesh + domain txt. [mph->mesh] = .mph only (mesh auto-exported on extract). "
-        "[extracted] = biochem graph exists."
-    )
-    print(
-        "[i] phase2_nowound_007.mph -> patient007 (canonical cohort). "
-        "phase2_wound_007.mph -> wound_patient007 (does not overwrite nowound).\n"
-        "    Aliases: patient007_wound, --stem patient007 --variant wound. "
-        "Mesh/export stem mismatch:\n"
-        "      python -m src.tools.prepare_biochem_anchors --strip-prefix-underscore"
+        "[i] [ready]=mesh+txt  [extracted]=graph  "
+        "phase2_nowound_XXX.mph -> patientXXX;  phase2_wound_XXX.mph -> wound_patientXXX"
     )
 
 
@@ -316,7 +311,6 @@ def _maybe_pull_comsol(
         )
         return False
 
-    print(f"[NEW] Pulling COMSOL fields from {resolved} ...")
     try:
         extractor.pull_comsol_exports(stem, model_path=resolved, force=force)
     except Exception as exc:
@@ -338,6 +332,7 @@ def _run_extract(
     ref = parse_biochem_extract_stem(stem)
     if ref is not None:
         stem = ref.stem
+    print(f"[NEW] {stem}")
     if not _maybe_pull_comsol(
         stem, extractor, from_comsol=from_comsol, model_path=model_path, force=force
     ):
@@ -354,20 +349,18 @@ def _run_extract(
             return False
 
     if not skip_enrich:
-        enrich_anchor_meshes(raw_dir, overwrite=False, dry_run=False, stems=[stem])
+        enrich_anchor_meshes(
+            raw_dir, overwrite=False, dry_run=False, stems=[stem], quiet=True
+        )
 
-    print(f"\n[NEW] Extracting {stem} ...")
     try:
         extractor.process_patient(stem)
     except Exception as exc:
         print(f"[ERR] Extraction failed for {stem}: {exc}")
         return False
     if biochem_pt.is_file():
-        print(f"[OK] Wrote {biochem_pt}")
-        kine_pt = extractor.kine_anchor_dir / f"{stem}.pt"
-        print(f"[OK] Kinematics anchor (if steady step ran): {kine_pt}")
         return True
-    print(f"[ERR] Extraction did not produce {biochem_pt} (see messages above).")
+    print(f"[ERR] {stem}: no graph written.")
     return False
 
 
@@ -537,7 +530,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Re-pull domain txt / overwrite .pt. Keeps mesh and boundary txt unless "
         "BIOCHEM_COMSOL_FORCE_MESH=1 or BIOCHEM_COMSOL_FORCE_BOUNDARY=1.",
     )
-    parser.add_argument("--list-only", action="store_true", help="Print status table and exit.")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Keep COMSOL/mph session and per-file export logs (or set BIOCHEM_EXTRACT_VERBOSE=1).",
+    )
     parser.add_argument("--raw-dir", type=Path, default=None, help="Anchor meshes (default: data/raw/biochem_anchors).")
     parser.add_argument(
         "--label-dir",
@@ -595,6 +592,9 @@ def main(argv: list[str] | None = None) -> None:
         help="Override the incoming folder or zip (default: Downloads/extract_transfer).",
     )
     args = parser.parse_args(argv)
+    from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+    quiet_comsol_extract_logs(verbose=True if args.verbose else None)
 
     dr = data_root()
     raw_dir = args.raw_dir or (dr / "raw" / "biochem_anchors")
@@ -687,12 +687,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.variant != "all":
         statuses = [s for s in statuses if s.variant == args.variant]
 
-    print_status_table(statuses, raw_dir=raw_dir, label_dir=label_dir, proc_dir=extractor.proc_dir)
+    stem_arg = args.stem.strip()
+    # Full inventory is for --list-only and the interactive picker, not --stem extract.
+    if args.list_only or not stem_arg:
+        print_status_table(statuses, raw_dir=raw_dir, label_dir=label_dir, proc_dir=extractor.proc_dir)
 
     if args.list_only:
         return
 
-    stem_arg = args.stem.strip()
     if stem_arg:
         picked_list = _resolve_choices(
             stem_arg,
@@ -708,7 +710,10 @@ def main(argv: list[str] | None = None) -> None:
         if len(picked_list) == 1:
             s = picked_list[0]
             if not _can_run_status(s, from_comsol=args.from_comsol):
-                raise SystemExit(f"[ERR] {s.stem}: missing mesh and/or COMSOL source (see table above).")
+                raise SystemExit(
+                    f"[ERR] {s.stem}: missing mesh and/or COMSOL source "
+                    "(need .msh/.nas and a domain .txt or matching .mph)."
+                )
             ok = _run_extract(
                 s.stem,
                 extractor,

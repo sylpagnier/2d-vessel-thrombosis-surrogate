@@ -212,6 +212,7 @@ def enrich_anchor_meshes(
     overwrite: bool = False,
     dry_run: bool = False,
     stems: Iterable[str] | None = None,
+    quiet: bool = False,
 ) -> int:
     """Write ``d_bar``, centerline, and ``level`` into each anchor ``<stem>.json``."""
     n = 0
@@ -219,10 +220,12 @@ def enrich_anchor_meshes(
     for stem in iter_stems:
         mesh_path = resolve_anchor_mesh_path(root, stem)
         if mesh_path is None:
-            print(f"  [skip] {stem}: no .msh/.nas")
+            if not quiet:
+                print(f"  [skip] {stem}: no .msh/.nas")
             continue
         if dry_run:
-            print(f"  [enrich] {stem}.json (dry-run)")
+            if not quiet:
+                print(f"  [enrich] {stem}.json (dry-run)")
             n += 1
             continue
         try:
@@ -233,7 +236,8 @@ def enrich_anchor_meshes(
                 unit=unit,
                 overwrite=overwrite,
             ):
-                print(f"  [enrich] {stem}.json (from {mesh_path.name})")
+                if not quiet:
+                    print(f"  [enrich] {stem}.json (from {mesh_path.name})")
                 n += 1
         except Exception as exc:
             print(
