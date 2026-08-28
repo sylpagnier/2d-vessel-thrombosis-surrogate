@@ -42,7 +42,8 @@ DEFAULT_SHARES: Dict[str, float] = {
     "l_band_sr": 0.08,       # wall-band shear magnitude
     "l_band_dsrx": 0.08,     # wall-band shear gradient (what the gate is built from)
     "l_cont": 0.10,          # continuity: a real constraint, but it is not the objective
-    "l_prior_floor": 0.07,   # never be worse than the analytic prior
+    "l_prior_floor": 0.07,   # never be worse than the analytic prior, on velocity
+    "l_band_floor": 0.00,    # ... and on wall shear (s16.4); share set by the arm that uses it
     "l_wss": 0.05,
     "l_shear_grad": 0.04,
     "l_io": 0.03,

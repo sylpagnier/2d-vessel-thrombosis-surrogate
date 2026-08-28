@@ -33,10 +33,12 @@ def main() -> int:
     for k, v in (("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1"), ("SPECIES_PRIOR_SOURCE", "analytic")):
         os.environ.setdefault(k, v)
     os.environ.setdefault("KINEMATICS_PDE_FLOOR", "1")
+    max_nodes = int(os.environ.get("KINEMATICS_MAX_NODES", "0") or 0)
     pde_floor = os.environ["KINEMATICS_PDE_FLOOR"].strip().lower() not in ("0", "false", "no", "off")
     print(f"[i] NORMALIZE_SHEAR_GRAD={os.environ['KINEMATICS_NORMALIZE_SHEAR_GRAD']}"
           f"  PRIOR_SOURCE={os.environ['SPECIES_PRIOR_SOURCE']}"
-          f"  PDE_FLOOR={int(pde_floor)}")
+          f"  PDE_FLOOR={int(pde_floor)}"
+          f"  MAX_NODES={max_nodes or 'none'}")
 
     import torch
 
@@ -67,6 +69,11 @@ def main() -> int:
         if not graph_has_anchor(d):
             continue
         g = apply_prior_source(elevate_to_p2(d) if args.elevate else d, "analytic")
+        # This script takes one backward PER TERM, so it peaks higher than a training step.
+        # Same cap as training (`KINEMATICS_MAX_NODES`), honoured here because the script
+        # builds its own list rather than going through `load_dataset`.
+        if max_nodes and int(g.num_nodes) > max_nodes:
+            continue
         # `l_cont` / `l_mom` are hinged against the labels' own PDE residual in training
         # (`_attach_pde_floors`).  Calibrating without the floor measures a different objective:
         # un-floored, both terms carry the labels' near-wall discretisation residual, which on

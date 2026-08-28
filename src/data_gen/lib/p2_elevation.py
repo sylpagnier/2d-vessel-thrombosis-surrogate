@@ -59,11 +59,18 @@ def undirected_edges(edge_index: torch.Tensor) -> torch.Tensor:
     return torch.unique(pairs, dim=0)
 
 
-def elevate_to_p2(data, *, interpolate_labels: bool = True):
+def elevate_to_p2(data, *, interpolate_labels: bool = True, keep_wls: bool = True):
     """Return a new graph with a mid-side node inserted on every edge.
 
     Node ordering is ``[all original corners] + [one mid-side per undirected edge]`` so the
     original node indices are preserved -- anything keyed on them stays valid.
+
+    ``keep_wls=False`` drops the ``V``/``W``/``M_inv`` stencil arrays once the width
+    derivatives have been re-derived from them.  They are **47% of an elevated graph's memory**
+    (3.9 MB of 8.4 MB on a 24k-node vessel) and nothing downstream reads them:
+    ``graph_gradient_operators`` defaults to MLS and rebuilds from positions + connectivity,
+    touching ``data.G_x`` only under ``BIOCHEM_GRAD_OPERATOR=legacy``.  Keeping them is also the
+    hazard B13 describes -- a stored operator that no longer matches the graph beside it.
     """
     from src.data_gen.lib.mesh_wls import precompute_wls_operators
 
@@ -151,8 +158,13 @@ def elevate_to_p2(data, *, interpolate_labels: bool = True):
         )
 
     V, W, M_inv = precompute_wls_operators(edge_index, total, x[:, COL_XY])
-    out.V, out.W, out.M_inv = V, W, M_inv
     _set_width_derivatives(out, V, W, M_inv)
+    if keep_wls:
+        out.V, out.W, out.M_inv = V, W, M_inv
+    # The P1 graph this came from, so a caller can supervise on the CORNER subgraph -- where the
+    # labels are COMSOL's own rather than an interpolation of them.
+    out.p1_edge_index = data.edge_index
+    out.p1_num_nodes = n
     return out
 
 

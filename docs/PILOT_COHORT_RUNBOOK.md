@@ -225,3 +225,111 @@ analytic prior alone       0.370
   directory is missing, they are regenerable from the biochem COMSOL exports —
   `biochem_extract_transfer.py` maps `kine.pt` to
   `data/processed/graphs_kinematics_anchors/carreau/{stem}.pt`.
+
+---
+
+## 7. Before the NEXT generation run — read this first (2026-08-28)
+
+Measured on the transferred 250-vessel cohort.  Full write-up: [`RGP_DEQ_REPAIR_PLAN.md`](RGP_DEQ_REPAIR_PLAN.md) §16.
+
+**The cohort is fine.  The labels are not what deployment looks like**, in the one channel the
+clot gate reads.  The deposition gate is `(sr < lss) | (dsrx < sgt)`, and at deployment the
+median vessel has **50.8% of its firing wall nodes firing through the `dsrx` branch alone**.  In
+this corpus that number is **0.0%** — the branch fires on no wall node at all in more than half
+the vessels.  A model that learns everything this corpus can teach caps at **27% of the
+achievable deploy gate agreement** (`scratch/tune/diag_branch_ceiling.py`); the shipped
+checkpoint is already at 18%.
+
+Two causes, both in the pipeline rather than the vessel designs, and **both are generation-side
+fixes**:
+
+### 7.1 Solve at the element order deployment uses
+
+```
+comsol_models/phase1_template.mph        order_fluid = P1+P1   <- every kinematics vessel
+comsol_models/phase2_nowound_040.mph     order_fluid = P2+P1   <- every deployment vessel
+```
+
+With linear velocity elements the profile inside the first cell off the wall is linear by
+construction, so the wall shear rate is an element average and its along-wall derivative is
+largely whatever that piecewise-linear field leaves behind.
+
+**Measure it before changing it** — one vessel, both ways, same mesh:
+
+```bash
+python scripts/exp_comsol_element_order.py --stems vessel_0,vessel_5,vessel_7
+```
+
+Read the `dsrx_sd` ratio column.  Then set `PhysicsConfig.comsol_order_fluid = 2`
+(`AnchorGenerator._set_element_order` applies it through the COMSOL API — the template is not
+edited) and regenerate.  Expect the solve to be slower and to need more memory per vessel; the
+repair ladder already handles the failures that follow.
+
+### 7.2 Give the graph TRUE mid-side labels, not interpolated ones
+
+`KINEMATICS_ELEVATE_P2=1` inserts a mid-side node per edge and sets its label to the mean of its
+two corners.  That is fine for velocity (0.2-2.2% error) and destructive for `dsrx`, which is a
+second derivative: a mid-side value on the chord makes the field piecewise-linear along the
+half-edge **by construction**, so it cancels curvature.  Controlled experiment on a deploy pack,
+operator and node count held fixed:
+
+```
+native P2 (COMSOL)             wall dsrx_sd 398.5
+corner P1                                   161.9
+re-elevated by interpolation                 64.1     <- 6.2x destroyed
+```
+
+`AnchorGenerator._evaluate_at_coords` evaluates COMSOL's solution at **arbitrary coordinates**,
+so the fix is cheap: elevate the mesh topology at graph-build time and ask COMSOL for `u/v/p/mu`
+at the mid-side coordinates too.  Combined with §7.1 the corpus then matches deployment on both
+topology and label fidelity, and `KINEMATICS_ELEVATE_P2` becomes an unnecessary no-op.
+
+**Until then**, `KINEMATICS_BAND_ON_CORNERS=1` evaluates the wall-shear supervision on the P1
+corner subgraph, where the labels are COMSOL's own.  It recovers roughly a factor of two of the
+lost spread — not the whole thing.
+
+---
+
+## 8. Launch configuration (2026-08-28)
+
+```bash
+SPECIES_PRIOR_SOURCE=analytic
+KINEMATICS_ELEVATE_P2=1
+KINEMATICS_COORD_MODE=centered
+KINEMATICS_NORMALIZE_SHEAR_GRAD=1
+KINEMATICS_LOSS_WEIGHTS=outputs/kine_loss_weights_20260828.json
+KINEMATICS_MAX_NODES=26000          # P2 nodes; peak GPU ~0.092 GB per 1000
+KINEMATICS_SELECT_MAX_GRAPHS=8
+KINEMATICS_VAL_EVERY=2
+KINEMATICS_PREPARED_CACHE=outputs/cache/kine_prepared
+BIOCHEM_GRAD_CACHE_CPU=300
+KINEMATICS_TRAIN_SUBSAMPLE=100      # iteration only; drop it for a final run
+```
+
+`scratch/tune/launch.sh` sets all of it; an arm overrides one variable.  Read a run by its
+one-line summary:
+
+```
+[kin] ep6  SELECT gateJ%= 41.2 gateJ=0.379 dsrxR=+0.612 | relL2=0.271 div=3.1e-03 comp=0.58
+```
+
+**`gateJ%` is the headline.**  It is gate union Jaccard as a fraction of the per-vessel ceiling
+a *perfect* flow field reads under the same stencils — the raw Jaccard carries a ceiling of
+0.53-1.00 that belongs to the metric, not the model.  Baselines on the same strided 8 deploy
+packs:
+
+```
+GT flow          100.0
+analytic prior    32.5     <- the number a retrain has to beat
+shipped ckpt      24.4
+```
+
+**Selection now always runs**, on real deploy packs (`src/utils/kinematics_select_packs.py`),
+and the best checkpoint is ranked on it.  Before 2026-08-28 neither was true: the block was
+gated behind clinical sidecars that do not exist and promotion ranked on
+`rel_l2 + 100*continuity`.
+
+Iteration-speed settings that are not optional if you want to sweep anything:
+`KINEMATICS_PREPARED_CACHE` (P2 elevation + priors + PDE floors, ~20 min, cached),
+`BIOCHEM_GRAD_CACHE_CPU=300` (the MLS operator LRU held 12 against 225 graphs), and
+`KINEMATICS_TRAIN_SUBSAMPLE` (stratified, applied after the cache so it needs no re-prep).

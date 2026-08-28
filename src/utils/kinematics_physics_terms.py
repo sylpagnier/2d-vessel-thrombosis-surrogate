@@ -170,6 +170,91 @@ def boundary_weighted_mse(
     return (e * w).sum() / (w.sum() * active_channels + 1e-12)
 
 
+def corner_view(data):
+    """A P1 corner view of a P2-elevated graph, cached on it.  ``None`` for a native graph.
+
+    **Why the shear terms need one.**  ``elevate_to_p2`` fabricates every mid-side label as the
+    mean of its two corners, so an elevated label field is piecewise-linear along each half-edge
+    *by construction* -- and ``dsrx``, the argument of the gate branch that decides deployment,
+    is a second derivative of exactly that field.  Measured on the deploy packs, holding the
+    operator and the node set fixed (decimate a native-P2 pack to corners, re-elevate it by
+    interpolation, differentiate both the same way):
+
+    ```
+    arm                       wall sr_med   wall dsrx_sd   sep-branch share of firing nodes
+    native P2 (COMSOL)               91.3          398.5         0.0% (p041: 65.5%)
+    corner P1                        72.5          161.9         0.0% (p041: 57.1%)
+    re-elevated by interpolation     65.0           64.1         0.0% (p041: 47.5%)
+    ```
+
+    6.2x of the wall ``dsrx`` spread is destroyed by the interpolation alone.  On the synthetic
+    corpus's own labels the same step halves it (300 -> 152) and takes the ``dsrx < sgt`` branch
+    from firing on 21/40 vessels to 17/40 and from 0.5% of wall nodes to 0.0% -- against 5.6% at
+    deployment, where **50.8% of firing wall nodes fire through that branch alone**.
+
+    So supervising `sr` / `dsrx` / the gate on the elevated graph asks the model to reproduce an
+    interpolation artifact.  On the corner view the labels are COMSOL's own.  The topology the
+    MODEL sees is unchanged -- this only moves where the shear terms are evaluated.
+    """
+    ei1 = getattr(data, "p1_edge_index", None)
+    n1 = getattr(data, "p1_num_nodes", None)
+    if ei1 is None or n1 is None:
+        return None
+    n1 = int(n1)
+    cached = getattr(data, "_corner_view", None)
+    if cached is not None:
+        return cached
+    view = data.__class__()
+    view.x = data.x[:n1]
+    view.edge_index = ei1
+    view.num_nodes = n1
+    y = getattr(data, "y", None)
+    if not torch.is_tensor(y) or y.shape[0] < n1:
+        return None
+    view.y = y[:n1]
+    for name in ("mask_inlet", "mask_outlet", "mask_wall", "mask_wound"):
+        m = getattr(data, name, None)
+        if torch.is_tensor(m) and m.reshape(-1).numel() >= n1:
+            setattr(view, name, m.reshape(-1)[:n1])
+    for name in ("u_ref", "d_bar", "graph_stem"):
+        v = getattr(data, name, None)
+        if v is not None:
+            setattr(view, name, v)
+    if not torch.is_tensor(getattr(view, "mask_wall", None)):
+        return None
+    try:
+        setattr(data, "_corner_view", view)
+    except Exception:
+        pass
+    return view
+
+
+def _corner_hops(hops: int) -> int:
+    """Hop count on the corner view that spans the same distance as ``hops`` on P2."""
+    import os
+
+    raw = os.environ.get("KINEMATICS_BAND_CORNER_HOPS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(1, int(round(hops / 2.0)))
+
+
+def _band_on_corners() -> bool:
+    """``KINEMATICS_BAND_ON_CORNERS`` -- OFF by default.  See :func:`corner_view`.
+
+    Off until it is measured on gate Jaccard, so an unset environment reproduces the previous
+    runs exactly and the arm that turns it on differs in one thing.
+    """
+    import os
+
+    return os.environ.get("KINEMATICS_BAND_ON_CORNERS", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
 def wall_band_shear_losses(
     pred, data, kernels: PhysicsKernels, *, props=None, hops: int = WALL_BAND_HOPS,
     node_is_anchor: Optional[torch.Tensor] = None,
@@ -202,12 +287,29 @@ def wall_band_shear_losses(
     """
     zero = pred.sum() * 0.0
     if (not hasattr(data, "y")) or (data.y is None) or (data.y.shape[1] <= PredChannels.V):
-        return zero, zero, zero
+        return zero, zero, zero, zero
+
+    # Evaluate on the CORNER subgraph of an elevated graph: its labels are COMSOL's own, where
+    # the elevated graph's mid-side labels are an interpolation whose second derivative is an
+    # artifact of the interpolation (see `corner_view` for the measurement).  `pred` is sliced
+    # rather than re-run -- the model still sees, and is still differentiated through, the full
+    # P2 graph.
+    view = corner_view(data) if _band_on_corners() else None
+    if view is not None:
+        n1 = int(view.num_nodes)
+        node_is_anchor = None if node_is_anchor is None else node_is_anchor.view(-1)[:n1]
+        data, pred, props = view, pred[:n1], None
+        # A hop is not the same length on the two graphs.  P2 edges are corner<->mid-side only,
+        # so 3 hops reaches 1.5 ELEMENTS; on the corner graph 3 hops reaches 3.  Left alone this
+        # arm would change two things at once -- whose labels are supervised AND how wide a band
+        # -- so the corner hop count is halved to keep the physical width comparable.
+        hops = _corner_hops(hops)
+
     band = wall_band_mask(data, hops).view(-1)
     if node_is_anchor is not None:
         band = band & node_is_anchor.view(-1).bool()
     if int(band.sum()) < 2:
-        return zero, zero, zero
+        return zero, zero, zero, zero
     if props is None:
         props = kernels._get_geometric_props(data)
 
@@ -234,7 +336,65 @@ def wall_band_shear_losses(
     sd = dsr_gt[band].std().clamp(min=1e-8)
     l_dsrx = F.mse_loss(dsr_pr[band] / sd, dsr_gt[band] / sd)
     l_gate = _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s, sd)
-    return l_sr, l_dsrx, l_gate
+    l_floor = _band_shear_floor(data, kernels, props, band, sr_pr, sr_gt, dsr_pr, dsr_gt, s, sd)
+    return l_sr, l_dsrx, l_gate, l_floor
+
+
+def _band_shear_floor(data, kernels, props, band, sr_pr, sr_gt, dsr_pr, dsr_gt, s, sd):
+    """Make the analytic prior a floor **in the wall shear channel**, not only in velocity.
+
+    T6's `prior_floor_loss` hinges on ``|u - y|``, and the surrogate clears it comfortably while
+    still being *worse than its own input* on the quantity the clot gate reads.  Measured on the
+    8 strided deploy selection packs under deploy-legal priors:
+
+    ```
+    arm                gateJ% of ceiling   wall dsrx corr   rel-L2
+    analytic prior              32.5           +0.559        0.159
+    RGP-DEQ (shipped)           24.4           +0.073        0.195
+    ```
+
+    The trained surrogate is 8 points BEHIND the closed-form field it is handed, and its wall
+    `dsrx` correlation is essentially zero.  Nothing in the objective noticed, because the only
+    one-sided term looked at velocity.  This is the same hinge on the two band quantities,
+    normalised by the ground truth's own spread so it is on the band terms' scale:
+
+        L = relu(|sr_pred - sr_gt|^2 - |sr_prior - sr_gt|^2) / std(sr_gt)^2   + the same for dsrx
+
+    Zero wherever the model beats the prior, positive only where it is worse.  The prior's own
+    shear fields depend on nothing that changes during training, so they are cached per graph.
+    """
+    if not _band_shear_floor_enabled():
+        return sr_pr.sum() * 0.0
+    prior = data.x[:, 11:13]
+    key = "_band_prior_shear"
+    got = getattr(data, key, None)
+    if got is None:
+        with torch.no_grad():
+            cu = kernels._compute_derivatives(prior[:, 0:1], props)
+            cv = kernels._compute_derivatives(prior[:, 1:2], props)
+            sr0 = compute_shear_rate(cu[:, 0, 0], cu[:, 1, 0], cv[:, 0, 0], cv[:, 1, 0], eps=1e-6)
+            dsr0 = kernels._compute_derivatives(sr0.unsqueeze(1), props)[:, 0, 0]
+        got = (sr0.detach(), dsr0.detach())
+        try:
+            setattr(data, key, got)
+        except Exception:
+            pass
+    sr0, dsr0 = got
+    e_m = (sr_pr[band] - sr_gt[band]) ** 2
+    e_p = (sr0[band] - sr_gt[band]) ** 2
+    out = torch.relu(e_m - e_p).mean() / (s**2)
+    e_m = (dsr_pr[band] - dsr_gt[band]) ** 2
+    e_p = (dsr0[band] - dsr_gt[band]) ** 2
+    return out + torch.relu(e_m - e_p).mean() / (sd**2)
+
+
+def _band_shear_floor_enabled() -> bool:
+    """``KINEMATICS_BAND_SHEAR_FLOOR`` -- off by default until measured on gate Jaccard."""
+    import os
+
+    return os.environ.get("KINEMATICS_BAND_SHEAR_FLOOR", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
 
 
 def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
@@ -460,6 +620,7 @@ def compute_kinematics_physics_terms(
         l_band_sr = z
         l_band_dsrx = z
         l_band_gate = z
+        l_band_floor = z
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
     else:
         # One-sided hinge against the labels' own PDE residual when a floor is attached
@@ -475,7 +636,7 @@ def compute_kinematics_physics_terms(
         l_cont = kernels.continuity_loss(du_ij, data=data, floor=floor_cont)
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
         l_shear_grad = kernels.wall_shear_gradient_loss(pred, data, props=props)
-        l_band_sr, l_band_dsrx, l_band_gate = wall_band_shear_losses(
+        l_band_sr, l_band_dsrx, l_band_gate, l_band_floor = wall_band_shear_losses(
             pred, data, kernels, props=props, hops=wall_band_hops,
             node_is_anchor=node_is_anchor,
         )
@@ -486,6 +647,7 @@ def compute_kinematics_physics_terms(
         "l_band_sr": l_band_sr,
         "l_band_dsrx": l_band_dsrx,
         "l_band_gate": l_band_gate,
+        "l_band_floor": l_band_floor,
         "l_prior_floor": prior_floor_loss(pred, data, node_is_anchor=node_is_anchor),
         "l_data_kine": l_data_kine,
         "l_data_mu": l_data_mu,
@@ -503,6 +665,7 @@ __all__ = [
     "PDE_FLOOR_MOM",
     "compute_pde_floors",
     "attach_pde_floors",
+    "corner_view",
     "wall_band_mask",
     "wall_band_shear_losses",
     "prior_floor_loss",

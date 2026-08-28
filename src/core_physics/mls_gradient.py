@@ -197,6 +197,33 @@ def graph_gradient_operators(data, *, device=None, dtype=None, hops: int | None 
         return data.G_x.to(device=dev), data.G_y.to(device=dev)
 
     h = gradient_operator_hops() if hops is None else int(hops)
+
+    # `_compute_derivatives` is called 10-15 times per training step, and BOTH the signature and
+    # the fallback path used to read `node_positions(data)` and `data.edge_index` -- each a
+    # `.detach().cpu().numpy()`, i.e. a device SYNC plus a ~1.5 MB D2H copy, before the cache was
+    # even consulted.  On this cohort that pinned GPU utilisation near 10%.  Two memos fix it
+    # without changing a single returned value:
+    #   1. the resolved operators, on the object itself -- kills the repeats inside one step;
+    #   2. the LRU key from `graph_stem` + node count, so a lookup ACROSS steps needs no copy.
+    memo_key = f"_grad_ops_h{h}_{dev}_{dt}"
+    memo = getattr(data, memo_key, None)
+    if memo is not None:
+        return memo
+
+    stem = getattr(data, "graph_stem", None)
+    if isinstance(stem, (list, tuple)) and len(stem) == 1:
+        stem = stem[0]
+    n_nodes = int(getattr(data, "num_nodes", 0) or 0)
+    stem_key = (str(stem), n_nodes, h, str(dev), str(dt)) if stem else None
+    if stem_key is not None:
+        hit = _lru_get(_DEV_CACHE, stem_key)
+        if hit is not None:
+            try:
+                setattr(data, memo_key, hit)
+            except Exception:
+                pass
+            return hit
+
     # Both the coordinates and the connectivity are required to build an MLS stencil.
     # Anything missing either (synthetic fixtures, packs built before siren_pos) falls
     # back to the shipped operators rather than raising.
@@ -218,7 +245,14 @@ def graph_gradient_operators(data, *, device=None, dtype=None, hops: int | None 
         factors = build_mls_gradient(pos, ei, hops=h)
         _lru_put(_SCIPY_CACHE, sig, factors, _cache_cap("BIOCHEM_GRAD_CACHE_CPU", 12))
     ops = (_to_torch_sparse(factors[0], dev, dt), _to_torch_sparse(factors[1], dev, dt))
-    _lru_put(_DEV_CACHE, dev_key, ops, _cache_cap("BIOCHEM_GRAD_CACHE_DEV", 3))
+    cap = _cache_cap("BIOCHEM_GRAD_CACHE_DEV", 3)
+    _lru_put(_DEV_CACHE, dev_key, ops, cap)
+    if stem_key is not None:
+        _lru_put(_DEV_CACHE, stem_key, ops, cap)
+    try:
+        setattr(data, memo_key, ops)
+    except Exception:
+        pass
     return ops
 
 

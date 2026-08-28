@@ -1586,3 +1586,305 @@ still the right design, but its first honest measurement is the next cohort run.
 
 `run_batch` now takes `only_stems`, and the repair passes exactly the stems it rebuilt.  The pool
 selection is extracted as `select_anchor_candidates` so the behaviour is testable without COMSOL.
+
+
+---
+
+## 16. The 2026-08-28 cohort: what selection was actually doing, and what the labels contain
+
+The 250-vessel cohort transferred on 2026-08-28 passes preflight (`0 FAIL, 2 WARN`, 250/250
+solved, `h_nd` 0.94x deploy, 36% of vessels at stenosis ratio >= 2.0 against deployment's 26%).
+The defects found here are all in the *training methodology*, not in the vessels.
+
+### 16.1 B34 — the selection metric never ran, so promotion was on rel-L2 all along
+
+`_selection_metrics_on_graphs` was called from inside
+
+```python
+if holdout_raw and os.environ.get("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "").strip():
+```
+
+— i.e. only when `KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS` was set **and** clinical steady-kine
+sidecars existed under `graphs_kinematics_anchors/`.  That directory is **empty** on this
+machine, and the launch configuration in §11.5 does not set the holdout variable.  So the whole
+§10.3 alignment was inert.  A smoke run says it plainly:
+
+```
+[kin] ep0   SELECT gateJ=--- dsrxR=--- | relL2=0.5775 div=1.14e+00 comp=114.8487
+[kin] Saved new best kinematics model
+[kin] ep1   SELECT gateJ=--- dsrxR=--- | relL2=2.2291 div=4.80e-01 comp=50.2777
+[kin] Saved new best kinematics model      <- rel-L2 got 4x WORSE and it promoted anyway
+```
+
+**The sidecars are not needed.**  `graphs_biochem_anchors/*.pt` are the deployment meshes
+themselves and carry COMSOL's `t=0` velocity in `y[0]` — exactly what the clot stack consumes
+and what `eval_deploy_flow_acceptance.py` scores.  `src/utils/kinematics_select_packs.py` loads
+them, with priors rewritten to the deploy-legal source and both halves of the old SEALED set
+excluded (choosing a checkpoint on a vessel is tuning on it).  Selection now runs on every
+validation; synthetic val is the fallback and says so.
+
+### 16.2 B35 — and even when it ran, it was not what promotion ranked on
+
+```python
+if gates_ok and val_comp < best_val_composite_loss:      # val_comp = rel_l2 + 100*continuity
+    save_best = True
+```
+
+Gate Jaccard entered only as an optional *threshold* (`KINEMATICS_MIN_GATE_JACCARD`), never as
+the ranking.  `selection_score` was computed and used for the early-abort counter alone.  The
+best checkpoint is now ranked on `selection_score`; `val_comp` is the fallback for a run with no
+usable selection graphs.
+
+### 16.3 B36 — the selection metric was not maximised at the truth
+
+The consumer differentiates a predicted field at `hops=6` and GT at `hops=3`, and
+`PRED_DSRX_GAIN = 3.0` is applied to the predicted side.  That constant bundles two unrelated
+factors: the stencil attenuation (~2.2x, a property of the operator pair) and the **old
+surrogate's** ~1.35x under-resolution, because it was least-squares fitted against it.  Feeding
+COMSOL's own velocity in as the prediction:
+
+```
+                        median gate Jaccard at pred == GT
+deploy packs, gain 3.0                0.835
+deploy packs, stencil gain            0.941
+```
+
+So the shipped constant put ~0.11 of Jaccard permanently out of reach, and holding it fixed
+while retraining the thing it was fitted to rewards a model for staying under-resolved.
+`wall_shear_selection_metrics(gain="stencil")` derives the ratio per vessel from the ground
+truth's own two stencils — legitimate for a metric, never for deployment.
+
+**The ceiling is still not 1.0, and it is per-vessel** (0.53-1.00 across the deploy packs: on
+some vessels the two stencils disagree about which nodes cross the threshold and no flow model
+can fix it).  So the metric now also returns `gate_jaccard_ceiling` (the same quantity at
+`pred := GT`) and `gate_jaccard_frac`, and **selection reads the fraction** — a raw cohort mean
+mixes model quality with the metric's own defect.
+
+### 16.4 The deploy-legal baseline, on 25 deploy packs
+
+`scratch/tune/baseline_arms.py`, stencil gain, analytic priors, `clamped_width_priors` applied
+exactly as inference applies them.  Medians:
+
+```
+arm        n   gateJ%   gateJ    ceil   dsrxR  dsrxScale  srScale   relL2
+gt        25    100.0   0.938   0.938   0.996      1.000    0.691   0.000
+prior     25     16.6   0.113   0.938   0.622      0.092    0.140   0.147
+ckpt      25     18.2   0.160   0.938   0.165      0.335    0.430   0.187
+```
+
+Three things, and none of them are the readout:
+
+* **The shipped surrogate captures 18% of the achievable gate agreement, and the closed-form
+  analytic prior captures 17%.**  On deploy-legal priors they are tied.
+* **`dsrx` correlation is +0.165 median and NEGATIVE on 9 of 25 vessels.**  The prior's +0.622
+  is much better.  §1j's "the surrogate moves amplitude and damages structure" is if anything
+  understated once the leaked priors are removed.
+* **Amplitude is 3x short** (`dsrxScale` 0.335 with the stencil gain already applied), which is
+  the reciprocal of `PRED_DSRX_GAIN = 3.0`, as it should be.
+
+### 16.5 B37 — ROOT CAUSE: the corpus does not contain the branch that decides deployment
+
+The gate is `(sr < lss) | (dsrx < sgt)`.  Which branch fires is a property of the labels.
+Measured through the consumer's own convention (MLS hops=3 on GT), wall nodes, 60 synthetic
+against 47 deploy packs (`scratch/tune/diag_corpus_gate_regime.py`):
+
+```
+                    synth p10/med/p90        deploy p10/med/p90
+wall sr median      23.5 / 52.1 / 116.7      64.7 /  99.4 / 203.0      1.9x
+wall dsrx sd        21.5 / 55.5 / 2242      222.5 / 592.4 / 2075      10.7x
+`sr < lss` fires    0 / 0.169 / 0.517         0 / 0.014 / 0.136
+`dsrx < sgt` fires  0 / 0.000 / 0.078         0 / 0.056 / 0.296
+sep-branch share    0 / 0.000 / 0.330         0 / 0.508 / 1.000
+```
+
+**At deployment the median vessel has 50.8% of its firing wall nodes firing through the `dsrx`
+branch alone.  In the training corpus that number is 0.0% at the median**, and the `dsrx`
+branch fires on no wall node at all in more than half the vessels.  `l_band_gate` is therefore
+trained almost entirely on the `sr` branch — the one that PHASE7 10.7 and
+`pred-flow-gap-is-in-the-gate` both measure as *not* the one that decides deployment.
+
+**Most of the gap is the training pipeline, not the vessel designs.**  Controlled experiment on
+the deploy packs — decimate a native-P2 pack to its P1 corners, re-elevate it by interpolation,
+differentiate all three the same way, same node set for the first and third
+(`scratch/tune/diag_p2_elevation_cost.py`):
+
+```
+arm                       wall sr_med   wall dsrx_sd   sep share (patient041)
+native P2 (COMSOL)               91.3          398.5          65.5%
+corner P1                        72.5          161.9          57.1%
+re-elevated by interpolation     65.0           64.1          47.5%
+```
+
+**P2 elevation with interpolated mid-side labels destroys 6.2x of the wall `dsrx` spread with
+the operator and the node count held exactly fixed.**  §8 A1 justified the interpolation with a
+0.2-2.2% mean relative error *on velocity*; `dsrx` is a second derivative of velocity, and a
+mid-side value that is the mean of its corners is piecewise-linear along the half-edge **by
+construction**, so it cancels curvature rather than under-resolving it.  On the corpus's own
+labels the same step halves the spread (300 -> 152) and takes the `dsrx` branch from firing on
+21/40 vessels to 17/40.
+
+`KINEMATICS_BAND_ON_CORNERS=1` evaluates `l_band_sr` / `l_band_dsrx` / `l_band_gate` on the P1
+corner subgraph, where the labels are COMSOL's own.  The model still sees and is still
+differentiated through the full P2 graph; only the shear terms move.  The corner hop count is
+halved (`_corner_hops`) because a P2 hop is half an element and a P1 hop is a whole one, so the
+arm changes one thing rather than two.  Default off until it is measured on gate Jaccard.
+
+**And the corpus is solved at a lower element order than deployment.**
+
+```
+comsol_models/phase1_template.mph        order_fluid = P1+P1   <- every kinematics vessel
+comsol_models/local_kine_template.mph    order_fluid = P1+P1
+comsol_models/phase2_nowound_040.mph     order_fluid = P2+P1   <- every deployment vessel
+```
+
+With linear velocity elements the profile inside the first cell off the wall is linear by
+construction, so the wall shear rate is an element average.  The size of that effect is **not
+measured yet** — it needs a COMSOL server, and this machine has a client-only install.
+`scripts/exp_comsol_element_order.py` solves the same vessel both ways on the same mesh and
+prints the `dsrx_sd` ratio; `PhysicsConfig.comsol_order_fluid` (default 1, unchanged) switches
+the generator, and `AnchorGenerator._set_element_order` applies it.  **Run it on the generation
+box before committing to more vessels.**
+
+### 16.6 Smaller defects fixed in passing
+
+* `_resolve_loss_weights()` was called once per training STEP, re-reading the JSON and printing
+  the whole recipe — 250 file reads and 250 log lines per epoch.  Cached on the resolved path.
+* No OOM guard in the training step.  This cohort's P2 graphs run 8.5k-56.7k nodes and peak
+  memory is ~0.092 GB per 1000 nodes, so one oversized vessel killed a run hours in on a 4 GB
+  card.  The step now skips and counts them, and selection releases the allocator between
+  graphs.
+* `KINEMATICS_MAX_NODES` carried a threshold (5500) calibrated on the previous corpus, which
+  drops **all 250** vessels of this one.  The docstring now names this cohort's distribution
+  (P2 p10 10.8k / median 15.9k / p90 22.0k / max 56.7k); 26000 drops 11 and takes severe-stenosis
+  coverage 36.4% -> 33.9%.
+* The epoch loss breakdown omitted `band`, `GATE`, `floor`, `sgrad` and `shear` — the one place
+  a run reports where its gradient goes did not mention the term the alignment rests on.
+* `l_shear` is **structurally inert**: `RGP_DEQ` emits `out_channels=5` (U/V/P/MU/WSS) while
+  `PredChannels.SHEAR_RATE` is 5, so `pred.shape[1] > 5` is never true.  Left off deliberately
+  — the model's own shear channel reads wall correlation -0.11 — but it is now documented rather
+  than silently dead behind a live-looking weight.
+* Loss weights recalibrated on this cohort (`outputs/kine_loss_weights_20260828.json`).
+
+### 16.7 Iteration speed — this was the binding constraint on doing any of this
+
+* **`V`/`W`/`M_inv` are 47% of an elevated graph** (3.9 MB of 8.4 MB at 24k nodes) and nothing
+  in training reads them: `graph_gradient_operators` defaults to MLS and rebuilds from positions
+  + connectivity.  `elevate_to_p2(keep_wls=False)` drops them, taking the cohort from ~8.4 GB of
+  host RAM to ~4.4 GB.  It also removes the B13 hazard by construction.
+* **The MLS operator cache held 12 entries against 225 training graphs**, so it missed on
+  essentially every step: `build_mls_gradient` is a per-node Python loop costing **1.7 s of a
+  2.28 s step**.  `BIOCHEM_GRAD_CACHE_CPU=300` holds the cohort for 2.1 GB and makes a step
+  0.61 s — **3.7x**.
+* P2 elevation + prior rewrite + PDE floors cost ~20 minutes per launch and are deterministic in
+  the packs and the environment.  `KINEMATICS_PREPARED_CACHE` keys them on exactly the settings
+  that change the result.
+
+### 16.8 How much of the deploy gate this corpus can teach, at best
+
+The bound needs no training run.  Give a hypothetical model COMSOL's own `sr` field on a deploy
+pack and let it be arbitrarily wrong about `dsrx` — that is the best a model can do having
+learned only the branch the corpus contains — and read the deploy gate Jaccard against its own
+ceiling (`scratch/tune/diag_branch_ceiling.py`, 25 selection packs):
+
+```
+                    ceiling J   sr-only J   % of ceiling   sep share of firing nodes
+MEDIAN                  0.938       0.254           27.0        74.6%
+MEAN                    0.887       0.366           41.2        60.5%
+```
+
+and the distribution is bimodal rather than merely low:
+
+```
+8 of 25 vessels     sr-only J = 0.000     sep share 100%   (011 019 024 025 028 029 032 036)
+4 of 25 vessels     sr-only J = ceiling   sep share   0%   (003 020 021 039)
+```
+
+**On a third of the deploy cohort the `dsrx` branch accounts for every firing wall node**, so a
+model that learned only what this corpus teaches scores exactly zero there.
+
+Read against §16.4, the shipped checkpoint sits at `gateJ%` **18.2** against an sr-only bound of
+**27.0** and an achievable **100**.  So:
+
+* **objective reweighting is worth at most ~9 points** (18 -> 27), and only if a retrain
+  extracts everything the corpus contains;
+* **the remaining 73 points require the corpus to contain the `dsrx` regime** — which is §16.5:
+  true P2 labels instead of interpolated ones, and `order_fluid = P2+P1` instead of `P1+P1`.
+
+One caveat in the corpus's favour, stated so the bound is not over-read: `l_band_dsrx` supervises
+`dsrx` as a *continuous, spread-normalised* field, not only at the threshold, so a model can in
+principle learn `dsrx` structure from vessels whose own gate never fires.  The true reachable
+value is therefore somewhere between 27% and 100%.  But that route needs the corpus's `dsrx` to
+be the real thing rather than an interpolation artifact, which is exactly what §16.5 measures it
+is not — and it is consistent with the shipped checkpoint's measured `dsrxScale` of **0.335**:
+an under-scaled `dsrx` cannot cross an absolute threshold however good its structure is, which is
+the whole reason `PRED_DSRX_GAIN` exists as a fitted constant.
+
+**CORRECTION to the reading of this bound (same day, from the first arm's epoch 0).**  The 27%
+is what a model that learned `dsrx` *only from this corpus* would reach.  It is **not** a bound
+on the system, because the hard BC hands the model the analytic prior and the prior carries
+`dsrx` structure of its own: on the same strided 8 packs the prior alone reads **32.5%** at wall
+`dsrx` correlation **+0.559**, above the 27%.  A freshly initialised model — whose output is
+essentially the prior plus a small residual — reads **36.7%** at epoch 0.
+
+So the honest framing is a *decomposition*, not a ceiling:
+
+```
+analytic prior alone            32.5     structure the closed form supplies for free
+epoch-0 model (prior + eps)     36.7
+shipped checkpoint              24.4     what the OLD training regime did to it: -8.1
+```
+
+**Training has historically SUBTRACTED 8 points from what the prior already gives**, which is
+the same phenomenon §1j reports on 4 vessels, now measured on 25.  That is what
+`KINEMATICS_BAND_SHEAR_FLOOR` (§16.9) is aimed at: T6's floor watches velocity only, so nothing
+in the objective ever noticed the surrogate falling behind its own input in the shear channel.
+
+The corpus argument in §16.5 stands and is unaffected — the corpus cannot teach the `dsrx`
+branch — but the consequence is narrower than "27% is the ceiling": it is that **everything the
+model knows about `dsrx` today comes from the closed-form prior, and the corpus can only teach
+it to keep or lose that**.
+
+
+### 16.9 The arms: what the objective can and cannot do on this corpus
+
+All arms share the cohort (a stratified 100 of the 239 prepared graphs), the schedule
+(20 epochs, stage 3 throughout, validation every 2), and the selection set — the **strided** 8
+deploy packs `003 006 011 016 021 028 035 039`, never trained on.  `gateJ%` is gate union
+Jaccard as a fraction of each vessel's own ceiling, averaged over the 8.
+
+Baselines on that same set, from `scratch/tune/baseline_arms.py`:
+
+```
+GT flow                 100.0    gateJ 0.921   dsrxR 0.996   relL2 0.000
+analytic prior           32.5    gateJ 0.302   dsrxR 0.559   relL2 0.159
+shipped checkpoint       24.4    gateJ 0.227   dsrxR 0.073   relL2 0.195
+```
+
+**The bar is the analytic prior, 32.5 — not the shipped checkpoint.**  Training as it stood
+subtracted 8 points from a closed-form field the model is handed for free.
+
+**Arms A2 and B — the objective is inert on the gate.**
+
+```
+arm                       best   last   gateJ% trajectory (val every 2 epochs)
+A2  calibrated weights    37.6   32.6   37 37 33 36 32 38 36 32 32 33 33
+B   band terms x2.4       35.9   31.8   35 31 30 36 36 30 32 32
+```
+
+A2's rel-L2 fell steadily **0.540 -> 0.357** across the run while `gateJ%` oscillated in a +-3
+band around the analytic prior's 32.5 and finished on it.  `dsrxR` never left the prior's
+0.55-0.62 in either arm.  Weighting the three band terms 2.4x harder (B, shares
+`gate 0.34 / dsrx 0.18 / sr 0.14` against `0.30 / 0.08 / 0.08`) changed nothing and cost rel-L2.
+
+So the model's gate behaviour **is** the analytic prior's, plus noise: everything it knows about
+wall `dsrx` arrives through the hard BC `u = uv_prior + sdf * uvp`, and the corpus contributes
+none of it.  That is §16.5 showing up end to end, and it is why the next arms change what the
+model is *shown* (§16.5's corner labels, the deploy packs themselves) rather than how the loss
+is weighted.
+
+**B also exposed B38.**  `refresh_hard_mining` runs a full Anderson solve over every training
+graph at `hard_mining_start_epoch` (16), by which point the allocator is fragmented from sixteen
+epochs of backward passes, and it had no OOM guard: the run died on `torch.stack(X_history)`
+inside the solver.  Hard mining is a sampling *heuristic* -- a graph it cannot score keeps weight
+1.0 -- so it now skips and counts.  The validation rel-L2 pass and the mass-flow diagnostic had
+the same exposure and the same fix.  **A diagnostic must never be the thing that ends a run.**

@@ -27,6 +27,19 @@ Short cheat sheet for agents and contributors. Full orientation: [docs/PROJECT_C
 - Config helpers: `snapshot_rgp_deq_model_config` / `resolve_rgp_deq_ctor_kwargs` in `src/architecture/kinematics_model_config.py` (gino/pmgp aliases retained)
 - **Solver Orchestration**: Dynamic flow patching is handled via a hybrid macro/micro architecture. See [docs/KINE_ADJUSTMENTS.md](docs/KINE_ADJUSTMENTS.md) for macro-resolves, micro-resolves, and smooth SDF fast-marching.
 - **GT Leakage Policy**: `prior_mode="analytic"` MUST be used for priors. See [docs/KINE_ADJUSTMENTS.md](docs/KINE_ADJUSTMENTS.md).
+- **Score Stage-A on `gateJ%`, never on rel-L2.** Selection runs on real deploy packs
+  (`src/utils/kinematics_select_packs.py`) and the best checkpoint is ranked on it. `gateJ%` is
+  gate union Jaccard as a fraction of the per-vessel ceiling a *perfect* flow field reads under
+  the same stencils. Baselines on the strided 8 deploy packs: **GT 100.0, analytic prior 32.5,
+  shipped ckpt 24.4** — the prior beats the surrogate, so a retrain has to clear 32.5.
+- **Before generating more vessels, read [docs/PILOT_COHORT_RUNBOOK.md](docs/PILOT_COHORT_RUNBOOK.md) §7.**
+  The corpus is solved `P1+P1` while every deploy vessel is `P2+P1`, and `KINEMATICS_ELEVATE_P2`
+  fabricates mid-side labels by interpolation — together those put the wall `dsrx` the clot gate
+  keys on 10.7x below deployment, and cap any amount of training at **27% of the achievable
+  deploy gate**. `RGP_DEQ_REPAIR_PLAN.md` §16.
+- **Launch/iterate:** `scratch/tune/launch.sh`. `KINEMATICS_PREPARED_CACHE` +
+  `BIOCHEM_GRAD_CACHE_CPU=300` + `KINEMATICS_TRAIN_SUBSAMPLE` are what make a sweep possible at
+  all (20 min -> seconds of setup, 3.7x faster steps).
 
 
 ## Configuration Architecture Guardrail

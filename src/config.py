@@ -195,6 +195,22 @@ class VesselConfig:
     # `h_nd` against the deploy band so this is verified on the cohort, not extrapolated.
     mesh_lc: float = 0.90/1000
 
+    #: Target open-lumen element size as a fraction of the vessel's OWN ``d_bar`` -- the
+    #: resolution the model actually sees, since packs store positions as ``x / d_bar``.
+    #: Overrides ``mesh_lc`` wherever ``d_bar`` is known at meshing time.
+    #:
+    #: A fixed physical ``mesh_lc`` makes resolution a property of vessel size rather than of
+    #: the design.  Measured on the 2026-08-30 cohort, ``d_bar`` spans 3.9x (6.95-27.21 mm), so
+    #: ``h_nd`` spanned 4.1x at **spearman -0.965 against d_bar**, and node count +0.930: a small
+    #: vessel got a coarse graph, a large one cost 6x the compute for nothing.  The median landed
+    #: on deployment (0.94x) while only **57%** of vessels sat inside deployment's p10-p90 band.
+    #:
+    #: 0.0490 = 2 x 0.0245, deployment's median P2 spacing over 53 biochem anchor packs.  The 2x
+    #: is P2 elevation: it inserts a mid-side node per edge and halves every edge exactly
+    #: (verified at 0.500).  The corpus is generated P1 and elevated at load, so it has to be
+    #: meshed at twice deployment's spacing to land on it.
+    mesh_h_nd_target: float = 0.0490
+
     # Lumen-aware sizing.  `mesh_lc` alone is a uniform element size, and a severe stenosis
     # closes the lumen to ~1.6 mm (`width_min` 8 mm, `stenosis_factor_max` 0.4 on both walls),
     # so the throat used to get ~2 elements across.  COMSOL then fails to converge there: on the
@@ -316,6 +332,29 @@ class PhysicsConfig:
     a: float = 2.0  # Yasuda parameter
     # Canonical viscosity scale [Pa*s] used for ND label channel across all phases/models.
     mu_viscosity_nd_reference: float = 0.0035
+
+    #: COMSOL velocity/pressure element order for the Laminar Flow node (``order_fluid``):
+    #: 1 = P1+P1, 2 = P2+P1.
+    #:
+    #: **The synthetic corpus and deployment disagree, and it is in the channel the clot gate
+    #: reads.**  ``comsol_models/phase1_template.mph`` -- which every kinematics vessel is solved
+    #: with -- sets ``P1+P1``; every deployment vessel
+    #: (``comsol_models/phase2_nowound_*.mph``) is ``P2+P1``.  With linear velocity elements the
+    #: profile inside the first cell off the wall is linear by construction, so the wall shear
+    #: rate is an element average and its along-wall derivative ``dsrx`` -- the argument of the
+    #: gate branch that decides ~51% of firing wall nodes at deployment -- is largely whatever
+    #: the piecewise-linear field leaves behind.
+    #:
+    #: Measured over 47 deploy packs vs 60 synthetic (`scratch/tune/diag_corpus_gate_regime.py`),
+    #: wall nodes, MLS hops=3 on the labels::
+    #:
+    #:     wall sr median      synth  52.1    deploy  99.4      1.9x
+    #:     wall dsrx sd        synth  55.5    deploy 592.4     10.7x
+    #:     `dsrx < sgt` share  synth   0.0%   deploy  50.8%    of firing wall nodes
+    #:
+    #: `scripts/exp_comsol_element_order.py` measures how much of that is the element order.
+    #: It needs a COMSOL server, so it runs on the generation box, not here.
+    comsol_order_fluid: int = 1
 
     # Carreau momentum residual: if True, ∂μ/∂x does not backprop into predicted μ (PINN-style stability).
     detach_mu_for_ns_gradient: bool = True

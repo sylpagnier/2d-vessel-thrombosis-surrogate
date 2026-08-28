@@ -1471,3 +1471,311 @@ def test_repair_round_targets_only_the_rebuilt_vessels(tmp_path):
     # without overwrite the pool is already just the unsolved ones
     narrow, _ = select_anchor_candidates(meshes, out, allow_overwrite=False)
     assert sorted(p.stem for p in narrow) == sorted(broken)
+
+
+# --- mesh resolution is set in the units the model consumes -----------------------------------
+
+def test_mesh_resolution_is_independent_of_vessel_size(tmp_path):
+    """Resolution must be a property of the DESIGN, not of how big the vessel happens to be.
+
+    Packs store positions as `x / d_bar`, so `h_nd` is what the WLS stencil and the edge features
+    are built from.  A fixed physical `mesh_lc` made it a property of `d_bar` instead: measured
+    on the 2026-08-30 cohort, `d_bar` spanned 3.9x and `h_nd` spanned 4.1x at spearman **-0.965**
+    against it, leaving only 57% of vessels inside deployment's p10-p90 band while the median sat
+    at 0.94x.  `mesh_h_nd_target` sets the size as a fraction of each vessel's own `d_bar`.
+    """
+    import numpy as np
+    import pytest
+
+    gmsh = pytest.importorskip("gmsh")
+
+    from src.config import VesselConfig
+    from src.data_gen.lib.vessel_generator import VesselGenerator, _mesh_geometry
+    from src.data_gen.lib.vessel_geometry import compute_geometry_from_walls
+
+    cfg = VesselConfig(phase="kinematics")
+    cfg_dict = VesselGenerator(phase="kinematics")._cfg_dict()
+
+    def mesh_h_nd(width, idx):
+        n, length = 60, 0.1
+        x = np.linspace(0.0, length, n)
+        half = np.full(n, 0.5 * width)
+        top = np.stack([x, half], axis=1)
+        bot = np.stack([x, -half], axis=1)
+        geom = compute_geometry_from_walls(top, bot, idx=idx, unit="m")
+        gmsh.initialize()
+        try:
+            gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.option.setNumber("Mesh.Algorithm", 6)
+            gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+            gmsh.option.setNumber("Mesh.SaveGroupsOfNodes", 1)
+            gmsh.option.setNumber("Mesh.SaveAll", 0)
+            gmsh.option.setNumber("Mesh.MeshSizeFactor", cfg_dict["mesh_size_factor"])
+            _, ok, err = _mesh_geometry(geom, cfg_dict, str(tmp_path))
+            assert ok, err
+        finally:
+            gmsh.finalize()
+        lines = (tmp_path / f"vessel_{idx}.msh").read_text().splitlines()
+        i = lines.index("$Nodes")
+        nn = int(lines[i + 1])
+        pos = {}
+        for k in range(nn):
+            f = lines[i + 2 + k].split()
+            pos[int(f[0])] = (float(f[1]), float(f[2]))
+        j = lines.index("$Elements")
+        edges = set()
+        for k in range(int(lines[j + 1])):
+            f = lines[j + 2 + k].split()
+            if int(f[1]) != 2:
+                continue
+            nt = int(f[2])
+            a, b, c = (int(v) for v in f[3 + nt:6 + nt])
+            for u, v in ((a, b), (b, c), (c, a)):
+                edges.add((min(u, v), max(u, v)))
+        d_bar = float(geom.d_bar)
+        el = [np.hypot(pos[u][0] - pos[v][0], pos[u][1] - pos[v][1]) / d_bar for u, v in edges]
+        return float(np.median(el))
+
+    small = mesh_h_nd(0.008, 9101)     # 8 mm
+    large = mesh_h_nd(0.024, 9102)     # 24 mm, 3x the size
+
+    ratio = max(small, large) / min(small, large)
+    assert ratio < 1.15, (
+        f"h_nd {small:.4f} vs {large:.4f} ({ratio:.2f}x) across a 3x change in vessel size -- "
+        f"resolution is tracking d_bar instead of the target"
+    )
+    target = cfg.mesh_h_nd_target
+    for got in (small, large):
+        assert abs(got - target) / target < 0.15, (
+            f"h_nd {got:.4f} against target {target:.4f}"
+        )
+
+
+# --- selection: the metric, the packs, and what promotion ranks on -----------------------------
+
+def test_selection_metric_is_maximised_at_pred_equals_gt():
+    """A PERFECT flow field must read gate Jaccard 1.0 of its own ceiling.
+
+    The consumer differentiates a predicted field at ``hops=6`` and GT at ``hops=3``, and the
+    shipped ``PRED_DSRX_GAIN = 3.0`` was least-squares fitted against the OLD surrogate -- so it
+    carries that surrogate's ~1.35x under-resolution on top of the ~2.2x stencil attenuation.
+    Selecting a RETRAIN against it rewards a model for staying under-resolved: measured on the
+    deploy packs, feeding COMSOL's own velocity in as the prediction reads a median gate Jaccard
+    of **0.835 at gain 3.0 against 0.941 at the stencil-only gain**.
+
+    ``gate_jaccard_frac`` divides by the per-vessel ceiling, so it is 1.0 at the truth by
+    construction and a cohort mean of it cannot mix model quality with metric defect.
+    """
+    import numpy as np
+    import pytest
+    import torch
+
+    from src.utils.kinematics_select_packs import load_selection_packs
+    from src.utils.kinematics_selection import GAIN_STENCIL, wall_shear_selection_metrics
+
+    packs = load_selection_packs(limit=3, prior_source="analytic", verbose=False)
+    if not packs:
+        pytest.skip("no deploy selection packs on this machine")
+
+    for g in packs:
+        y = g.y[0] if g.y.dim() == 3 else g.y
+        m = wall_shear_selection_metrics(y[:, :2], g, gain=GAIN_STENCIL)
+        assert m, f"{g.graph_stem}: no metrics"
+        assert m["gate_jaccard_frac"] == pytest.approx(1.0, abs=1e-9), (
+            f"{g.graph_stem}: pred == GT must sit exactly at the ceiling"
+        )
+        # The ceiling itself is well below 1.0 and that is the metric's own defect, not a bug.
+        assert 0.3 <= m["gate_jaccard_ceiling"] <= 1.0
+        assert m["dsrx_corr"] > 0.9
+
+
+def test_selection_packs_exclude_every_sealed_vessel():
+    """Choosing a checkpoint on a vessel is tuning on it.
+
+    ``docs/SEALED_SPLIT.md``: FINAL_HALF is reserved for the project's one final read, and
+    VIZ_HALF may be shown but never used to select or tune.
+    """
+    from src.core_physics.wall_cohort_splits import DEV, FIT, SEALED, VIZ_RELEASED
+    from src.utils.kinematics_select_packs import selection_pack_stems
+
+    stems = set(selection_pack_stems())
+    assert not (stems & set(SEALED)), sorted(stems & set(SEALED))
+    assert not (stems & set(VIZ_RELEASED)), sorted(stems & set(VIZ_RELEASED))
+    assert stems <= (set(FIT) | set(DEV))
+    assert len(stems) >= 15
+
+
+def test_selection_packs_default_to_deploy_legal_priors(monkeypatch):
+    """`resolve_prior_source` defaults to "stored", and on these packs that IS the CFD solution.
+
+    A gate Jaccard read off the s17 Z2 leak measures nothing: the analytic-prior arm posts
+    rel-L2 0.02 that way against its true 0.147.
+    """
+    import pytest
+
+    from src.utils.kinematics_select_packs import load_selection_packs
+
+    monkeypatch.delenv("SPECIES_PRIOR_SOURCE", raising=False)
+    packs = load_selection_packs(limit=2, verbose=False)
+    if not packs:
+        pytest.skip("no deploy selection packs on this machine")
+    for g in packs:
+        y = g.y[0] if g.y.dim() == 3 else g.y
+        rel = float((g.x[:, 11:13] - y[:, :2]).norm() / y[:, :2].norm().clamp(min=1e-30))
+        assert rel > 0.05, f"{g.graph_stem}: prior block is the CFD solution (rel-L2 {rel:.4f})"
+
+
+# --- the corpus's own labels: what P2 elevation costs the gate's dominant branch ---------------
+
+def test_elevation_drops_the_dead_wls_operators_without_changing_the_graph():
+    """`V`/`W`/`M_inv` are 47% of an elevated graph and nothing in training reads them.
+
+    `graph_gradient_operators` defaults to MLS and rebuilds from positions + connectivity;
+    the stored arrays are read only under `BIOCHEM_GRAD_OPERATOR=legacy`.  Keeping them is also
+    the B13 hazard -- an operator that no longer matches the graph stored beside it.
+    """
+    import torch
+
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+
+    d = _load_first_kine_pack()
+    keep = elevate_to_p2(d, keep_wls=True)
+    drop = elevate_to_p2(d, keep_wls=False)
+
+    assert all(hasattr(keep, k) for k in ("V", "W", "M_inv"))
+    assert not any(hasattr(drop, k) for k in ("V", "W", "M_inv"))
+    # Everything the model consumes is bit-identical, width derivatives included.
+    assert torch.equal(keep.x, drop.x)
+    assert torch.equal(keep.edge_index, drop.edge_index)
+    assert int(keep.num_nodes) == int(drop.num_nodes)
+
+
+def test_band_shear_terms_are_zero_at_the_labels_in_both_band_modes(monkeypatch):
+    """`l_band_sr` / `l_band_dsrx` must vanish when the prediction IS the ground truth.
+
+    That is the well-posedness statement for the corner-view arm: moving where the shear terms
+    are evaluated must not move their optimum.
+    """
+    import torch
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+    from src.utils.anchor_mask import anchor_node_mask
+    from src.utils.kinematics_physics_terms import corner_view, wall_band_shear_losses
+
+    monkeypatch.setenv("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1")
+    kern = PhysicsKernels(phys_cfg=PhysicsConfig(phase="kinematics"))
+    e = elevate_to_p2(_load_first_kine_pack(), keep_wls=False)
+    nia = anchor_node_mask(e)
+    pred = torch.zeros(int(e.num_nodes), 8)
+    pred[:, : e.y.shape[1]] = e.y
+    pred.requires_grad_(True)
+
+    assert corner_view(e) is not None, "an elevated graph must expose its P1 corner view"
+
+    for mode in ("0", "1"):
+        monkeypatch.setenv("KINEMATICS_BAND_ON_CORNERS", mode)
+        l_sr, l_dsrx, l_gate, _l_floor = wall_band_shear_losses(
+            pred, e, kern, hops=3, node_is_anchor=nia
+        )
+        assert float(l_sr) < 1e-8, f"mode={mode} l_band_sr={float(l_sr)}"
+        assert float(l_dsrx) < 1e-8, f"mode={mode} l_band_dsrx={float(l_dsrx)}"
+        # The soft gate has a finite temperature, so its floor at the truth is small, not zero.
+        assert float(l_gate) < 0.25, f"mode={mode} l_band_gate={float(l_gate)}"
+
+
+def _load_first_kine_pack():
+    import pytest
+    import torch
+
+    from src.utils.kinematics_paths import kinematics_training_graph_dir
+
+    files = sorted(kinematics_training_graph_dir(rheology="carreau").glob("vessel_*.pt"))
+    if not files:
+        pytest.skip("no synthetic kinematics packs on this machine")
+    return torch.load(files[0], map_location="cpu", weights_only=False)
+
+
+def test_wall_shear_prior_floor_is_one_sided(monkeypatch):
+    """The prior must be a floor in the SHEAR channel, and only a floor.
+
+    Zero when the prediction is the ground truth, zero when it IS the prior (it sits exactly on
+    the floor by construction), positive only when the model is worse than the field it was
+    handed.  This exists because T6's velocity-only floor is cleared by a surrogate that still
+    lands 8 points of gate Jaccard behind that same prior (§16.4).
+    """
+    import torch
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.data_gen.lib.legal_priors import apply_prior_source
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+    from src.utils.anchor_mask import anchor_node_mask
+    from src.utils.kinematics_physics_terms import wall_band_shear_losses
+
+    monkeypatch.setenv("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1")
+    monkeypatch.setenv("KINEMATICS_BAND_SHEAR_FLOOR", "1")
+    monkeypatch.setenv("KINEMATICS_BAND_ON_CORNERS", "0")
+    kern = PhysicsKernels(phys_cfg=PhysicsConfig(phase="kinematics"))
+    e = apply_prior_source(elevate_to_p2(_load_first_kine_pack(), keep_wls=False), "analytic")
+    nia = anchor_node_mask(e)
+
+    def floor_at(uv):
+        pred = torch.zeros(int(e.num_nodes), 8)
+        pred[:, : e.y.shape[1]] = e.y
+        pred[:, :2] = uv
+        pred.requires_grad_(True)
+        return float(wall_band_shear_losses(pred, e, kern, hops=3, node_is_anchor=nia)[3])
+
+    assert floor_at(e.y[:, :2]) == 0.0, "the truth cannot be worse than the prior"
+    assert floor_at(e.x[:, 11:13]) == 0.0, "the prior sits exactly on its own floor"
+    assert floor_at(0.5 * e.y[:, :2]) > 0.0, "a shrunk field must be penalised"
+
+    monkeypatch.setenv("KINEMATICS_BAND_SHEAR_FLOOR", "0")
+    assert floor_at(0.5 * e.y[:, :2]) == 0.0, "unset must be a no-op"
+
+
+def test_deploy_training_packs_are_disjoint_from_selection_and_carry_no_chemistry(monkeypatch):
+    """Training on the deploy packs is only legitimate if two things hold.
+
+    1. **Disjoint from selection.**  A vessel cannot be both trained on and used to choose the
+       checkpoint; that would measure memorisation, not transfer.  Both halves of the old SEALED
+       set stay out on top of that.
+    2. **No chemistry leaks into a kinematics label.**  These packs carry `biochem_v1_16ch`:
+       `u_nd, v_nd, p_nd, mu_eff_nd` and then twelve species.  `PredChannels.WSS` is 4, so an
+       untruncated `y` would have supervised the WSS head against `RP_log1p_nd` at weight 5.35.
+    """
+    import pytest
+    import torch
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.core_physics.wall_cohort_splits import SEALED, VIZ_RELEASED
+    from src.utils.kinematics_select_packs import (
+        load_deploy_training_packs, selection_subset_stems,
+    )
+
+    monkeypatch.setenv("KINEMATICS_SELECT_MAX_GRAPHS", "8")
+    monkeypatch.setenv("SPECIES_PRIOR_SOURCE", "analytic")
+    packs = load_deploy_training_packs(verbose=False)
+    if not packs:
+        pytest.skip("no deploy packs on this machine")
+
+    stems = {p.graph_stem for p in packs}
+    assert not (stems & set(selection_subset_stems())), sorted(stems & set(selection_subset_stems()))
+    assert not (stems & set(SEALED)), sorted(stems & set(SEALED))
+    assert not (stems & set(VIZ_RELEASED)), sorted(stems & set(VIZ_RELEASED))
+
+    kern = PhysicsKernels(phys_cfg=PhysicsConfig(phase="kinematics"))
+    for g in packs:
+        assert g.y.shape[1] == 4, f"{g.graph_stem}: y has {g.y.shape[1]} channels, expected 4"
+        assert bool(g.is_anchor.all()), f"{g.graph_stem}: COMSOL labels every node here"
+        # the prior block must not be the CFD solution
+        rel = float((g.x[:, 11:13] - g.y[:, :2]).norm() / g.y[:, :2].norm().clamp(min=1e-30))
+        assert rel > 0.05, f"{g.graph_stem}: leaked prior (rel-L2 {rel:.4f})"
+        pred = torch.zeros(int(g.num_nodes), 5)
+        pred[:, :4] = g.y
+        assert float(kern.wall_shear_stress_loss(pred, g)) == 0.0, (
+            f"{g.graph_stem}: the WSS term must self-disable on a 4-channel y"
+        )

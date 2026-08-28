@@ -1,0 +1,200 @@
+"""The graphs Stage-A is *selected* on: real deployment packs, never trained on.
+
+**Why this exists.**  Selection used to run only when ``KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS``
+and ``KINEMATICS_INCLUDE_PATIENT_ANCHORS`` were both set *and* clinical steady-kine sidecars
+existed under ``graphs_kinematics_anchors/``.  That directory is empty on this cohort, so the
+whole T7 selection block was skipped and the run fell back to promoting on
+``rel_l2 + 100 * continuity`` -- the metric RGP_DEQ_REPAIR_PLAN.md §10.3 measured as **not**
+predicting the clot outcome.  Observed in a smoke run: epoch 1 was saved as "best" with rel-L2
+0.578 -> 2.229, because continuity happened to fall.
+
+The steady sidecars are not needed.  ``graphs_biochem_anchors/*.pt`` are the deployment meshes
+themselves and carry COMSOL's ``t=0`` velocity in ``y[0]``, which is exactly what the clot stack
+consumes and what ``eval_deploy_flow_acceptance.py`` scores against.  Selecting on them closes
+the loop between the training run and the acceptance test.
+
+**Seal policy.**  These packs are used to *choose a checkpoint*, which is tuning.  So the pool
+excludes both halves of the old SEALED set -- FINAL_HALF (``007/013/031/043``) because it is
+reserved for the project's one final read, and VIZ_HALF (``001/010/014/042``) because
+``docs/SEALED_SPLIT.md`` allows showing those vessels and not selecting on them.  Everything
+else in FIT + DEV is fair game: Stage-A trains on synthetic vessels only.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+#: Deploy packs from an older extractor revision -- dead ``node_type`` and anomalous prior
+#: blocks (``patient002`` is the bit-identical s17 Z2 leak; the ``*_mirror_y`` copies read
+#: 0.06-0.45).  Excluded from selection so a stale pack cannot move a checkpoint choice.
+#: See PILOT_COHORT_RUNBOOK.md §6.
+STALE_EXTRACTOR_STEMS = ("patient002",)
+
+#: Scores 0.000 in every predicted-flow arm and is its own problem (`DEPLOY_FLOW_PLAN.md` §2).
+KNOWN_BAD_STEMS = ("patient018",)
+
+
+def selection_pack_dir(root: Path | None = None) -> Path:
+    from src.utils.paths import get_project_root
+
+    base = root if root is not None else get_project_root()
+    return base / "data/processed/graphs_biochem_anchors"
+
+
+def selection_pack_stems() -> list[str]:
+    """Deploy stems legal to select a Stage-A checkpoint on, deterministically ordered.
+
+    ``KINEMATICS_SELECT_PACK_STEMS`` overrides with an explicit comma list -- and is honoured
+    verbatim, seal policy included, because an override is a deliberate act.
+    """
+    raw = os.environ.get("KINEMATICS_SELECT_PACK_STEMS", "").strip()
+    if raw:
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    from src.core_physics.wall_cohort_splits import DEV, FIT, SEALED, VIZ_RELEASED
+
+    banned = set(SEALED) | set(VIZ_RELEASED) | set(STALE_EXTRACTOR_STEMS) | set(KNOWN_BAD_STEMS)
+    return sorted((set(FIT) | set(DEV)) - banned)
+
+
+def load_selection_packs(*, limit: int = 0, prior_source: str | None = None, verbose=True):
+    """Load the deploy packs used for selection, priors rewritten to the deploy-legal source.
+
+    Returns ``[]`` (never raises) when the directory is absent, so a machine without the deploy
+    packs still trains -- it just falls back to selecting on synthetic val, and says so.
+    """
+    import torch
+
+    from src.data_gen.lib.legal_priors import apply_prior_source, resolve_prior_source
+
+    d = selection_pack_dir()
+    if not d.is_dir():
+        if verbose:
+            print(f"[kin] WARN no deploy selection packs under {d}")
+        return []
+    # `resolve_prior_source` defaults to "stored", and on these packs the stored prior block is
+    # bit-identical to COMSOL's t=0 velocity on 43 of 43 vessels (the s17 Z2 leak).  A selection
+    # metric read off a leaked prior measures nothing -- the analytic-prior arm posts rel-L2
+    # 0.02 that way against its true 0.14 -- so the DEFAULT here is deploy-legal and "stored"
+    # has to be asked for by name.
+    source = (prior_source or resolve_prior_source(default="analytic") or "analytic").strip()
+    if source == "stored":
+        print("[kin] WARN selection packs are using the STORED prior block -- on these vessels "
+              "that is COMSOL's own t=0 velocity (s17 Z2). Any gate Jaccard read from it is "
+              "meaningless. Set SPECIES_PRIOR_SOURCE=analytic.")
+    stems = selection_pack_stems()
+    if limit and limit > 0:
+        stems = stems[:limit]
+    out, missing = [], []
+    for stem in stems:
+        f = d / f"{stem}.pt"
+        if not f.is_file():
+            missing.append(stem)
+            continue
+        try:
+            g = torch.load(f, map_location="cpu", weights_only=False)
+            y = getattr(g, "y", None)
+            if y is None or float(y[..., 0:2].abs().max()) == 0.0:
+                missing.append(stem)
+                continue
+            g = apply_prior_source(g, source)
+            g.graph_stem = stem
+            out.append(g)
+        except Exception as exc:
+            print(f"[kin] WARN selection pack {stem}: {type(exc).__name__}: {exc}")
+    if verbose:
+        print(f"[kin] Selection set: {len(out)} DEPLOY packs from {d.name} "
+              f"(prior_source={source}) -- {', '.join(g.graph_stem for g in out)}")
+        if missing:
+            print(f"[kin]   missing/unusable: {', '.join(missing)}")
+    return out
+
+
+def selection_subset_stems(cap: int = 0) -> list[str]:
+    """The stems a run actually selects on, i.e. what ``KINEMATICS_SELECT_MAX_GRAPHS`` keeps.
+
+    Strided, not the alphabetical prefix -- the first 8 deploy stems are the easy end of the
+    cohort (the analytic prior scores 32.5% of ceiling on the strided 8 against 36.7% on the
+    prefix 8 and 16.6% over all 25).  Mirrors ``_selection_metrics_on_graphs`` exactly so a
+    training pool can be held disjoint from it without the two definitions drifting apart.
+    """
+    import os as _os
+
+    ordered = selection_pack_stems()
+    if cap <= 0:
+        cap = int(_os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6") or 0)
+    if cap <= 0 or len(ordered) <= cap:
+        return ordered
+    step = max(1, len(ordered) // cap)
+    return ordered[::step][:cap]
+
+
+def load_deploy_training_packs(*, prior_source: str | None = None, verbose: bool = True):
+    """Deploy packs usable as TRAINING graphs -- the regime the synthetic corpus is missing.
+
+    The synthetic corpus's wall `dsrx` sits 10.7x below deployment and its `dsrx < sgt` gate
+    branch fires on 0.0% of wall nodes at the median, against 50.8% of firing nodes at
+    deployment (RGP_DEQ_REPAIR_PLAN.md §16.5).  These packs ARE the deployment regime, and
+    `y[0]` is COMSOL's own `t=0` velocity -- the same field the clot stack consumes.
+
+    The steady `graphs_kinematics_anchors/` sidecars that `KINEMATICS_INCLUDE_PATIENT_ANCHORS`
+    expects do not exist on this machine; this reads the deploy packs directly instead.
+
+    **Disjoint from selection by construction.**  Every stem the run selects on is excluded
+    here, along with both halves of the old SEALED set, so a training pool can never quietly
+    contain a vessel the checkpoint is chosen on.
+    """
+    import torch
+
+    from src.data_gen.lib.legal_priors import apply_prior_source, resolve_prior_source
+
+    d = selection_pack_dir()
+    if not d.is_dir():
+        return []
+    source = (prior_source or resolve_prior_source(default="analytic") or "analytic").strip()
+    from src.core_physics.wall_cohort_splits import DEV, FIT, SEALED, VIZ_RELEASED
+
+    banned = (set(SEALED) | set(VIZ_RELEASED) | set(STALE_EXTRACTOR_STEMS)
+              | set(KNOWN_BAD_STEMS) | set(selection_subset_stems()))
+    stems = sorted((set(FIT) | set(DEV)) - banned)
+    out = []
+    for stem in stems:
+        f = d / f"{stem}.pt"
+        if not f.is_file():
+            continue
+        try:
+            g = torch.load(f, map_location="cpu", weights_only=False)
+            y = getattr(g, "y", None)
+            if y is None:
+                continue
+            if y.dim() == 3:            # [T, N, C] biochem timeline -> the t=0 kinematics
+                g.y = y[0].contiguous()
+            if float(g.y[:, 0:2].abs().max()) == 0.0:
+                continue
+            # TRUNCATE to the four kinematics channels.  These packs carry
+            # `biochem_v1_16ch` -- `u_nd, v_nd, p_nd, mu_eff_nd` first, which is exactly the
+            # kine order, and then TWELVE CHEMISTRY SPECIES.  `PredChannels.WSS` is 4, so
+            # `wall_shear_stress_loss` would have supervised the WSS head against
+            # `RP_log1p_nd` at a weight of 5.35.  It already disables itself on
+            # `y.shape[1] <= 4`, so truncating is both the fix and the signal.
+            g.y = g.y[:, :4].contiguous()
+            ym = getattr(g, "y_valid_mask", None)
+            if torch.is_tensor(ym):
+                g.y_valid_mask = (ym[0] if ym.dim() == 3 else ym)[:, :4].contiguous()
+            # A graph-level `is_anchor` broadcasts to every node; these packs are fully
+            # labelled by COMSOL, so that is the truth rather than a fabrication.
+            g.is_anchor = torch.ones(int(g.num_nodes), dtype=torch.bool)
+            g = apply_prior_source(g, source)
+            g.graph_stem = stem
+            g.is_clinical_anchor = True
+            out.append(g)
+        except Exception as exc:
+            print(f"[kin] WARN deploy training pack {stem}: {type(exc).__name__}: {exc}")
+    if verbose:
+        print(f"[kin] Deploy TRAINING packs: {len(out)} (prior_source={source}); "
+              f"held out of training: {', '.join(sorted(banned & (set(FIT) | set(DEV))))}")
+    return out
+
+
+__all__ = ["load_deploy_training_packs", "load_selection_packs", "selection_pack_dir",
+           "selection_pack_stems", "selection_subset_stems"]

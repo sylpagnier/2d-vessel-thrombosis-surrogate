@@ -290,8 +290,33 @@ class AnchorGenerator:
             return True
         return AnchorGenerator._is_comsol_solver_failure(exc)
 
+    def _set_element_order(self, order: int | None = None) -> str:
+        """Set the Laminar Flow node's ``order_fluid`` (1 = P1+P1, 2 = P2+P1).
+
+        The kinematics template ships P1+P1 while every deployment vessel is solved P2+P1, and
+        that difference lands on the near-wall shear the clot gate reads -- see
+        ``PhysicsConfig.comsol_order_fluid`` for the measurement.  Returns the property group
+        that accepted the setting, or "" when the node does not expose one (older COMSOL
+        versions name it differently; a failure here must not abort a cohort).
+        """
+        want = int(self.phys_cfg.comsol_order_fluid if order is None else order)
+        ph = self.model.java.physics("spf")
+        for grp in ("ShapeProperty", "PhysicsShapeProperty"):
+            try:
+                ph.prop(grp).set("order_fluid", str(want))
+                logger.info(f"COMSOL discretization: order_fluid={want} (via {grp}).")
+                return grp
+            except Exception:
+                continue
+        logger.warning(
+            "Could not set order_fluid=%s: no known property group on physics 'spf'. "
+            "The template's own setting stands.", want
+        )
+        return ""
+
     def _set_global_physics_parameters(self):
         logger.info(f"Setting global physics in {self.phys_cfg.viscosity_model} mode.")
+        self._set_element_order()
 
         # Update Parameters (Global)
         self.model.parameter('rho_fluid', f'{self.phys_cfg.rho} [kg/m^3]')

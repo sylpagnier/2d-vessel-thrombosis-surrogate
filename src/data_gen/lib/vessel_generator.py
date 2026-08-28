@@ -841,8 +841,15 @@ def build_vessel_mesh(
         gmsh.finalize()
 
 
-def _gmsh_size_bounds(cfg_dict: Dict[str, Any], unit_scale: float) -> Tuple[float, float]:
+def _gmsh_size_bounds(cfg_dict: Dict[str, Any], unit_scale: float,
+                      d_bar: Optional[float] = None) -> Tuple[float, float]:
     """``(lc_min, lc_max)`` for Gmsh, in the mesh's own unit.
+
+    With ``d_bar``, the open-lumen size is ``mesh_h_nd_target * d_bar`` -- resolution set in the
+    non-dimensional units the model actually consumes, so every vessel lands on deployment's
+    spacing regardless of its physical size.  ``Mesh.MeshSizeFactor`` still multiplies what Gmsh
+    does with it, so the request is divided by it here; measured, achieved spacing then tracks
+    the request to within 1%.  Without ``d_bar`` it falls back to the fixed ``mesh_lc``.
 
     ``CharacteristicLengthMin`` and ``Max`` used to BOTH be set to ``mesh_lc``, which clamps
     every element to one size and makes the per-point ``lc`` passed to ``addPoint`` inert -- the
@@ -852,7 +859,12 @@ def _gmsh_size_bounds(cfg_dict: Dict[str, Any], unit_scale: float) -> Tuple[floa
     ``mesh_refine`` (default 1.0) scales the whole request down for a repair pass on a vessel
     COMSOL could not solve.
     """
-    lc_max = float(cfg_dict["mesh_lc"]) * unit_scale * float(cfg_dict.get("mesh_refine", 1.0))
+    h_nd = float(cfg_dict.get("mesh_h_nd_target", 0.0) or 0.0)
+    if d_bar and h_nd > 0.0:
+        size_factor = max(float(cfg_dict.get("mesh_size_factor", 1.0)), 1e-6)
+        lc_max = (h_nd * float(d_bar) / size_factor) * float(cfg_dict.get("mesh_refine", 1.0))
+    else:
+        lc_max = float(cfg_dict["mesh_lc"]) * unit_scale * float(cfg_dict.get("mesh_refine", 1.0))
     ratio = float(cfg_dict.get("mesh_lc_min_ratio", 0.12))
     return max(lc_max * ratio, 1e-12), lc_max
 
@@ -966,7 +978,11 @@ def _mesh_geometry(
     out = Path(output_dir)
     unit = str(cfg_dict.get("unit", "m"))
     unit_scale = 100.0 if unit == "cm" else 1.0
-    lc_min, lc = _gmsh_size_bounds(cfg_dict, unit_scale)
+    # Per VESSEL, not per session: `d_bar` varies 3.9x across a cohort, and the session-level
+    # bounds set in the worker cannot know it.
+    lc_min, lc = _gmsh_size_bounds(cfg_dict, unit_scale, d_bar=float(getattr(geom, "d_bar", 0.0)))
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc)
 
     top_coords = geom.top_coords
     bot_coords = geom.bot_coords
@@ -1381,6 +1397,7 @@ class VesselGenerator:
             "mesh_size_factor":   self.cfg.mesh_size_factor,
             "mesh_min_elems_across": self.cfg.mesh_min_elems_across,
             "mesh_lc_min_ratio":  self.cfg.mesh_lc_min_ratio,
+            "mesh_h_nd_target":   self.cfg.mesh_h_nd_target,
             "width_min":          self.cfg.width_min,
             "width_max":          self.cfg.width_max,
             "stenosis_factor_min": self.cfg.stenosis_factor_min,
