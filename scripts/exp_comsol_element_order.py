@@ -26,6 +26,9 @@ sys.path.insert(0, str(REPO))
 ap = argparse.ArgumentParser()
 ap.add_argument("--stems", default="vessel_0,vessel_5,vessel_7")
 ap.add_argument("--out", default="outputs/exp_element_order.json")
+ap.add_argument("--p2-nodes", action="store_true",
+                help="also evaluate COMSOL at the MID-SIDE coordinates and compare against the "
+                     "corner-mean labels the pipeline fabricates today")
 a = ap.parse_args()
 
 import meshio, numpy as np
@@ -42,6 +45,23 @@ vcfg = VesselConfig(phase="kinematics")
 mesh_dir = vcfg.mesh_input_dir
 
 
+
+
+
+def p2_node_set(pos, ei):
+    """``(pos_p2, ei_p2, mid_ends)`` -- corners then one mid-side per undirected edge.
+
+    Same convention as `src/data_gen/lib/p2_elevation.elevate_to_p2`: corner<->mid-side
+    half-edges only, no corner-corner edge, original corner indices preserved.
+    """
+    pairs = np.unique(np.sort(ei.T, axis=1), axis=0)
+    a, b = pairs[:, 0], pairs[:, 1]
+    n, m = pos.shape[0], pairs.shape[0]
+    mid = np.arange(n, n + m)
+    pos_p2 = np.vstack([pos, 0.5 * (pos[a] + pos[b])])
+    src = np.concatenate([a, mid, b, mid])
+    dst = np.concatenate([mid, a, mid, b])
+    return pos_p2, np.stack([src, dst]), pairs
 
 
 def wall_metrics(pos, ei, u, v, u_ref, d_bar, wall):
@@ -118,6 +138,36 @@ with AnchorGenerator(phase="kinematics", rheology="carreau") as gen:
                 continue
             row[f"order{order}"] = wall_metrics(pos / d_bar, ei, u_nd, v_nd, u_ref, d_bar, wall)
             row[f"order{order}"]["prop_group"] = grp
+
+            if a.p2_nodes:
+                # THE QUESTION THIS SCRIPT EXISTS FOR.  `KINEMATICS_ELEVATE_P2` sets every
+                # mid-side label to the mean of its two corners, which makes the field
+                # piecewise-linear along each half-edge BY CONSTRUCTION -- and `dsrx`, the gate
+                # branch that decides deployment, is a second derivative of it.  Ask COMSOL for
+                # the mid-side values instead and compare, on the SAME node set and operator.
+                pos2, ei2, pairs = p2_node_set(pos, ei)
+                wall2 = np.concatenate([wall, wall[pairs[:, 0]] & wall[pairs[:, 1]]])
+                u2, v2, _, _ = gen._evaluate_at_coords(pos2)
+                u2 = np.asarray(u2, float).reshape(-1) / u_ref
+                v2 = np.asarray(v2, float).reshape(-1) / u_ref
+                nan = ~np.isfinite(u2) | ~np.isfinite(v2)
+                if nan.any():   # a point that fell outside the domain keeps the corner mean
+                    u2[nan] = np.concatenate([u_nd, 0.5 * (u_nd[pairs[:, 0]] + u_nd[pairs[:, 1]])])[nan]
+                    v2[nan] = np.concatenate([v_nd, 0.5 * (v_nd[pairs[:, 0]] + v_nd[pairs[:, 1]])])[nan]
+                u_lin = np.concatenate([u_nd, 0.5 * (u_nd[pairs[:, 0]] + u_nd[pairs[:, 1]])])
+                v_lin = np.concatenate([v_nd, 0.5 * (v_nd[pairs[:, 0]] + v_nd[pairs[:, 1]])])
+                row[f"order{order}_p2_true"] = wall_metrics(
+                    pos2 / d_bar, ei2, u2, v2, u_ref, d_bar, wall2)
+                row[f"order{order}_p2_interp"] = wall_metrics(
+                    pos2 / d_bar, ei2, u_lin, v_lin, u_ref, d_bar, wall2)
+                row[f"order{order}_p2_midside_rel"] = float(
+                    np.abs(u2[len(u_nd):] - u_lin[len(u_nd):]).max()
+                    / max(np.abs(u_lin[len(u_nd):]).max(), 1e-30))
+                t = row[f"order{order}_p2_true"]; i = row[f"order{order}_p2_interp"]
+                print(f"  {stem} order={order} P2 nodes: TRUE dsrx_sd={t['dsrx_sd']:.4g} "
+                      f"sep={100*t['sep']:.2f}%   INTERP dsrx_sd={i['dsrx_sd']:.4g} "
+                      f"sep={100*i['sep']:.2f}%   ratio={t['dsrx_sd']/max(i['dsrx_sd'],1e-30):.2f}"
+                      f"   midside |du|max={row[f'order{order}_p2_midside_rel']:.3f}")
             print(f"  {stem} order={order}: " + "  ".join(
                 f"{k}={row[f'order{order}'][k]:.4g}" for k in
                 ("sr_med", "dsrx_sd", "fire", "low", "sep", "sep_only")))
