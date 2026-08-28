@@ -26,6 +26,7 @@ if __name__ == "__main__":
 from src.config import NodeFeat, PhysicsConfig, VesselConfig
 from src.data_gen.lib.mesh_wls import (
     gmsh_line_boundary_masks,
+    node_type_one_hot,
     precompute_wls_operators,
     solid_boundary_mask,
 )
@@ -85,9 +86,16 @@ def assemble_kinematics_graph_data(
     G_x: torch.Tensor,
     G_y: torch.Tensor,
 ) -> Data:
-    """Build the Kinematics/2 ``Data`` object written to ``*.pt`` (single code path for tests + ``process_file``).
+    """Build the Kinematics/2 ``Data`` object written to ``*.pt``.
 
-    Kinematics/2 graphs store sparse WLS gradient operators ``G_x`` / ``G_y`` for physics kernels.
+    ``G_x``/``G_y`` are **not stored by default**.  They are two ``(N, N)`` sparse tensors --
+    64.6 MB each on a 4k-node vessel, i.e. **98.4% of the pack** (131.3 MB -> 2.1 MB without
+    them) -- and nothing reads them: ``graph_gradient_operators`` defaults to MLS and rebuilds
+    from positions + connectivity, touching the stored operators only under
+    ``BIOCHEM_GRAD_OPERATOR=legacy``.  Storing them made a 250-vessel cohort a 33 GB transfer
+    instead of a 500 MB one.
+
+    Set ``KINEMATICS_STORE_G_OPERATORS=1`` to keep them for legacy reproduction.
     """
     data = Data(
         x=x_tensor,
@@ -107,9 +115,9 @@ def assemble_kinematics_graph_data(
         V=V,
         W=W,
         M_inv=M_inv,
-        G_x=G_x,
-        G_y=G_y,
     )
+    if os.environ.get("KINEMATICS_STORE_G_OPERATORS", "").strip().lower() in ("1", "true", "yes"):
+        data.G_x, data.G_y = G_x, G_y
     return attach_channel_metadata(
         data,
         x_schema=KINE_X_SCHEMA,
@@ -522,18 +530,36 @@ class MeshToGraph(MeshToGraphComplete):
 
         wss_prior = (mu_prior * gamma_dot_prior) * mask_solid.float()
 
-        grad_w_x = torch.sparse.mm(G_x, width_nd)
-        grad_w_y = torch.sparse.mm(G_y, width_nd)
-        width_d1 = grad_w_x * flow_dir_x.unsqueeze(1) + grad_w_y * flow_dir_y.unsqueeze(1)
-        grad2_w_x = torch.sparse.mm(G_x, width_d1)
-        grad2_w_y = torch.sparse.mm(G_y, width_d1)
-        width_d2 = grad2_w_x * flow_dir_x.unsqueeze(1) + grad2_w_y * flow_dir_y.unsqueeze(1)
+        # Take the width derivatives through the SAME operator every consumer uses
+        # (`wls_derivatives`, rank-aware with the deficient-row fill) rather than through the
+        # sparse `G_x`/`G_y` built here.  Two reasons: the sparse operators are otherwise dead
+        # weight on the pack (98.4% of its bytes, read only under BIOCHEM_GRAD_OPERATOR=legacy),
+        # and `width_d1`/`width_d2` are the only unnormalised inputs the encoder takes -- they
+        # should not be produced by a code path that nothing downstream shares.
+        from src.utils.math_operators import wls_derivatives
+
+        def _dir_deriv(field):
+            d = wls_derivatives(field.reshape(-1, 1), edge_index, N, V, W, M_inv)
+            return (d[:, 0, 0] * flow_dir_x + d[:, 1, 0] * flow_dir_y).reshape(-1, 1)
+
+        width_d1 = _dir_deriv(width_nd)
+        width_d2 = _dir_deriv(width_d1)
 
         # --- Final Assembly ---
+        # RGP_DEQ_REPAIR_PLAN.md B22.  These four channels were a literal `torch.zeros((N, 4))`
+        # placeholder here -- declared in KINE_X_SCHEMA, consumed by RGP_DEQ through
+        # NodeFeat.REST, and never populated on a single synthetic pack.  Measured: identically
+        # zero across the whole training corpus while the biochem deploy packs read 1.0, so the
+        # model trained with four dead inputs that are live at inference.  Regenerating the
+        # corpus does NOT fix that on its own; this line is why.
+        node_type = node_type_one_hot(
+            solid_boundary_mask(mask_wall, mask_wound), mask_inlet, mask_outlet
+        )
+
         x_tensor = torch.cat([
             pos_nd_tensor, sdf_tensor, torch.abs(1.0 - 2.0 * sdf_tensor),  # Pos, SDF, ShearPot
             wall_normal_vec,
-            torch.zeros((len(nodes), 4)),  # Node Type (Placeholder)
+            node_type,
             torch.full((len(nodes), 1), 1.0 if self.phys_cfg.viscosity_model == "carreau" else 0.0),
             u_prior.view(-1, 1), v_prior.view(-1, 1),  # Vectorized UV prior
             mu_prior.view(-1, 1), wss_prior.view(-1, 1),

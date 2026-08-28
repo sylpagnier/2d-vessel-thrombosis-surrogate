@@ -18,6 +18,7 @@ from src.data_gen.lib.biochem_comsol_datasets import (
     sample_coords_from_named_selection,
 )
 from src.data_gen.lib.centerline_utils import resolve_anchor_mesh_path
+from src.data_gen.lib.boundary_snap import boundary_snap_tol_cm as _boundary_snap_tol_cm
 from src.tools.prepare_biochem_anchors import scaffold_anchor_sidecars
 
 logger = logging.getLogger(__name__)
@@ -511,20 +512,6 @@ def mesh_has_gmsh_boundary_tags(mesh_path: Path) -> bool:
         return True
     except Exception:
         return False
-
-
-def _boundary_snap_tol_cm(coords_cm: np.ndarray) -> float:
-    """Distance (cm) to snap volume mesh nodes onto a COMSOL boundary dataset."""
-    raw = (os.environ.get("BIOCHEM_BOUNDARY_SNAP_CM") or "").strip()
-    if raw:
-        return float(raw)
-    pts = np.asarray(coords_cm[:, :2], dtype=np.float64)
-    if pts.shape[0] < 4:
-        return 0.01
-    tree = cKDTree(pts)
-    dist, _ = tree.query(pts, k=2)
-    nn = np.asarray(dist[:, 1], dtype=np.float64)
-    return max(0.002, 0.35 * float(np.median(nn)))
 
 
 def write_boundary_txt_from_mesh_snap_to_datasets(

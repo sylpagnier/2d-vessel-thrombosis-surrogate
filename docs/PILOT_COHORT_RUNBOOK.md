@@ -1,82 +1,109 @@
-# Pilot cohort runbook — generate on the COMSOL box, inspect here, then commit
+# Cohort runbook — generate on the COMSOL box, inspect here, then commit
 
 The full repair is in [`RGP_DEQ_REPAIR_PLAN.md`](RGP_DEQ_REPAIR_PLAN.md).  This is the operating
-procedure for the step before a full retrain: generate a **small** cohort on the COMSOL machine,
-move it, prove it is fit to train on, and workshop the recipe on it.
+procedure for the step before a retrain: generate a cohort on the COMSOL machine, move it, prove
+it is fit to train on, and workshop the recipe before committing.
 
-**Why a pilot at all.**  The stored corpus is stale in at least three independent ways
-(§9.1 stenosis tail, dead `node_type`, stale WLS operators), and every one of them was found by
-measuring a pack rather than by reading the generator.  A 24-vessel cohort costs a fraction of
-the solve time and exercises every one of those checks.
+**Why inspect at all.**  The previous corpus was stale in four independent ways — no
+severe-stenosis tail, dead `node_type`, WLS operators that did not match their own graphs, and
+a leaked prior block.  Every one was found by *measuring a pack*, none by reading the generator.
+Two of them (`node_type`, the stenosis tail) would have survived a regeneration unnoticed.
 
 ---
 
 ## 1. On the COMSOL machine — generate and solve
 
-`pipeline_kinematics` runs Gmsh → COMSOL → PyG graphs in one pass.  Two runs, because
-`--pathology-mode` is per-run and the random mode alone will not guarantee the severe-stenosis
-tail the deployment cohort actually fails in.
+Confirm the plan first.  This writes nothing and takes about a second:
 
 ```bash
-# A. 18 mixed vessels, random pathology  (L0/L1/L2 = 4/6/8, weighted to the pathological tier)
-python -m src.data_gen.pipeline_kinematics --batch --rheology carreau \
-    -n 18 --level-mix 4,6,8 --pathology-mode random \
-    --seed 20260828 --overwrite
-
-# B. 6 more, forced severe stenosis -- guarantees the failing regime is represented
-python -m src.data_gen.pipeline_kinematics --batch --rheology carreau \
-    -n 6 --level-mix 0,2,4 --pathology-mode max_stenosis \
-    --seed 20260829
+python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --dry-run
 ```
 
-Notes that matter:
+```
+--- DRY RUN: nothing will be written ---
+  rheology      carreau
+  vessels       250
+  levels        L0=100, L1=100, L2=50
+  pathology     random:0.72,max_stenosis:0.18,max_aneurysm:0.10
+  seed          20260828
+  mode          OVERWRITE
+  mix expands   {'random': 180, 'max_stenosis': 45, 'max_aneurysm': 25}
+```
 
-* **`--overwrite` only on run A.**  It restarts vessel indices at 0; passing it to B would
-  overwrite A.
-* Drop `--seed` for a random cohort, but record whatever seed you use — the preflight report is
-  only interpretable next to it.
-* Add `--num-workers N` to parallelise Gmsh.  `--skip-anchor` builds meshes and graphs without
-  the COMSOL solve, which is a useful 2-minute dry run to confirm the flags parse.
-* Output lands in `data/processed/graphs_kinematics/carreau/`.
+Then run it for real by dropping `--dry-run`:
 
-**Sanity-check on that machine before transferring** (CPU-only, seconds):
+```bash
+python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --num-workers 8
+```
+
+**One command, not two.**  `--pathology-mix` assigns a mode per vessel — weights as fractions,
+or exact counts summing to `-n` — and shuffles the assignment so pathology does not correlate
+with the geometry-level schedule.  Random sampling alone under-represents the severe-stenosis
+regime that deployment actually fails in, which is why this used to need a second run with a
+second seed and a second index range.  `--pathology-mode` still works for a single mode.
+
+**Generation now refuses to write into a populated cohort.**  Say `--overwrite` (replace,
+indices restart at 0) or `--append` (continue from the highest index on disk).  This exists
+because a 12-vessel smoke test replaced a 370-graph corpus and its meshes: `MeshToGraph.run()`
+clears every `*.pt` in its output directory before converting, and `data/` is gitignored, so
+there was nothing to restore from.
+
+```
+REFUSING TO GENERATE: the target cohort is not empty.
+  graphs :     8  in ...processed/graphs_kinematics/carreau
+  meshes :     8  in ...raw/kinematics/meshes
+
+Say which you mean:
+  --overwrite   replace the cohort (vessel indices restart at 0)
+  --append      add to it (indices continue from the highest on disk)
+```
+
+Other notes:
+
+* Drop `--seed` for a random cohort, but record whatever you use — a preflight report is only
+  interpretable next to its seed.
+* `--skip-anchor` builds meshes and graphs without the COMSOL solve: a fast way to confirm the
+  flags behave before spending solve time.
+* 250 vessels is roughly **500 MB** of graphs now that the dead sparse operators are no longer
+  stored.  It would have been ~33 GB.
+
+**Check it there before transferring** (CPU-only, seconds):
 
 ```bash
 python scripts/preflight_kine_cohort.py --src data/processed/graphs_kinematics/carreau --expect-p1
 ```
 
-If `severe-stenosis coverage` warns at 0%, the pathology run did not take and there is no point
-transferring — that is exactly the defect the current stored corpus has.
+If `severe-stenosis coverage` warns at 0%, the pathology mix did not take and there is nothing
+worth transferring — that is precisely the defect the old corpus carried.
 
 ---
 
-## 2. Shrink for transfer
+## 2. Transfer
 
-**98.4% of a pack is two tensors nothing reads.**  On a 4,019-node vessel:
+Packs written by the current builder are already slim: `G_x`/`G_y` are no longer stored, so this
+step is close to a no-op for a fresh cohort.  It still matters for anything generated earlier.
+
+```bash
+python scripts/slim_kine_packs.py --src data/processed/graphs_kinematics/carreau --out transfer_carreau --verify
+```
+
+On an older 4,019-node pack:
 
 ```
 G_x           64.61 MB   (N, N) sparse
 G_y           64.61 MB   (N, N) sparse
 everything     2.07 MB
-TOTAL        131.30 MB   ->  24 vessels = 3.15 GB
-after slim     2.07 MB   ->  24 vessels =   50 MB
+TOTAL        131.30 MB   ->  250 vessels = 33 GB
+after slim     2.07 MB   ->  250 vessels = 500 MB
 ```
 
-`graph_gradient_operators` defaults to MLS and builds from positions + connectivity; `G_x`/`G_y`
-are read only under `BIOCHEM_GRAD_OPERATOR=legacy`.
-
-```bash
-python scripts/slim_kine_packs.py \
-    --src data/processed/graphs_kinematics/carreau \
-    --out transfer_carreau --verify
-```
+`graph_gradient_operators` defaults to MLS and rebuilds from positions + connectivity; the
+stored operators are read only under `BIOCHEM_GRAD_OPERATOR=legacy`.
 
 `--verify` also reports whether each pack's stored WLS operator matches its own graph.  Expect
-notes here: on the current corpus **3 of 3 sampled packs do not match** (B13).  The tool
-deliberately does not "fix" that — dropping `V`/`W`/`M_inv` (`--drop-wls`) forces a correct
-rebuild on load, but that is a numerics decision, not something a copy tool should make.
-
-Copy `transfer_carreau/` across.
+notes on older packs — 3 of 3 sampled did not match (B13).  The tool deliberately does not "fix"
+that: `--drop-wls` would force a correct rebuild on load, but that is a numerics decision, not
+something a copy tool should make silently.
 
 ---
 
@@ -86,7 +113,7 @@ Copy `transfer_carreau/` across.
 python scripts/preflight_kine_cohort.py --src transfer_carreau --expect-p1
 ```
 
-Exit code 1 on any FAIL.  Each check is a bug that has already cost a run:
+Exit code 1 on any FAIL.  Every check is a bug that has already cost a run:
 
 | check | why it exists |
 |---|---|
@@ -94,69 +121,54 @@ Exit code 1 on any FAIL.  Each check is a bug that has already cost a run:
 | prior block is not the CFD solution | the s17 Z2 leak, bit-identical on 43/43 packs (§1a) |
 | `width_d2` within training range | 1e4+ means a stale WLS operator (B13) |
 | `wall_normal` populated | identically zero for a year; drives the GAT's attention biases |
-| `node_type` populated | **currently dead on both training corpora, live at deploy** |
-| severe-stenosis coverage | the stored corpus has 0% at ratio ≥ 2.0 against deployment's 14% |
+| `node_type` populated | was a hardcoded `torch.zeros((N, 4))` placeholder in the builder (B24) |
+| severe-stenosis coverage | the old corpus had 0% at ratio ≥ 2.0 against deployment's 14% |
 | `u_ref` overlaps deployment | BC range; currently fine, checked so it stays fine |
-
-Run it on the existing corpus first to see what a failing report looks like — it returns
-`1 FAIL, 1 WARN` today (dead `node_type`, no stenosis tail).
 
 ---
 
-## 4. Workshop the recipe on the pilot
+## 4. Workshop the recipe before committing
 
 ```bash
-# 1. calibrate the loss weights on the new cohort (no training runs; see s12)
 python scripts/calibrate_kine_loss_weights.py --graphs 8
+```
 
-# 2. a short run with the full launch config
-SPECIES_PRIOR_SOURCE=analytic \
-KINEMATICS_ELEVATE_P2=1 \
-KINEMATICS_COORD_MODE=centered \
-KINEMATICS_NORMALIZE_SHEAR_GRAD=1 \
-KINEMATICS_LOSS_WEIGHTS=outputs/kine_loss_weights.json \
-KINEMATICS_INCLUDE_PATIENT_ANCHORS=1 \
-KINEMATICS_VAL_EVERY=2 \
-KINEMATICS_SELECT_MAX_GRAPHS=6 \
-KINEMATICS_SELECT_PATIENCE=6 \
-python -m src.training.train_kinematics_predictor --epochs 20 --adam-epochs 20 \
-    --stage1-end-epoch 0 --stage2-end-epoch 0 --no-prompt
+Then a short run with the launch config (§12 of the repair plan; PowerShell users set these with
+`$env:NAME = "value"` rather than inline):
+
+```bash
+SPECIES_PRIOR_SOURCE=analytic KINEMATICS_ELEVATE_P2=1 KINEMATICS_COORD_MODE=centered KINEMATICS_NORMALIZE_SHEAR_GRAD=1 KINEMATICS_LOSS_WEIGHTS=outputs/kine_loss_weights.json KINEMATICS_INCLUDE_PATIENT_ANCHORS=1 KINEMATICS_SELECT_MAX_GRAPHS=6 KINEMATICS_SELECT_PATIENCE=6 python -m src.training.train_kinematics_predictor --epochs 20 --adam-epochs 20 --stage1-end-epoch 0 --stage2-end-epoch 0 --no-prompt
 ```
 
 Read the run by its one-line-per-validation summary:
 
 ```
-[kin] ep12   SELECT gateJ=0.281 dsrxR=+0.402 | relL2=0.183 div=2.1e-03 comp=0.394 | ...
+[kin] ep12   SELECT gateJ=0.281 dsrxR=+0.402 | relL2=0.183 div=2.1e-03 comp=0.394
 ```
 
-**`gateJ` first, deliberately.**  It is the only Stage-A metric measured to predict the clot
-model's own oracle-F1 (+0.918; `dsrxR` reads -0.073 within a flow arm, §10.3).  `relL2` is
-reported because it is cheap and familiar, not because it should drive a decision.
+**`gateJ` is first, deliberately.**  It is the only Stage-A metric measured to predict the clot
+model's own oracle-F1 (+0.918; `dsrxR` reads **-0.073** within a single flow arm, §10.3).
+`relL2` is reported because it is cheap and familiar, not because it should drive a decision.
 
-What "working" looks like on a 24-vessel pilot: `gateJ` moving off its starting value at all,
-and the run not aborting.  **Do not read a pilot's absolute numbers as a result** — 24 vessels
-is far below the cohort noise floor.  The pilot answers "does the pipeline run end-to-end and do
-the metrics respond", not "is the model good".
-
-Knobs for the workshop phase:
+Knobs for this phase:
 
 * `KINEMATICS_VAL_EVERY` — 2 by default (1 when total epochs ≤ 12).
 * `KINEMATICS_SELECT_MAX_GRAPHS` — 6 by default.  Each selection graph is a full 25-iteration
   Anderson solve, so this is the main validation cost.  Raise it for a final selection pass.
 * `KINEMATICS_SELECT_PATIENCE` — validations without selection-score improvement before the run
-  aborts.  **0 (off) by default**; set it for pilots so a dead run stops itself.
-* `KINEMATICS_MIN_GATE_JACCARD` / `KINEMATICS_MIN_DSRX_CORR` — promotion gates.  Leave unset on a
-  pilot; a 24-vessel cohort should not be promoting anything.
+  aborts.  Off by default; set it while workshopping so a dead run stops itself.
+* `KINEMATICS_MIN_GATE_JACCARD` / `KINEMATICS_MIN_DSRX_CORR` — promotion gates.  Leave them unset
+  while workshopping.
 
 ---
 
-## 5. Then, and only then
+## 5. Acceptance
 
 ```bash
 python scripts/eval_deploy_flow_acceptance.py --checkpoint <run>/kinematics_best.pth
 ```
 
-Baselines it must beat, on the real clot task (§10.4):
+Baselines to beat, on the real clot task (§10.4, mean oracle-F1 over 12 vessels):
 
 ```
 GT flow                    0.882
@@ -171,8 +183,11 @@ analytic prior alone       0.370
 * **7 deploy packs are from an older extractor revision**: `patient002` and all six `*_mirror_y`.
   They have dead `node_type` where the other 45 are live, and anomalous prior blocks
   (`patient002` is the bit-identical leak; the mirrors read 0.06–0.45).  `patient002` is in the
-  training pool.  Consider excluding or re-extracting all seven before they influence anything.
-* **The stored synthetic corpus is stale** — no severe stenosis, dead `node_type`, WLS operators
-  that do not match their graphs.  Regenerating fixes the first two by construction (§9.1).
+  training pool.  Consider excluding or re-extracting all seven.
 * **`patient018`** scores 0.000 in every predicted-flow arm and is its own problem
   (`DEPLOY_FLOW_PLAN.md` §2).
+* **The clinical steady-kine anchors** (`graphs_kinematics_anchors/carreau`) are what
+  `KINEMATICS_INCLUDE_PATIENT_ANCHORS=1` loads and what B14's geometry sync repairs.  If that
+  directory is missing, they are regenerable from the biochem COMSOL exports —
+  `biochem_extract_transfer.py` maps `kine.pt` to
+  `data/processed/graphs_kinematics_anchors/carreau/{stem}.pt`.

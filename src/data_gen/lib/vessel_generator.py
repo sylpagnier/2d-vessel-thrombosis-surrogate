@@ -221,6 +221,53 @@ _FORCED_MAX_PATHOLOGY_MODES = frozenset({"max_stenosis", "max_aneurysm", "straig
 _ANEURYSM_WALL_MODE_CHOICES = ("mirrored", "one")
 
 
+def parse_pathology_mix(spec, n, rng):
+    """Per-vessel pathology modes from a mix spec, e.g. ``"random:0.75,max_stenosis:0.25"``.
+
+    `--pathology-mode` is one mode for a whole run, so covering the severe-stenosis tail used to
+    need a second command with a second seed and a second index range -- easy to get wrong, and
+    the failure is silent (a cohort with no tail looks fine until the preflight reports 0%).
+
+    Values are weights: integers summing to ``n`` are used as exact counts, anything else is
+    allocated proportionally with the remainder going to the largest weight.  The assignment is
+    shuffled with the caller's RNG so modes are not correlated with vessel index -- which would
+    otherwise correlate them with the geometry-level schedule.
+    """
+    parts = []
+    for chunk in str(spec).split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, _, val = chunk.partition(":")
+        mode = normalize_pathology_mode(name.strip()) or "random"
+        try:
+            w = float(val) if val.strip() else 1.0
+        except ValueError:
+            raise ValueError(f"bad pathology-mix weight in {chunk!r}")
+        if w < 0:
+            raise ValueError(f"negative pathology-mix weight in {chunk!r}")
+        parts.append((mode, w))
+    if not parts:
+        return ["random"] * n
+
+    total = sum(w for _, w in parts)
+    if total <= 0:
+        return ["random"] * n
+    exact = all(float(w).is_integer() for _, w in parts) and int(total) == int(n)
+    counts = ([int(w) for _, w in parts] if exact
+              else [int(n * w / total) for _, w in parts])
+    short = int(n) - sum(counts)
+    if short:
+        counts[max(range(len(counts)), key=lambda i: parts[i][1])] += short
+
+    out = []
+    for (mode, _), c in zip(parts, counts):
+        out.extend([mode] * max(0, c))
+    out = out[: int(n)] + ["random"] * max(0, int(n) - len(out))
+    rng.shuffle(out)
+    return out
+
+
 def normalize_pathology_mode(mode: str | None) -> str | None:
     """Return a canonical pathology mode or ``None`` for default random sampling."""
     if mode is None:
@@ -1080,7 +1127,11 @@ class VesselGenerator:
         wound_at_pathology : if True, center wounds on the stenosis/aneurysm peak when present;
                              straight vessels keep the random ``wound_center_frac_range`` draw.
         """
-        pathology_mode = normalize_pathology_mode(pathology_mode)
+        # A mix spec (`a:0.7,b:0.3`) is expanded per vessel later; only a single mode is
+        # normalised here, or the whole spec would be rejected as an unknown mode.
+        _is_mix = bool(pathology_mode) and ("," in str(pathology_mode) or ":" in str(pathology_mode))
+        if not _is_mix:
+            pathology_mode = normalize_pathology_mode(pathology_mode)
         aneurysm_wall_mode = normalize_aneurysm_wall_mode(aneurysm_wall_mode)
         phys_cores  = os.cpu_count() or 1
         num_workers = max(1, phys_cores - 1) if num_workers is None else num_workers
@@ -1121,12 +1172,21 @@ class VesselGenerator:
 
         # Pre-sample everything in the main process
         per_vessel_levels = cohort_levels(n, level, level_mix, rng)
+        # `pathology_mode` may be a single mode (historical) or a mix spec -- see
+        # `parse_pathology_mix`.  A mix lets one command cover the severe-stenosis tail that
+        # random sampling under-represents, instead of a second run with a second seed.
+        if pathology_mode and ("," in str(pathology_mode) or ":" in str(pathology_mode)):
+            per_vessel_modes = parse_pathology_mix(pathology_mode, n, rng)
+            from collections import Counter as _C
+            logger.info("Pathology mix: %s", dict(_C(per_vessel_modes)))
+        else:
+            per_vessel_modes = [pathology_mode] * n
         all_params = [
             self._sample_one(
                 start_idx + i,
                 per_vessel_levels[i],
                 rng,
-                pathology_mode=pathology_mode,
+                pathology_mode=per_vessel_modes[i],
                 aneurysm_wall_mode=aneurysm_wall_mode,
                 wound_probability=wound_probability,
                 wound_at_pathology=wound_at_pathology,

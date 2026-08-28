@@ -426,6 +426,12 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
         help="Explicit per-level counts (must sum to -n); implies mixed cohort.",
     )
     p.add_argument(
+        "--pathology-mix", default=None,
+        help="Per-vessel mix, e.g. 'random:0.72,max_stenosis:0.18,max_aneurysm:0.10'. "
+             "Weights are fractions (or exact counts summing to -n). One command instead of "
+             "one run per mode; the assignment is shuffled so it does not correlate with the "
+             "geometry-level schedule. Overrides --pathology-mode.")
+    p.add_argument(
         "--pathology-mode",
         choices=("random", "max_stenosis", "max_aneurysm", "straight_max"),
         default="random",
@@ -455,7 +461,14 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
         metavar="N",
         help="With --both-rheologies: vessel count for carreau pass (falls back to -n).",
     )
-    p.add_argument("--overwrite", action="store_true", help="Start vessel indices at 0")
+    p.add_argument("--overwrite", action="store_true",
+                   help="Replace the cohort: vessel indices restart at 0. Required "
+                        "(or --append) when the target is already populated.")
+    p.add_argument("--append", action="store_true",
+                   help="Add to an existing cohort: indices continue from the highest "
+                        "on disk. Mutually exclusive with --overwrite.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the plan (counts, mix, target dirs) and exit without writing.")
     p.add_argument(
         "--seed",
         type=int,
@@ -594,6 +607,47 @@ def _batch_anchor_max_for_rheology(rheology: str, args: argparse.Namespace) -> i
     return int(args.anchor_max_new)
 
 
+def _assert_write_intent_declared(args, rheology: str) -> None:
+    """Refuse to generate into a populated cohort unless the caller said which they meant.
+
+    `--overwrite` restarts vessel indices at 0; without it `start_idx` is None and the
+    generator picks up from whatever is on disk.  Neither is wrong, but *neither is safe as a
+    default*: a run intended as a 12-vessel smoke test replaced a 370-graph corpus and its
+    meshes, and because `data/` is gitignored there was nothing to restore from.
+
+    So the caller must say `--overwrite` (replace) or `--append` (add to), and only when the
+    target is already populated.  A fresh directory needs neither.
+    """
+    from src.config import VesselConfig
+
+    cfg = VesselConfig(phase="kinematics")
+    graph_dir = cfg.graph_output_dir / rheology
+    mesh_dir = cfg.mesh_input_dir
+    n_graphs = len(list(graph_dir.glob("*.pt"))) if graph_dir.is_dir() else 0
+    n_meshes = len(list(mesh_dir.glob("vessel_*.msh"))) if mesh_dir.is_dir() else 0
+    if n_graphs == 0 and n_meshes == 0:
+        return
+    if args.overwrite or getattr(args, "append", False):
+        mode = "OVERWRITE (indices restart at 0)" if args.overwrite else "APPEND"
+        print(f"[i] target already holds {n_graphs} graphs / {n_meshes} meshes -> {mode}")
+        return
+    msg = [
+        "",
+        "REFUSING TO GENERATE: the target cohort is not empty.",
+        f"  graphs : {n_graphs:>5}  in {graph_dir}",
+        f"  meshes : {n_meshes:>5}  in {mesh_dir}",
+        "",
+        "Say which you mean:",
+        "  --overwrite   replace the cohort (vessel indices restart at 0)",
+        "  --append      add to it (indices continue from the highest on disk)",
+        "",
+        "`data/` is gitignored: an overwrite here is not recoverable.  If you want a",
+        "scratch cohort, generate into a copy of the tree rather than the live one.",
+        "",
+    ]
+    raise SystemExit(chr(10).join(msg))
+
+
 def _run_batch_for_phase(
     rheology: str,
     args: argparse.Namespace,
@@ -605,6 +659,7 @@ def _run_batch_for_phase(
     force_full_anchor_refresh = bool(not args.skip_vessel and bool(args.overwrite))
 
     if not args.skip_vessel:
+        _assert_write_intent_declared(args, rheology)
         assert num_vessels is not None
         level_mix = None
         level = int(args.level) if args.level is not None else 0
@@ -622,12 +677,38 @@ def _run_batch_for_phase(
         if args.bend_sign_mode:
             os.environ["KINEMATICS_BEND_SIGN_MODE"] = str(args.bend_sign_mode)
         bend_label = os.environ.get("KINEMATICS_BEND_SIGN_MODE", "bidirectional")
-        pathology_mode = normalize_pathology_mode(args.pathology_mode)
+        # A mix spec is passed through verbatim; `run_pipeline` expands it per vessel.
+        pathology_mode = (args.pathology_mix.strip() if args.pathology_mix
+                          else normalize_pathology_mode(args.pathology_mode))
         print(
             f"--- Vessel generation: rheology={rheology} levels={level_label} n={num_vessels} "
             f"seed={vessel_seed!r} bend_sign_mode={bend_label} "
             f"pathology={args.pathology_mode} ---\n"
         )
+        if getattr(args, "dry_run", False):
+            # Print the plan and stop. The cheapest way to confirm flags parse the way you
+            # think before committing Gmsh + COMSOL time to 250 vessels.
+            from src.config import VesselConfig as _VC
+
+            _cfg = _VC(phase="kinematics")
+            _mix = (args.pathology_mix.strip() if args.pathology_mix
+                    else (args.pathology_mode or "random"))
+            print("--- DRY RUN: nothing will be written ---")
+            print(f"  rheology      {rheology}")
+            print(f"  vessels       {num_vessels}")
+            print(f"  levels        {level_label}")
+            print(f"  pathology     {_mix}")
+            print(f"  seed          {vessel_seed!r}")
+            print(f"  meshes  ->    {_cfg.mesh_input_dir}")
+            print(f"  graphs  ->    {_cfg.graph_output_dir / rheology}")
+            print(f"  mode          {'OVERWRITE' if args.overwrite else ('APPEND' if getattr(args, 'append', False) else 'fresh')}")
+            if args.pathology_mix:
+                import numpy as _np
+                from collections import Counter as _C
+                from src.data_gen.lib.vessel_generator import parse_pathology_mix as _ppm
+                _modes = _ppm(args.pathology_mix, num_vessels, _np.random.default_rng(vessel_seed or 0))
+                print(f"  mix expands   {dict(_C(_modes))}")
+            return
         vg.run_pipeline(
             n=num_vessels,
             level=level,

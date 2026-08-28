@@ -940,3 +940,74 @@ def test_early_abort_is_scored_on_the_selection_metric_not_rel_l2():
     assert i > 0, "no early-abort path"
     window = src[max(0, i - 900) : i + 300]
     assert "selection_score" in window, "early abort is not scored on the selection metric"
+
+
+# --- generation pipeline: guard, mix, and the channels it writes ------------------------------
+
+def test_generation_refuses_a_populated_cohort_without_declared_intent():
+    """A 12-vessel smoke test replaced a 370-graph corpus and its meshes.  `data/` is gitignored,
+    so there was nothing to restore from.  Intent must be explicit."""
+    import argparse
+
+    from src.data_gen.pipeline_kinematics import _assert_write_intent_declared
+
+    args = argparse.Namespace(overwrite=False, append=False)
+    try:
+        _assert_write_intent_declared(args, "carreau")
+    except SystemExit as exc:
+        assert "REFUSING TO GENERATE" in str(exc)
+        assert "--overwrite" in str(exc) and "--append" in str(exc)
+    else:
+        graph_dir = REPO / "data" / "processed" / "graphs_kinematics" / "carreau"
+        mesh_dir = REPO / "data" / "raw" / "kinematics" / "meshes"
+        populated = (graph_dir.is_dir() and any(graph_dir.glob("*.pt"))) or (
+            mesh_dir.is_dir() and any(mesh_dir.glob("vessel_*.msh")))
+        assert not populated, "guard permitted generation into a populated cohort"
+
+    for flag in ("overwrite", "append"):
+        ok = argparse.Namespace(overwrite=False, append=False)
+        setattr(ok, flag, True)
+        _assert_write_intent_declared(ok, "carreau")   # must not raise
+
+
+def test_pathology_mix_expands_per_vessel_and_covers_the_tail():
+    """One command instead of one run per mode.  Random sampling alone under-represents the
+    severe-stenosis regime that deployment actually fails in."""
+    import numpy as np
+
+    from src.data_gen.lib.vessel_generator import parse_pathology_mix
+
+    modes = parse_pathology_mix("random:0.72,max_stenosis:0.18,max_aneurysm:0.10", 250,
+                                np.random.default_rng(0))
+    assert len(modes) == 250
+    from collections import Counter
+
+    c = Counter(modes)
+    assert c["max_stenosis"] == 45 and c["max_aneurysm"] == 25 and c["random"] == 180
+
+    # exact counts summing to n are honoured verbatim
+    c2 = Counter(parse_pathology_mix("random:18,max_stenosis:4,max_aneurysm:2", 24,
+                                     np.random.default_rng(0)))
+    assert c2["random"] == 18 and c2["max_stenosis"] == 4 and c2["max_aneurysm"] == 2
+
+    # a single mode still works
+    assert set(parse_pathology_mix("random", 10, np.random.default_rng(0))) == {"random"}
+
+
+def test_builder_no_longer_writes_a_node_type_placeholder():
+    """B22.  `mesh_to_graph` had a literal `torch.zeros((len(nodes), 4))  # Node Type
+    (Placeholder)`.  Regenerating the corpus would NOT have fixed the dead channel -- this line
+    is why.  It is live at deploy and was identically zero across all training data."""
+    src = (REPO / "src" / "data_gen" / "lib" / "mesh_to_graph.py").read_text(encoding="utf-8")
+    assert "Node Type (Placeholder)" not in src, "the node_type placeholder is back"
+    assert "node_type_one_hot(" in src, "the builder does not populate node_type"
+
+
+def test_builder_does_not_store_the_dead_sparse_operators_by_default():
+    """`G_x`/`G_y` are 98.4% of a pack and are read only under BIOCHEM_GRAD_OPERATOR=legacy.
+    At 250 vessels that is a 33 GB transfer instead of 500 MB."""
+    src = (REPO / "src" / "data_gen" / "lib" / "mesh_to_graph.py").read_text(encoding="utf-8")
+    assert "KINEMATICS_STORE_G_OPERATORS" in src, "storing G_x/G_y is not opt-in"
+    i = src.find("data.G_x, data.G_y = G_x, G_y")
+    assert i > 0, "the opt-in path is missing"
+    assert "KINEMATICS_STORE_G_OPERATORS" in src[max(0, i - 300):i]

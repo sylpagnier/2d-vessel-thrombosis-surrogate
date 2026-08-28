@@ -21,6 +21,11 @@ from src.data_gen.lib.kinematics_graph_builder import (
     resolve_d_bar_si_from_sidecar_or_inlet,
 )
 from src.utils.units import MESH_UNIT_CM, assert_mesh_unit
+from src.data_gen.lib.boundary_snap import boundary_snap_tol_m
+
+# Inlet/outlet/wall must land on a real mesh line. Wound is optional on nowound packs.
+CSV_MATCH_RATE_MIN = 0.30
+MIN_REQUIRED_VERTEX_HITS = 5
 
 def validate_graph_physical_integrity(data: Data, stem: str, avg_flux_imbalance: float) -> None:
     """Sanity check that the exported graph fields fall within physical boundaries."""
@@ -231,11 +236,14 @@ class PatientDataExtractor:
         return {
             "n_csv_unique": 0,
             "n_vertex_hits": 0,
+            "n_csv_matched": 0,
             "vertex_hit_rate": 0.0,
+            "csv_match_rate": 0.0,
             "unmapped_ratio": 1.0 if missing else 0.0,
             "d_median_m": float("nan"),
             "d_p90_m": float("nan"),
             "d_max_m": float("nan"),
+            "vertex_tol_m": float("nan"),
             "p2_inferred": False,
             "status": "missing" if missing else "empty",
         }
@@ -247,129 +255,141 @@ class PatientDataExtractor:
         num_nodes,
         *,
         mesh_edge_scale_m: float | None = None,
-        vertex_tol_m: float = 1e-5,
+        vertex_tol_m: float | None = None,
         unit_floor_m: float = 1.0e-3,
+        required: bool = True,
     ):
         """Map COMSOL boundary coords to mesh-vertex indices, with health diagnostics.
 
-        Returns ``(mask, diagnostics)``. ``diagnostics`` is a small ``dict`` recording
-        the nearest-vertex distance distribution, the vertex-hit rate, and a
-        ``p2_inferred`` flag set when the unmapped half of the export sits at
-        ~½ ``mesh_edge_scale_m`` (textbook signature of COMSOL exporting P2
-        Lagrange mid-edge nodes against a P1 mesh).
+        Snap distance is ``boundary_snap_tol_m`` (0.55 * mesh edge, min 20 um) unless
+        ``vertex_tol_m`` is passed. That accepts slanted/curved inlets whose geometry
+        samples sit a fraction of an edge off the volume mesh (healthy COMSOL; the
+        old 10 um remap dropped them) and still rejects unit-frame bugs and sparse
+        Dirichlet lines.
 
-        Three-tier policy:
-
-        1. **Hard error** if ``d_median > unit_floor_m`` (median residual that
-           large can only be a unit/coordinate-frame bug, *not* a P2 expansion).
-        2. **Hard error** if zero vertex matches were found at ``vertex_tol_m``
-           and the file had unique COMSOL coords (the original guard, kept).
-        3. **Loud warning** if ``vertex_hit_rate < 0.30`` (the mesh genuinely
-           doesn't cover the wall vertices that COMSOL exported).
-        4. **Info note** if a P2 export is inferred -- this is the common,
-           benign case and should not look like an alarm.
-        5. **Plain warning** otherwise when ``unmapped_ratio > 0.10``.
+        Required boundaries (inlet/outlet/wall): missing, empty, csv_match_rate
+        below ``CSV_MATCH_RATE_MIN``, or fewer than ``MIN_REQUIRED_VERTEX_HITS``
+        unique mesh vertices are hard errors. Wound is optional on nowound packs.
         """
         mask = torch.zeros(num_nodes, dtype=torch.bool)
+        tol_m = (
+            float(vertex_tol_m)
+            if vertex_tol_m is not None
+            else boundary_snap_tol_m(mesh_edge_scale_m=mesh_edge_scale_m)
+        )
 
         if not file_path.exists():
-            return mask, self._empty_boundary_diagnostics(missing=True)
+            diag = self._empty_boundary_diagnostics(missing=True)
+            diag["vertex_tol_m"] = tol_m
+            if required:
+                raise ValueError(
+                    f"[ERR] {file_path.name}: required boundary file is missing."
+                )
+            return mask, diag
 
         bnd_df = pd.read_csv(file_path, comment='%', sep=r'\s+', header=None)
 
-        # USE CENTRALIZED SCALE
         bnd_coords = np.unique(bnd_df.iloc[:, -2:].values, axis=0) * self.phys_cfg.cm_to_m
         n_unique = int(len(bnd_coords))
         if n_unique == 0:
-            return mask, self._empty_boundary_diagnostics(missing=False)
+            diag = self._empty_boundary_diagnostics(missing=False)
+            diag["vertex_tol_m"] = tol_m
+            if required:
+                raise ValueError(
+                    f"[ERR] {file_path.name}: required boundary file has no coordinates."
+                )
+            return mask, diag
 
         distances, indices = tree.query(bnd_coords)
         d_median = float(np.median(distances))
         d_p90 = float(np.percentile(distances, 90))
         d_max = float(distances.max())
 
-        # 1) Unit / coordinate-frame sanity floor: a real bug, not a P2 expansion.
         if d_median > unit_floor_m:
             raise ValueError(
-                f"\nCRITICAL ERROR: median nearest-vertex distance for {file_path.name} "
-                f"is {d_median * 1e3:.3f} mm (> {unit_floor_m * 1e3:.3f} mm).\n"
-                f"This usually means the COMSOL export is in a different unit / "
-                f"coordinate frame than the mesh.\n"
-                f"Verify: boundary export is in cm, same origin/axes as the .nas mesh."
+                f"[ERR] {file_path.name}: median nearest-vertex distance "
+                f"{d_median * 1e3:.3f} mm > {unit_floor_m * 1e3:.3f} mm. "
+                "Usually a unit / coordinate-frame mismatch (export cm vs mesh)."
             )
 
-        valid_matches = indices[distances < vertex_tol_m]
-        n_vertex_hits = int(len(np.unique(valid_matches)))
-        vertex_hit_rate = n_vertex_hits / n_unique
+        matched = distances <= tol_m
+        n_csv_matched = int(np.count_nonzero(matched))
+        csv_match_rate = float(n_csv_matched) / float(n_unique)
+        valid_matches = indices[matched]
+        n_vertex_hits = int(len(np.unique(valid_matches))) if n_csv_matched else 0
+        vertex_hit_rate = float(n_vertex_hits) / float(n_unique)
+        unmapped_ratio = 1.0 - csv_match_rate
 
-        # 2) No vertex matches at all -- existing hard error, sharper diagnostic.
-        if n_vertex_hits == 0:
+        if n_csv_matched == 0:
             raise ValueError(
-                f"\nCRITICAL ERROR: zero boundary nodes mapped for {file_path.name}!\n"
-                f"Attempted to map {n_unique} unique COMSOL coords; nearest "
-                f"distances span [{distances.min() * 1e6:.1f}, {d_max * 1e6:.1f}] um, "
-                f"none within the {vertex_tol_m * 1e6:.1f} um vertex tolerance.\n"
-                f"Verify that boundary exports use the same units (cm) as the domain export."
+                f"[ERR] {file_path.name}: zero of {n_unique} COMSOL coords matched a "
+                f"mesh vertex within {tol_m * 1e6:.1f} um "
+                f"(nearest [{float(distances.min()) * 1e6:.1f}, {d_max * 1e6:.1f}] um). "
+                "Check that boundary exports use the same units (cm) as the mesh."
             )
 
         mask[valid_matches] = True
-        unmapped_ratio = 1.0 - vertex_hit_rate
 
-        # P2 (quadratic-element) inference: the unmapped cluster sits at ~edge/2.
         p2_inferred = False
         if (
             mesh_edge_scale_m is not None
             and unmapped_ratio > 0.10
-            and vertex_hit_rate >= 0.30
+            and csv_match_rate >= CSV_MATCH_RATE_MIN
         ):
-            far = distances[distances >= 5 * vertex_tol_m]
+            far = distances[~matched]
             if far.size > 0:
                 far_median = float(np.median(far))
                 lo = 0.30 * mesh_edge_scale_m
                 hi = 0.70 * mesh_edge_scale_m
                 p2_inferred = lo <= far_median <= hi
 
-        # 3) Loud warning: mesh genuinely lacks the wall vertices.
-        if vertex_hit_rate < 0.30:
-            print(
-                f"⚠️ {file_path.name}: only {vertex_hit_rate:.1%} of {n_unique} "
-                f"COMSOL boundary coords matched a mesh vertex within "
-                f"{vertex_tol_m * 1e6:.0f} um (median residual {d_median * 1e6:.1f} um, "
-                f"max {d_max * 1e6:.1f} um). The mesh may not contain the wall "
-                f"vertices COMSOL is exporting; check that the .nas mesh and the "
-                f"COMSOL geometry share the same vertex set."
+        unhealthy = csv_match_rate < CSV_MATCH_RATE_MIN or (
+            required and n_vertex_hits < MIN_REQUIRED_VERTEX_HITS
+        )
+        if unhealthy:
+            msg = (
+                f"[ERR] {file_path.name}: unhealthy boundary map -- "
+                f"csv_match_rate={csv_match_rate:.1%} ({n_csv_matched}/{n_unique} "
+                f"within {tol_m * 1e6:.0f} um), unique mesh vertices={n_vertex_hits} "
+                f"(min {MIN_REQUIRED_VERTEX_HITS} for required BCs), "
+                f"median residual {d_median * 1e6:.1f} um, max {d_max * 1e6:.1f} um."
             )
+            if required:
+                raise ValueError(msg)
+            print(msg, flush=True)
         elif p2_inferred:
-            # 4) Benign P2 export -- one informational line, no alarm bell.
-            far_median_um = float(
-                np.median(distances[distances >= 5 * vertex_tol_m])
-            ) * 1e6
+            far_median_um = (
+                float(np.median(distances[~matched])) * 1e6 if np.any(~matched) else 0.0
+            )
             print(
                 f"[note] {file_path.name}: P2 export inferred -- "
-                f"{n_vertex_hits}/{n_unique} vertex hits, residual cluster at "
-                f"~{far_median_um:.0f} um (~1/2 mesh edge "
-                f"{mesh_edge_scale_m * 1e6:.0f} um). Mid-edge nodes have no P1 "
-                f"counterpart and are correctly ignored."
+                f"{n_csv_matched}/{n_unique} csv matched, {n_vertex_hits} vertices, "
+                f"residual cluster at ~{far_median_um:.0f} um (~1/2 mesh edge "
+                f"{mesh_edge_scale_m * 1e6:.0f} um).",
+                flush=True,
             )
         elif unmapped_ratio > 0.10:
-            # 5) Unexplained partial: still worth a heads-up.
             print(
-                f"⚠️ {file_path.name}: {unmapped_ratio:.1%} of boundary nodes "
+                f"[WARN] {file_path.name}: {unmapped_ratio:.1%} of boundary coords "
                 f"unmapped (median {d_median * 1e6:.1f} um, p90 "
                 f"{d_p90 * 1e6:.1f} um, max {d_max * 1e6:.1f} um); not a clean "
-                f"P2 pattern -- inspect the export."
+                f"P2 pattern -- inspect the export.",
+                flush=True,
             )
 
         diagnostics = {
             "n_csv_unique": n_unique,
             "n_vertex_hits": n_vertex_hits,
+            "n_csv_matched": n_csv_matched,
             "vertex_hit_rate": vertex_hit_rate,
+            "csv_match_rate": csv_match_rate,
             "unmapped_ratio": unmapped_ratio,
             "d_median_m": d_median,
             "d_p90_m": d_p90,
             "d_max_m": d_max,
+            "vertex_tol_m": tol_m,
             "p2_inferred": p2_inferred,
-            "status": "ok",
+            "status": "ok" if not unhealthy else "low_coverage",
         }
         return mask, diagnostics
 
@@ -591,17 +611,21 @@ class PatientDataExtractor:
             mesh_edge_scale_m = None
 
         mask_inlet, diag_inlet = self._load_spatial_mask(
-            inlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m
+            inlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
         )
         mask_outlet, diag_outlet = self._load_spatial_mask(
-            outlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m
+            outlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
         )
         mask_wall, diag_wall = self._load_spatial_mask(
-            wall_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m
+            wall_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
         )
         
         mask_wound, diag_wound = self._load_spatial_mask(
-            wound_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m
+            wound_path,
+            mesh_tree,
+            num_nodes,
+            mesh_edge_scale_m=mesh_edge_scale_m,
+            required=biochem_variant == "wound",
         )
         if bool(mask_wound.any()):
             mask_wall = mask_wall & ~mask_wound

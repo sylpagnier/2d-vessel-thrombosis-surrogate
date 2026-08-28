@@ -307,6 +307,8 @@ Ordered by blast radius.  Status is updated in place as each lands.
 | B21 | The SEALED holdout default lived in the launcher, so invoking `train_kinematics_predictor` directly still trained on 013/031/043 | `src/utils/kinematics_geometry.py` | **DONE** — §11.6; default now derived from `wall_cohort_splits` at the point of use |
 | B22 | `node_type_0..3` is identically **zero on both training corpora** and live at deploy — the same staleness as the stenosis tail | `graphs_kinematics/carreau`, `graphs_kinematics_anchors` | **Regeneration fixes synthetic; B14's sync fixes the clinical anchors.** Caught by `preflight_kine_cohort.py` |
 | B23 | 7 deploy packs are from an older extractor revision: `patient002` + all six `*_mirror_y` have dead `node_type` and anomalous priors | `graphs_biochem_anchors` | **OPEN** — `patient002` is in the training pool; consider excluding or re-extracting |
+| B24 | The synthetic builder wrote `node_type` as a literal `torch.zeros((N, 4))  # Placeholder` — regenerating the corpus would NOT have fixed the dead channel | `src/data_gen/lib/mesh_to_graph.py` | **DONE** — real one-hot; supersedes B22's claim that regeneration was sufficient |
+| B25 | Generation silently clobbered a populated cohort: `MeshToGraph.run()` clears every `*.pt` in its output dir and intent was never required | `src/data_gen/pipeline_kinematics.py` | **DONE** — refuses without `--overwrite`/`--append`; `--dry-run` added |
 
 **Evidence of B5/B6 in the current artifacts.**  Both checkpoints trained on 2026-08-27:
 

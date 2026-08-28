@@ -30,7 +30,9 @@ Requires: COMSOL 6.x + ``pip install mph`` (same as kinematics ``AnchorGenerator
 Domain fields use the Results dataset linked to ``sol1`` (Study 1 biochemistry), not ``sol2``.
 Boundaries prefer Results datasets ``Inlet`` / ``Outlet`` / ``Wall`` (same as inlet_nodes export).
 Override: ``BIOCHEM_COMSOL_DATASET_TAG``, ``BIOCHEM_COMSOL_INLET_DATASET``, etc.
-Boundary txt uses volume mesh nodes snapped to Inlet/Outlet/Wall datasets (``BIOCHEM_BOUNDARY_SNAP_CM``).
+Boundary txt uses volume mesh nodes snapped to Inlet/Outlet/Wall datasets
+(``boundary_snap_tol_m`` / ``BIOCHEM_BOUNDARY_SNAP_CM``). Remap onto the mesh uses the
+same tolerance so slanted/curved inlets are not dropped.
 """
 
 from __future__ import annotations

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.data_gen.lib.biochem_comsol_mesh_export import write_boundary_txt_from_mesh_snap_to_datasets
+from src.data_gen.lib.boundary_snap import (
+    BOUNDARY_SNAP_EDGE_FRAC,
+    BOUNDARY_SNAP_FLOOR_M,
+    boundary_snap_tol_m,
+)
 
 
 def test_mesh_snap_writes_volume_node_coords(tmp_path, monkeypatch):
@@ -49,3 +55,18 @@ def test_mesh_snap_writes_volume_node_coords(tmp_path, monkeypatch):
     assert "0 0 0.0000000000 0.0000000000" in inlet_txt
     assert "0 0 1.0000000000 0.0000000000" not in inlet_txt.splitlines()[2:3][0] if False else True
     assert "1.0000000000 0.0000000000" in (tmp_path / "ch_outlet.txt").read_text(encoding="utf-8")
+
+
+def test_boundary_snap_tol_scales_with_mesh_edge(monkeypatch):
+    monkeypatch.delenv("BIOCHEM_BOUNDARY_SNAP_CM", raising=False)
+    assert boundary_snap_tol_m(mesh_edge_scale_m=None) == pytest.approx(BOUNDARY_SNAP_FLOOR_M)
+    edge = 3.54e-4  # patient048 mesh_edge_scale_m
+    tol = boundary_snap_tol_m(mesh_edge_scale_m=edge)
+    assert tol == pytest.approx(BOUNDARY_SNAP_EDGE_FRAC * edge)
+    # 048 inlet d_max was 179 um; scaled tol must clear that and stay under the 1 mm unit floor.
+    assert 1.79e-4 < tol < 1.0e-3
+
+
+def test_boundary_snap_tol_env_override_cm(monkeypatch):
+    monkeypatch.setenv("BIOCHEM_BOUNDARY_SNAP_CM", "0.05")
+    assert boundary_snap_tol_m(mesh_edge_scale_m=1e-3) == pytest.approx(5e-4)

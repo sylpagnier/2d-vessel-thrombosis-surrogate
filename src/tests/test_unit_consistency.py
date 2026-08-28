@@ -305,14 +305,16 @@ def test_load_spatial_mask_pure_p1_export_is_silent(tmp_path, _kdtree_mesh_pair,
 
     assert mask.sum().item() == len(pts)
     assert diag["vertex_hit_rate"] == pytest.approx(1.0)
+    assert diag["csv_match_rate"] == pytest.approx(1.0)
     assert diag["unmapped_ratio"] == pytest.approx(0.0)
     assert diag["d_median_m"] < 1e-9
     assert diag["p2_inferred"] is False
-    assert "Warning" not in captured and "P2 export" not in captured
+    assert diag["status"] == "ok"
+    assert "WARN" not in captured and "P2 export" not in captured
 
 
-def test_load_spatial_mask_p2_export_is_inferred_and_quiet(tmp_path, _kdtree_mesh_pair, capsys):
-    """Vertex + mid-edge interleaved -> p2_inferred True, info note (not warning)."""
+def test_load_spatial_mask_p2_midsides_map_to_vertices(tmp_path, _kdtree_mesh_pair, capsys):
+    """P2 mid-edge samples sit at ~1/2 edge; scaled snap assigns them to nearest vertices."""
     pts, tree = _kdtree_mesh_pair
     extractor, label = _make_extractor(tmp_path)
 
@@ -327,11 +329,10 @@ def test_load_spatial_mask_p2_export_is_inferred_and_quiet(tmp_path, _kdtree_mes
     )
     captured = capsys.readouterr().out
 
-    assert mask.sum().item() == len(pts)  # every real vertex flagged
-    assert 0.30 <= diag["vertex_hit_rate"] <= 1.0
-    assert diag["p2_inferred"] is True
-    assert "P2 export inferred" in captured
-    assert "⚠️" not in captured  # no warning escalation when P2 explains it
+    assert mask.sum().item() == len(pts)
+    assert diag["csv_match_rate"] == pytest.approx(1.0)
+    assert diag["status"] == "ok"
+    assert "[ERR]" not in captured
 
 
 def test_load_spatial_mask_unit_bug_raises(tmp_path, _kdtree_mesh_pair):
@@ -351,26 +352,67 @@ def test_load_spatial_mask_unit_bug_raises(tmp_path, _kdtree_mesh_pair):
         )
 
 
-def test_load_spatial_mask_low_coverage_warns_loudly(tmp_path, _kdtree_mesh_pair, capsys):
-    """vertex_hit_rate < 0.30 triggers the loud mesh-coverage warning."""
+def test_load_spatial_mask_slanted_inlet_residual_is_accepted(tmp_path, _kdtree_mesh_pair):
+    """Healthy curved/slanted inlet: geometry samples ~0.45 edge off vertices still map."""
+    pts, tree = _kdtree_mesh_pair
+    extractor, label = _make_extractor(tmp_path)
+    edge_scale_m = 1e-3
+    # patient048-class residual: 0.45 * edge (048 was 90-179 um on a 354 um edge).
+    offset = np.array([[0.0, 0.45 * edge_scale_m]])
+    coords_m = pts + offset
+    f = label / "stem_inlet.txt"
+    _write_boundary_csv(f, coords_m * 100.0)
+
+    mask, diag = extractor._load_spatial_mask(
+        f, tree, num_nodes=len(pts), mesh_edge_scale_m=edge_scale_m, required=True
+    )
+    assert int(mask.sum().item()) == len(pts)
+    assert diag["csv_match_rate"] == pytest.approx(1.0)
+    assert diag["n_vertex_hits"] == len(pts)
+    assert diag["status"] == "ok"
+
+
+def test_load_spatial_mask_low_coverage_required_raises(tmp_path, _kdtree_mesh_pair):
+    """csv_match_rate < 0.30 on a required BC is a hard error, not a saved 3-node mask."""
     pts, tree = _kdtree_mesh_pair
     extractor, label = _make_extractor(tmp_path)
 
-    # 1 vertex hit + 9 stray-but-near (e.g. 50um off) coords -> 1/10 = 10% hit.
+    # 1 vertex hit + 9 points 0.8 mm off the line (inside 1 mm unit floor, outside 0.55*edge).
     near_real = pts[:1]
-    strays = pts[:1] + np.array([[5e-5, 0.0]] * 9) + np.arange(9).reshape(-1, 1) * 1e-7
+    strays = pts[:1] + np.array([[0.0, 0.8e-3]] * 9) + np.arange(9).reshape(-1, 1) * 1e-7
     combined = np.vstack([near_real, strays])
-    f = label / "stem_wall.txt"
+    f = label / "stem_inlet.txt"
     _write_boundary_csv(f, combined * 100.0)
 
-    mask, diag = extractor._load_spatial_mask(
-        f, tree, num_nodes=len(pts), mesh_edge_scale_m=1e-3
-    )
-    captured = capsys.readouterr().out
+    with pytest.raises(ValueError, match="unhealthy boundary map"):
+        extractor._load_spatial_mask(
+            f, tree, num_nodes=len(pts), mesh_edge_scale_m=1e-3, required=True
+        )
 
-    assert diag["vertex_hit_rate"] < 0.30
-    assert "⚠️" in captured
-    assert "matched a mesh vertex" in captured
+
+def test_load_spatial_mask_sparse_dirichlet_required_raises(tmp_path, _kdtree_mesh_pair):
+    """Three on-vertex hits is 100% csv match but too few inlet nodes -- reject."""
+    pts, tree = _kdtree_mesh_pair
+    extractor, label = _make_extractor(tmp_path)
+    f = label / "stem_inlet.txt"
+    _write_boundary_csv(f, pts[:3] * 100.0)
+
+    with pytest.raises(ValueError, match="unhealthy boundary map"):
+        extractor._load_spatial_mask(
+            f, tree, num_nodes=len(pts), mesh_edge_scale_m=1e-3, required=True
+        )
+
+
+def test_load_spatial_mask_optional_wound_missing_ok(tmp_path, _kdtree_mesh_pair):
+    """Nowound packs have no wound file; optional load must not fail."""
+    pts, tree = _kdtree_mesh_pair
+    extractor, label = _make_extractor(tmp_path)
+    f = label / "stem_wound.txt"
+    mask, diag = extractor._load_spatial_mask(
+        f, tree, num_nodes=len(pts), mesh_edge_scale_m=1e-3, required=False
+    )
+    assert int(mask.sum().item()) == 0
+    assert diag["status"] == "missing"
 
 
 # --- On-disk anchor metadata sanity floor --------------------------------------
