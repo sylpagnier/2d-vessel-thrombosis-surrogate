@@ -464,10 +464,19 @@ def _sample_params(
         aneurysm_wall_mode: str | None = None,
         wound_probability: float | None = None,
         wound_at_pathology: bool = False,
+        severity_scale: float = 1.0,
 ) -> Dict[str, Any]:
     """
     Draw ALL random numbers for one vessel and return a plain picklable dict.
     Level 2 triggers pro-thrombotic geometry (extreme expansions/stagnation zones).
+
+    ``severity_scale`` < 1 softens the pathology for a repair re-draw: it scales the wall offset
+    AND drops the max-magnitude shape presets, so the throat gets both shallower and gentler.
+    Both halves are needed.  Scaling depth alone leaves `max_stenosis`'s sharp transition
+    (``std_dev`` 0.02-0.05n against 0.04-0.10n for a normal draw), and sharpness is a large part
+    of what makes these solves fail.  Without this the ladder is inert: `max_stenosis` pins the
+    sampler at the class maximum, so every "easier" draw came back at the same severity 5.00
+    (measured -- the 0.70x, 0.50x and 0.35x rungs were identical).
     """
     # Level-driven mode: 2 => pro-thrombotic cohort shaping.
     pro_thrombotic = (level == 2)
@@ -555,13 +564,20 @@ def _sample_params(
                 lo = min(float(cfg.aneurysm_factor_min), hi)
                 mag = float(rng.uniform(lo * width, hi * width))
 
+        softened = False
+        if float(severity_scale) != 1.0:
+            mag = float(mag) * float(severity_scale)
+            # No longer a max-magnitude draw: take the gentler transition and free peak/skew.
+            hit_configured_max = False
+            softened = True
+
         min_idx, max_idx = max(3, int(n * 0.2)), min(n - 4, int(n * 0.8))
-        if forced_max or hit_configured_max:
+        if (forced_max and not softened) or hit_configured_max:
             peak = int(min_idx + 0.5 * (max_idx - min_idx))
         else:
             peak = int(rng.integers(min_idx, max_idx))
 
-        if magnitude_mode == "max_stenosis" or pro_thrombotic:
+        if (magnitude_mode == "max_stenosis" or pro_thrombotic) and not softened:
             # Sharper geometric transition to trigger sr_grad_flow < -750 (sgt)
             std_dev = float(rng.uniform(0.02 * n, 0.05 * n))
         else:
@@ -569,7 +585,7 @@ def _sample_params(
 
         x_idx = np.arange(n)
         gauss = np.exp(-0.5 * ((x_idx - peak) / std_dev) ** 2)
-        if forced_max or hit_configured_max:
+        if (forced_max and not softened) or hit_configured_max:
             skew = np.ones(n, dtype=float)
         else:
             skew_factor = float(rng.uniform(-0.3, 0.3))
@@ -1163,12 +1179,12 @@ def reshape_vessels_from_meta(
     cfg_dict: Dict[str, Any],
     *,
     attempt: int = 1,
-    mesh_refine: float = 0.8,
+    mesh_refine: float = 1.0,
     min_elems_across: Optional[int] = None,
     max_draws: int = 24,
-    severity_floor: float = 0.85,
+    severity_target: float = 0.70,
 ) -> List[Tuple[str, bool, str]]:
-    """Re-draw an unsolvable vessel as a DIFFERENT sample of the same class and severity.
+    """Re-draw an unsolvable vessel as an EASIER sample of the same class.
 
     Refinement is the right first answer -- it preserves the exact geometry -- but some shapes
     are degenerate at the extreme of the sampler's range: an 80% occlusion whose throat walls
@@ -1178,14 +1194,18 @@ def reshape_vessels_from_meta(
     -- the worst fifteen all at stenosis ratio 4.4+ against a cohort median of 1.29.
 
     So the last stage replaces the *shape*: same ``level``, same pathology class, a different RNG
-    draw.  **Severity is preserved by rejection sampling**, not by hope.  Candidates are built
-    (cheaply, without meshing) until one is the same ``v_type`` and at least ``severity_floor``
-    of the original's stenosis / aneurysm ratio; the most severe candidate wins if none clears
-    the bar.  Without that guard the replacement is drawn from the class's whole range and the
-    severe tail quietly evaporates -- a 5.00 stenosis came back as a 1.04 straight tube.
+    draw -- at ``severity_target`` times the original's stenosis / aneurysm ratio.
 
-    This still biases the corpus toward solvable realisations at a given severity, which is why
-    it runs last.  ``reshaped_from`` records the substitution in the metadata.
+    **The target descends across attempts, and that is the whole point.**  A first version held
+    severity at >= 0.85x by rejection sampling, to stop the severe tail evaporating.  It did stop
+    that, and it also made the substitution useless: an equally extreme vessel fails for the same
+    reason the original did.  Measured on the 2026-08-29 regeneration -- 38 vessels re-drawn,
+    **36 still unsolved**.  A replacement has to be easier than the thing it replaces or it is
+    not a replacement.
+
+    Candidates are built cheaply (no meshing) and scored by distance to ``severity_target * want``
+    with a 3x penalty for overshoot, so the draw lands at or just under the goal rather than
+    collapsing straight to a healthy tube.  ``reshaped_from`` records what was given up.
     """
     mesh_dir = Path(mesh_dir)
     cfg_d = dict(cfg_dict)
@@ -1225,40 +1245,58 @@ def reshape_vessels_from_meta(
                 results.append((stem, False, f"cannot read class: {exc}"))
                 continue
 
-            best = None       # (severity, params)
-            for k in range(int(max_draws)):
-                rng = np.random.default_rng(
-                    abs(hash((idx, "reshape", int(attempt), k))) % (2**32))
-                params = _sample_params(idx, level, cfg, rng, pathology_mode=mode)
-                if str(params.get("v_type")) != v_type:
-                    continue
-                try:
-                    geom = compute_geometry_from_params(params, cfg_d)
-                    validate_geometry(geom, cfg_d)
-                except (GeometryValidationError, Exception):
-                    continue
-                sev = _wall_severity(geom.top_coords, geom.bot_coords, v_type)
-                if best is None or sev > best[0]:
-                    best = (sev, params)
-                if sev >= float(severity_floor) * want:
-                    break
+            # Solve for the target severity, do not just scale the wall offset by it.  The
+            # stenosis ratio `median(w)/min(w)` is nonlinear in the offset -- scaling depth by
+            # 0.70 measured 0.41x severity, so a blind scale overshoots and throws away more of
+            # the severe tail than the rung asks for.  Severity is monotone in the scale, and
+            # building a candidate is cheap (no meshing), so bisect.
+            goal = max(float(severity_target) * want, 1.02)
+            n_streams = max(1, int(max_draws) // 8)
+            best = None       # (score, severity, params)
+            for k in range(n_streams):
+                lo, hi = 0.10, 1.0
+                for _ in range(7):
+                    mid = 0.5 * (lo + hi)
+                    rng = np.random.default_rng(
+                        abs(hash((idx, "reshape", int(attempt), k))) % (2**32))
+                    params = _sample_params(idx, level, cfg, rng, pathology_mode=mode,
+                                            severity_scale=mid)
+                    if str(params.get("v_type")) != v_type:
+                        break
+                    try:
+                        geom = compute_geometry_from_params(params, cfg_d)
+                        validate_geometry(geom, cfg_d)
+                    except (GeometryValidationError, Exception):
+                        hi = mid            # invalid tends to mean too extreme
+                        continue
+                    sev = _wall_severity(geom.top_coords, geom.bot_coords, v_type)
+                    # Overshooting the goal (still too hard) is penalised 3x: when the bisection
+                    # cannot land exactly, err toward the easier side -- the whole point of the
+                    # rung is that the vessel solves.
+                    score = abs((sev - goal) if sev <= goal else 3.0 * (sev - goal))
+                    if best is None or score < best[0]:
+                        best = (score, sev, params)
+                    if abs(sev - goal) <= 0.05 * goal:
+                        break
+                    if sev > goal:
+                        hi = mid
+                    else:
+                        lo = mid
 
             if best is None:
                 results.append((stem, False,
-                                f"no valid {v_type} candidate in {max_draws} draws"))
+                                f"no valid {v_type} candidate for severity {goal:.2f}"))
                 continue
-            sev, params = best
+            _, sev, params = best
             params["reshaped_from"] = {
                 "attempt": int(attempt),
                 "original_type": meta.get("type"),
                 "pathology_mode": mode,
                 "severity_was": round(float(want), 3),
                 "severity_now": round(float(sev), 3),
+                "severity_target": round(float(severity_target), 3),
             }
             _, ok, err = _build_and_mesh(params, cfg_d, str(mesh_dir))
-            if ok and sev < float(severity_floor) * want:
-                err = (f"severity {sev:.2f} below the original {want:.2f} "
-                       f"(floor {severity_floor:.2f}x) -- best of {max_draws} draws")
             results.append((stem, ok, err))
     finally:
         if _owned:

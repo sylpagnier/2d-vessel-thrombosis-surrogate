@@ -1359,3 +1359,59 @@ def test_mesh_sizing_resolves_the_stenosis_throat(tmp_path):
     assert len(pts_s) < 2.0 * len(pts_o), (
         f"{len(pts_s)} nodes with a throat vs {len(pts_o)} without -- too expensive"
     )
+
+
+# --- B27 repair: the re-draw ladder has to actually get easier -------------------------------
+
+def test_severity_scale_softens_a_max_stenosis_draw():
+    """The repair ladder was inert, and this is the mechanism that fixes it.
+
+    `max_stenosis` pins the sampler at the class maximum, so a "re-draw of the same class" came
+    back at the same severity every time -- the 0.70x / 0.50x / 0.35x rungs all measured 5.00.
+    Which is why 38 substitutions left 36 vessels unsolved: an equally extreme vessel fails for
+    the same reason the original did.
+
+    `severity_scale` must soften BOTH halves: the wall offset AND the max-magnitude shape
+    presets.  A max_stenosis draw takes a sharper transition (`std_dev` 0.02-0.05n against
+    0.04-0.10n), and sharpness is a large part of what breaks the solve.
+    """
+    import numpy as np
+
+    from src.config import VesselConfig
+    from src.data_gen.lib.vessel_generator import _sample_params, _wall_severity
+    from src.data_gen.lib.vessel_geometry import compute_geometry_from_params
+
+    from src.data_gen.lib.vessel_generator import VesselGenerator
+
+    cfg = VesselConfig(phase="kinematics")
+    cfg_dict = VesselGenerator(phase="kinematics")._cfg_dict()
+
+    def sev(scale):
+        rng = np.random.default_rng(20260830)
+        p = _sample_params(7, 0, cfg, rng, pathology_mode="max_stenosis",
+                           severity_scale=scale)
+        g = compute_geometry_from_params(p, cfg_dict)
+        return _wall_severity(g.top_coords, g.bot_coords, "stenosis"), p
+
+    full, p_full = sev(1.0)
+    assert full > 3.0, f"a max_stenosis draw should be extreme, got {full:.2f}"
+
+    prev = full
+    for scale in (0.7, 0.5, 0.3):
+        s_i, _ = sev(scale)
+        assert s_i < prev, (
+            f"severity_scale={scale} gave {s_i:.2f}, not below {prev:.2f} -- the ladder is "
+            f"inert and every rung re-draws an equally unsolvable vessel"
+        )
+        prev = s_i
+    assert prev < 0.6 * full, (
+        f"the easiest rung only reached {prev:.2f} against {full:.2f}; a replacement has to be "
+        f"meaningfully easier than the thing it replaces"
+    )
+
+    # scale 1.0 must reproduce the unmodified draw exactly -- normal generation is untouched
+    rng = np.random.default_rng(20260830)
+    p_plain = _sample_params(7, 0, cfg, rng, pathology_mode="max_stenosis")
+    assert np.allclose(np.asarray(p_plain["offsets"], dtype=float),
+                       np.asarray(p_full["offsets"], dtype=float)), \
+        "severity_scale=1.0 changed a normal draw"

@@ -96,6 +96,7 @@ def main() -> int:
             glevel=int(getattr(d, "geometry_level", torch.tensor([-1])).reshape(-1)[0])
             if hasattr(d, "geometry_level") else -1,
             reshaped=bool((meta_of(f) or {}).get("reshaped_from")),
+            resh=(meta_of(f) or {}).get("reshaped_from") or {},
         ))
 
     n_f = len(rows)
@@ -170,11 +171,27 @@ def main() -> int:
           f"{100 * frac2:.0f}% of SOLVED vessels at ratio >= 2.0 (deployment: 14%; "
           f"{100 * frac2_all:.0f}% before dropping unsolved); "
           f"median {np.median(st):.2f}, max {st.max():.2f}")
-    n_reshaped = sum(1 for r in rows if r.get("reshaped"))
-    if n_reshaped:
-        check("geometry substitutions", OK,
-              f"{n_reshaped}/{n_f} vessels were re-drawn after COMSOL could not solve the "
-              f"original at any mesh resolution (same level, class and severity)")
+    resh = [r["resh"] for r in rows if r.get("reshaped")]
+    if resh:
+        # A substitution is EASIER than what it replaced, by design -- an equally extreme
+        # re-draw fails for the same reason the original did (38 re-drawn, 36 still unsolved,
+        # 2026-08-29).  Report how much severity that cost, because it is a real cost: it is
+        # the severe tail this cohort exists to provide.
+        was = np.array([float(x.get("severity_was", np.nan)) for x in resh])
+        now = np.array([float(x.get("severity_now", np.nan)) for x in resh])
+        ok_m = np.isfinite(was) & np.isfinite(now) & (was > 0)
+        if ok_m.any():
+            keep = now[ok_m] / was[ok_m]
+            still_severe = int((now[ok_m] >= 2.0).sum())
+            check("geometry substitutions", OK,
+                  f"{len(resh)}/{n_f} vessels re-drawn easier after COMSOL could not solve the "
+                  f"original (same level and class); severity kept "
+                  f"{100 * np.median(keep):.0f}% (p10 {100 * np.percentile(keep, 10):.0f}%), "
+                  f"{still_severe}/{int(ok_m.sum())} still at ratio >= 2.0")
+        else:
+            check("geometry substitutions", OK,
+                  f"{len(resh)}/{n_f} vessels re-drawn easier after COMSOL could not solve the "
+                  f"original (same level and class)")
 
     if not solved.all():
         lost = [(r["stem"], r["sten"]) for r in rows if not r["solved"]]

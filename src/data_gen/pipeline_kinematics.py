@@ -476,10 +476,10 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
                         "on disk. Mutually exclusive with --overwrite.")
     p.add_argument(
         "--repair-rounds", type=int, default=4, metavar="N",
-        help="Stages tried on a vessel COMSOL could not solve, in order (0 disables): two "
-             "re-mesh rounds on the SAME geometry, then two rounds that re-draw a different "
-             "vessel of the same class (same level and pathology mode). Refinement alone "
-             "recovered only 2 of 39 on the 2026-08-29 run. Default 4 (all stages).")
+        help="Stages tried on a vessel COMSOL could not solve, in order (0 disables): one "
+             "re-mesh of the SAME geometry, then re-draws of the same class at 0.70x / 0.50x / "
+             "0.35x the original severity until one solves. Refinement alone recovered 2 of 39, "
+             "and same-severity re-draws recovered 2 of 38. Default 4 (all stages).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan (counts, mix, target dirs) and exit without writing.")
     p.add_argument(
@@ -721,7 +721,9 @@ def _run_batch_for_phase(
             if _rr <= 0:
                 print("  repair        DISABLED")
             else:
-                _stages = ", ".join(f"{k}@{f}" for k, f, _ in ANCHOR_REPAIR_SCHEDULE[:_rr])
+                _stages = ", ".join(
+                    (f"remesh@{f}" if k == "mesh" else f"redraw@{sv:.2f}x severity")
+                    for k, f, _, sv in ANCHOR_REPAIR_SCHEDULE[:_rr])
                 print(f"  repair        {_rr} stage(s): {_stages}")
             if args.pathology_mix:
                 import numpy as _np
@@ -806,21 +808,34 @@ def _run_batch_for_phase(
             raise
 
 
-#: What is tried, in order, on a vessel COMSOL could not solve.  ``("mesh", refine, elems)``
-#: re-meshes the SAME geometry finer; ``("reshape", refine, elems)`` re-draws a different vessel
-#: of the same class.
+#: What is tried, in order, on a vessel COMSOL could not solve:
+#: ``(kind, mesh_refine, min_elems_across, severity_target)``.  ``"mesh"`` re-meshes the SAME
+#: geometry finer; ``"reshape"`` re-draws a different vessel of the same class at
+#: ``severity_target`` times the original's stenosis / aneurysm ratio.
 #:
-#: Refinement first, because it preserves the exact geometry and recovers the vessels that fail
-#: only for want of resolution.  But it is not sufficient on its own: on the 2026-08-29 run two
-#: refine rounds (0.6x then 0.4x, the second reaching 25.7k nodes) recovered **2 of 39**.  The
-#: survivors are the extreme tail -- every one of the worst fifteen sits at stenosis ratio 4.4
-#: or above, against a cohort median of 1.29 -- where the walls very nearly touch and no mesh
-#: helps.  Those get a new draw of the same class instead.
-ANCHOR_REPAIR_SCHEDULE: tuple[tuple[str, float, int], ...] = (
-    ("mesh", 0.6, 12),
-    ("mesh", 0.4, 16),
-    ("reshape", 0.8, 10),
-    ("reshape", 0.6, 12),
+#: **One refine round, then get easier fast.**  Two runs measured the shape of this:
+#:
+#: * Two refine rounds (0.6x then 0.4x, the second reaching 25.7k nodes) recovered **2 of 39**.
+#:   The second round is where the cost is -- a 25.7k-node mesh is slow to build and slower to
+#:   solve -- and not where the recoveries are.  One cheap global refine is kept, because that
+#:   does work on vessels failing purely for want of resolution (`vessel_15` solved under a
+#:   general refine in COMSOL).
+#: * Re-drawing at the SAME severity -- a 0.85x floor, added to protect the severe tail --
+#:   recovered almost nothing: **38 re-drawn, 36 still unsolved**.  An equally extreme vessel
+#:   fails for the same reason the original did.  A replacement has to be easier than the thing
+#:   it replaces or it is not a replacement.
+#:
+#: So the ladder descends: 0.70x, then 0.50x, then 0.35x of the original severity, at the DEFAULT
+#: mesh (an easier vessel does not also need a finer mesh, and pairing both doubled the cost for
+#: nothing).  The cohort gives up some of its extreme tail, which is a real cost -- but refusing
+#: to soften does not preserve that tail, it deletes it: an unsolved vessel contributes no labels
+#: at all and the losses fall entirely on the severe end (RGP_DEQ_REPAIR_PLAN.md B27).  Every
+#: substitution is stamped `reshaped_from` with the severity it was and became.
+ANCHOR_REPAIR_SCHEDULE: tuple[tuple[str, float, int, "float | None"], ...] = (
+    ("mesh", 0.6, 12, None),
+    ("reshape", 1.0, 8, 0.70),
+    ("reshape", 1.0, 8, 0.50),
+    ("reshape", 1.0, 8, 0.35),
 )
 
 
@@ -846,14 +861,14 @@ def _repair_unsolved_anchors(gen, *, rounds: int, allow_overwrite: bool,
 
     1. **Re-mesh the same geometry finer.**  Exact -- the wall polylines come from the vessel's
        own ``.json`` -- so the cohort's designed pathology mix is untouched.
-    2. **Re-draw a different vessel of the same class.**  For the geometries that no mesh can
-       solve.  Same ``level``, same ``pathology_mode``, different RNG stream, and a
-       ``reshaped_from`` stamp in the metadata so the substitution is auditable.
+    2. **Re-draw an EASIER vessel of the same class**, at a severity target that descends with
+       each attempt (0.70x, 0.50x, 0.35x).  Same ``level``, same ``pathology_mode``, different
+       RNG stream, and a ``reshaped_from`` stamp recording the severity given up.
 
     Stage 2 biases the corpus toward solvable realisations within a class.  That is a real cost,
-    accepted only because the alternative measured worse: leaving them unsolved dropped 15% of
-    the cohort and the loss fell entirely on the severe-stenosis tail the corpus exists to
-    provide (RGP_DEQ_REPAIR_PLAN.md B27).
+    accepted only because both alternatives measured worse: leaving them unsolved dropped 15% of
+    the cohort entirely on the severe-stenosis tail (RGP_DEQ_REPAIR_PLAN.md B27), and re-drawing
+    at the SAME severity recovered 2 of 38 while spending a full COMSOL pass per attempt.
     """
     from src.config import VesselConfig
     from src.data_gen.lib.vessel_generator import (
@@ -868,19 +883,21 @@ def _repair_unsolved_anchors(gen, *, rounds: int, allow_overwrite: bool,
 
     n_reshaped = 0
     stages = ANCHOR_REPAIR_SCHEDULE[: max(0, int(rounds))]
-    for r, (kind, refine, elems) in enumerate(stages, start=1):
-        what = ("re-meshing" if kind == "mesh" else "RE-DRAWING")
-        _safe_print(
-            f"\n--- Anchor repair {r}/{len(stages)} ({kind}): {len(pending)} unsolved, "
-            f"{what} at mesh_refine={refine} min_elems_across={elems} ---\n"
-        )
+    for r, (kind, refine, elems, sev_target) in enumerate(stages, start=1):
         if kind == "mesh":
+            _safe_print(
+                f"\n--- Anchor repair {r}/{len(stages)}: {len(pending)} unsolved, re-meshing "
+                f"the same geometry at mesh_refine={refine} min_elems_across={elems} ---\n")
             results = remesh_vessels_from_meta(
                 pending, gen.mesh_dir, cfg_dict, mesh_refine=refine, min_elems_across=elems)
         else:
+            _safe_print(
+                f"\n--- Anchor repair {r}/{len(stages)}: {len(pending)} unsolved, RE-DRAWING "
+                f"easier vessels of the same class at {sev_target:.2f}x severity ---\n")
             results = reshape_vessels_from_meta(
                 pending, gen.mesh_dir, cfg, cfg_dict, attempt=r,
-                mesh_refine=refine, min_elems_across=elems)
+                mesh_refine=refine, min_elems_across=elems,
+                severity_target=float(sev_target))
 
         rebuilt = [stem for stem, ok, _ in results if ok]
         for stem, ok, err in results:

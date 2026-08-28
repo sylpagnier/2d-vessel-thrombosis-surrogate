@@ -1485,3 +1485,72 @@ The local throat sizing does not address this — it moves the global median by 
 carries it: **1.00 mm -> 0.90 mm**.  Preflight now measures `h_nd` against the deploy band
 (P2 elevation halves every edge exactly, so a P1 cohort's deploy-equivalent is `h_nd / 2`) and
 warns outside +-15%, so this is verified on the cohort rather than extrapolated.
+
+
+---
+
+## 15. The repair ladder has to descend
+
+The 2026-08-29 regeneration ran the full repair schedule and still shipped **36/250 unsolved**,
+against 39 before it.  Both stages failed, for different reasons, and the second one is the
+interesting failure.
+
+### 15.1 Refinement recovers the wrong two
+
+Two re-mesh rounds (0.6x then 0.4x, the second reaching **25.7k nodes**) recovered **2 of 39**.
+The cost is concentrated in the second round -- a 25.7k-node mesh is slow to build and slower to
+solve -- and the recoveries are not.  One cheap global refine is kept, because it does work on
+vessels failing purely for want of resolution (`vessel_15` solved under a general refine in
+COMSOL); the second round is dropped.
+
+### 15.2 B31 — the re-draw preserved the severity that made it unsolvable
+
+`reshape_vessels_from_meta` rejection-sampled for `severity >= 0.85 * original`.  That guard was
+added for a good reason -- without it a 5.00 stenosis came back as a 1.04 straight tube and the
+severe tail evaporated -- but it makes the substitution pointless: **38 re-drawn, 36 still
+unsolved**.  An equally extreme vessel fails for the same reason the original did.
+
+A replacement has to be easier than the thing it replaces or it is not a replacement.  Two
+mechanisms were needed:
+
+**`severity_scale` in `_sample_params`.**  Scaling the target alone does nothing, because
+`max_stenosis` *pins* the sampler at the class maximum -- every candidate comes back at the same
+severity no matter what the rung asks for.  Measured before the fix, the 0.70x / 0.50x / 0.35x
+rungs all returned **5.00**.  The scale now softens both halves: the wall offset, and the
+max-magnitude shape presets (a `max_stenosis` draw takes `std_dev` 0.02-0.05n against 0.04-0.10n,
+and that sharpness is a large part of what breaks the solve).
+
+**Bisection on the scale.**  The stenosis ratio `median(w)/min(w)` is nonlinear in the wall
+offset -- scaling depth by 0.70 measured **0.41x** severity -- so a blind scale overshoots and
+gives away more tail than the rung asked for.  Severity is monotone in the scale and building a
+candidate is cheap (no meshing), so the rung bisects to its target in 7 steps.  Overshoot toward
+"still too hard" is penalised 3x, because the point of the rung is that the vessel solves.
+
+```
+vessel        original      0.70x      0.50x      0.35x
+vessel_126        6.46       4.49       3.20       2.29
+vessel_230        5.70       3.99       2.63       1.94
+vessel_249        5.00       3.45       2.48       1.76
+
+  target 0.70x -> achieved 0.69x     0.50x -> 0.49x     0.35x -> 0.35x
+```
+
+The first rung keeps a 6.46 stenosis at 4.49 and a 5.00 at 3.45 -- still far into the severe
+band (deployment is 14% at ratio >= 2.0), so most of the tail survives a substitution that
+actually solves.
+
+### 15.3 The schedule
+
+```
+ANCHOR_REPAIR_SCHEDULE = (
+    ("mesh",    0.6, 12, None),   # same geometry, one global refine
+    ("reshape", 1.0,  8, 0.70),   # easier vessel, same level and class
+    ("reshape", 1.0,  8, 0.50),
+    ("reshape", 1.0,  8, 0.35),
+)
+```
+
+Re-draws run at the **default** mesh: an easier vessel does not also need a finer one, and
+pairing both doubled the cost for nothing.  Preflight reports what each substitution gave up --
+median severity kept, p10, and how many are still at ratio >= 2.0 -- so the cost to the tail is
+visible rather than assumed.
