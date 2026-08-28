@@ -1384,3 +1384,104 @@ Two details that matter for correctness:
   after the repair rounds.
 * Preflight gained a `COMSOL solve rate` check and counts severe-stenosis coverage over
   **solved** vessels only (§13.2).
+
+
+---
+
+## 15. The 2026-08-29 regeneration, and what it showed
+
+The regenerated cohort came back **213/250 solved** — 37 unsolved against the previous 39.  Two
+refine rounds recovered **2 vessels**.  Three things follow.
+
+### 15.1 Refinement alone does not rescue the extreme tail
+
+The survivors are not a random 15%.  The worst fifteen all sit at stenosis ratio **4.4 or above**
+against a cohort median of 1.29, and the second refine round reached **25.7k nodes** without
+solving them.  At an 80% occlusion the throat walls very nearly touch; no element size fixes a
+shape that is close to degenerate.
+
+Note the ratios themselves moved — cohort p95 3.49 -> 4.59, max 4.79 -> 5.20 — **not** because the
+sampler got more aggressive but because the finer throat mesh now puts nodes near the true
+minimum.  `width_d1` / `width_d2` p95 climbed the same way (18.90 / 819.4 against config
+15.56 / 282.3), which is why the clamp check warns.  **Re-derive `WIDTH_D1_MAX` / `WIDTH_D2_MAX`
+from the final cohort, once**, after the settings stop moving — they are a property of the corpus
+and carrying stale ones truncates real signal.
+
+### 15.2 B31 — the repair now re-draws the shape, with severity held fixed
+
+A third stage runs after refinement fails: re-sample the vessel at the same `level` and the same
+pathology class, different RNG stream.
+
+**Severity is preserved by rejection sampling, not by hope.**  The first version simply re-drew
+with the recorded pathology mode, and on the pre-existing packs — which have no `pathology_mode`
+field — it fell back to `"random"`.  Measured, that turned a 5.00 stenosis into a 1.04 straight
+tube and a `stenosis_arc` into an `aneurysm_arc`:
+
+```
+vessel_245   was stenosis_straight  ratio 5.00   ->  straight_arc      ratio 1.04    WRONG
+vessel_112   was stenosis_arc       ratio 4.97   ->  aneurysm_arc      ratio 1.03    WRONG
+```
+
+That is worse than leaving the vessel unsolved: it silently deletes the severe tail while
+reporting a full cohort.  Candidates are now built without meshing until one matches the original
+`v_type` and reaches `severity_floor` (0.85) of its stenosis / aneurysm ratio; the most severe of
+`max_draws` wins if none clears the bar:
+
+```
+vessel_245   stenosis_straight 5.00  ->  stenosis_straight 5.00
+vessel_218   stenosis_straight 5.00  ->  stenosis_hook     5.00
+vessel_112   stenosis_arc      4.97  ->  stenosis_straight 5.00
+vessel_88    stenosis_s_curve  4.74  ->  stenosis_arc      5.00
+```
+
+The sampler also records `pathology_mode` / `magnitude_mode` / `hit_configured_max` into each
+vessel's `.json` so future repairs need no inference, and `reshaped_from` stamps the substitution
+(including both severities) so it is auditable.  Preflight reports the count.
+
+This still biases the corpus toward solvable realisations *at a given severity*, which is why it
+runs last.  The alternative measured worse: 15% of the cohort dropped, entirely from the tail.
+
+### 15.3 B32 — severity and curvature were sampled independently
+
+Severe stenoses and aneurysms occur in comparatively straight vessels; the sampler drew magnitude
+and curve type independently, producing shapes that are both clinically odd and hard to solve.
+The max-magnitude roll now happens **before** the curve draw, and a severe vessel blends its
+level's curve weights toward `severe_curve_weights` by `severe_pathology_straighten` (0.70):
+
+```
+                     straight     arc   s_curve    hook
+L0  severe              59.4%   30.9%      9.7%    0.0%     (already straight; no change)
+L0  mild                60.2%   29.9%      9.9%    0.0%
+L1  severe              30.6%   39.2%     17.3%   12.9%
+L1  mild                17.9%   44.9%     20.1%   17.1%
+L2  severe               0.0%   41.2%     34.2%   24.5%
+L2  mild                 0.0%   26.2%     38.2%   35.6%
+```
+
+**A curve type the level zeroes stays zero.**  L2 sets `straight: 0.0` because its job is the
+bendy-and-pathological corner, and L0 already supplies straight-and-severe in bulk; blending
+straight back into L2 deletes a deliberate contrast class to duplicate coverage we have.  The
+first version did exactly that — caught by `test_sample_params_level2_avoids_straight_centerline`,
+because the pro-thrombotic map spells `{"straight": 0.0, ...}` rather than omitting the key.
+Within L2 the tilt still moves severe cases off hooks and onto arcs.
+
+Expect the raw pre-repair failure rate to **rise**: straight vessels have the tightest throats at
+a given occlusion (`stenosis_straight` failed 48% against `stenosis_hook`'s 13%).  That is the
+repair chain's job, not a reason to sample shapes that do not occur.
+
+### 15.4 B33 — the corpus was 17% coarser than deployment
+
+Measured over 53 biochem anchor packs and 32 elevated synthetic ones, in non-dimensional edge
+length — the units the model consumes, since positions are stored as `x / d_bar`:
+
+```
+                              nodes p10/med/p90        h_nd p10/med/p90
+DEPLOY (biochem anchors)       9949 / 13915 / 17587    0.0195 / 0.0245 / 0.0339
+synthetic -> P2                8098 / 11300 / 15067    0.0216 / 0.0287 / 0.0405
+                                                        ratio 1.17x, 66% in band
+```
+
+The local throat sizing does not address this — it moves the global median by 0.6% — so `mesh_lc`
+carries it: **1.00 mm -> 0.90 mm**.  Preflight now measures `h_nd` against the deploy band
+(P2 elevation halves every edge exactly, so a P1 cohort's deploy-equivalent is `h_nd / 2`) and
+warns outside +-15%, so this is verified on the cohort rather than extrapolated.

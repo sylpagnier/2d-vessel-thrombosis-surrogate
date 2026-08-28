@@ -1341,11 +1341,19 @@ def test_mesh_sizing_resolves_the_stenosis_throat(tmp_path):
         f"back byte-identical to a uniform mesh."
     )
 
-    # the inlet, far from the throat, must keep the open-lumen size: refinement is LOCAL
+    # The inlet, far from the throat, must keep the OPEN-LUMEN size: refinement is local.
+    # Asserted against the configured size rather than as a ratio to the throat, so it does not
+    # drift when `mesh_lc` changes -- lowering `mesh_lc` to match deployment shrinks the open
+    # lumen and would silently erode a ratio threshold.
     h_inlet = spacing_near(pts_s, 0.01, 0.008)
-    assert h_inlet > 2.0 * h_throat, (
-        f"inlet spacing {h_inlet:.2e} vs throat {h_throat:.2e} -- the whole vessel refined, "
-        f"which multiplies node count everywhere instead of where it is needed"
+    h_open = cfg.mesh_lc * cfg.mesh_size_factor
+    assert h_inlet > 0.8 * h_open, (
+        f"inlet spacing {h_inlet:.2e} vs the configured open-lumen size {h_open:.2e} -- the "
+        f"whole vessel refined, which multiplies node count everywhere instead of where it is "
+        f"needed"
+    )
+    assert h_inlet > 1.5 * h_throat, (
+        f"inlet {h_inlet:.2e} vs throat {h_throat:.2e} -- no meaningful local contrast"
     )
     # and the cost stays modest against the same vessel with no throat at all
     assert len(pts_s) < 2.0 * len(pts_o), (

@@ -127,8 +127,16 @@ Exit code 1 on any FAIL.  Every check is a bug that has already cost a run:
 | severe-stenosis coverage | the old corpus had 0% at ratio ≥ 2.0 against deployment's 14% |
 | `u_ref` overlaps deployment | BC range; currently fine, checked so it stays fine |
 | COMSOL solve rate | 39/250 packs shipped with an all-zero `y` and every check passed (B27) |
+| resolution matches deployment | the corpus sat 17% coarser than deploy in `h_nd` (B33) |
+| geometry substitutions | how many vessels the repair re-drew (B31) |
 
-**Failed solves now repair themselves.**  `--repair-rounds N` (default 2) re-meshes any vessel
+**Failed solves now repair themselves**, in two stages: two rounds that re-mesh the *same*
+geometry finer, then two that re-draw a **different vessel of the same class and severity**
+(rejection-sampled to within 0.85x of the original's stenosis / aneurysm ratio, stamped
+`reshaped_from`).  Refinement alone recovered only 2 of 39 on the 2026-08-29 run -- the extreme
+tail is close to degenerate, not under-resolved.
+
+**Old note, kept for context.**  `--repair-rounds N` (default 2) re-meshes any vessel
 COMSOL could not solve at a finer element size and tries it again, on the *same* geometry — the
 wall polylines are re-read from the vessel's own `.json`, so the cohort keeps its designed
 pathology mix rather than drifting toward the shapes that solve easily.  The run ends with a

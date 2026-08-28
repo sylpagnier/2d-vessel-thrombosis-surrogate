@@ -475,10 +475,11 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
                    help="Add to an existing cohort: indices continue from the highest "
                         "on disk. Mutually exclusive with --overwrite.")
     p.add_argument(
-        "--repair-rounds", type=int, default=2, metavar="N",
-        help="Re-mesh finer and retry vessels COMSOL could not solve, up to N times "
-             "(0 disables). Geometry is preserved -- only the mesh changes -- so the cohort "
-             "keeps its designed pathology mix. Default 2.")
+        "--repair-rounds", type=int, default=4, metavar="N",
+        help="Stages tried on a vessel COMSOL could not solve, in order (0 disables): two "
+             "re-mesh rounds on the SAME geometry, then two rounds that re-draw a different "
+             "vessel of the same class (same level and pathology mode). Refinement alone "
+             "recovered only 2 of 39 on the 2026-08-29 run. Default 4 (all stages).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan (counts, mix, target dirs) and exit without writing.")
     p.add_argument(
@@ -717,8 +718,11 @@ def _run_batch_for_phase(
             _rr = int(getattr(args, "repair_rounds", 2))
             print(f"  mesh          lc={_cfg.mesh_lc * 1000:.2f}mm x{_cfg.mesh_size_factor}, "
                   f">={_cfg.mesh_min_elems_across} elements across the throat")
-            print(f"  repair        {_rr} round(s)" + (" (DISABLED)" if _rr <= 0 else
-                  " -- unsolved vessels are re-meshed finer on their own geometry"))
+            if _rr <= 0:
+                print("  repair        DISABLED")
+            else:
+                _stages = ", ".join(f"{k}@{f}" for k, f, _ in ANCHOR_REPAIR_SCHEDULE[:_rr])
+                print(f"  repair        {_rr} stage(s): {_stages}")
             if args.pathology_mix:
                 import numpy as _np
                 from collections import Counter as _C
@@ -802,11 +806,22 @@ def _run_batch_for_phase(
             raise
 
 
-#: Element-size multipliers tried, in order, on a vessel COMSOL could not solve.  Paired with a
-#: rising throat-resolution target: a stenosis that fails at 8 elements across is given 12, then
-#: 16.  Refining is the fix the failures asked for -- manually refining the 39 unsolved vessels
-#: of the 2026-08-28 cohort in COMSOL let every one of them solve.
-ANCHOR_REPAIR_SCHEDULE: tuple[tuple[float, int], ...] = ((0.6, 12), (0.4, 16))
+#: What is tried, in order, on a vessel COMSOL could not solve.  ``("mesh", refine, elems)``
+#: re-meshes the SAME geometry finer; ``("reshape", refine, elems)`` re-draws a different vessel
+#: of the same class.
+#:
+#: Refinement first, because it preserves the exact geometry and recovers the vessels that fail
+#: only for want of resolution.  But it is not sufficient on its own: on the 2026-08-29 run two
+#: refine rounds (0.6x then 0.4x, the second reaching 25.7k nodes) recovered **2 of 39**.  The
+#: survivors are the extreme tail -- every one of the worst fifteen sits at stenosis ratio 4.4
+#: or above, against a cohort median of 1.29 -- where the walls very nearly touch and no mesh
+#: helps.  Those get a new draw of the same class instead.
+ANCHOR_REPAIR_SCHEDULE: tuple[tuple[str, float, int], ...] = (
+    ("mesh", 0.6, 12),
+    ("mesh", 0.4, 16),
+    ("reshape", 0.8, 10),
+    ("reshape", 0.6, 12),
+)
 
 
 def _unsolved_stems(gen) -> list[str]:
@@ -825,57 +840,77 @@ def _unsolved_stems(gen) -> list[str]:
 
 def _repair_unsolved_anchors(gen, *, rounds: int, allow_overwrite: bool,
                              max_json_to_scan=None) -> list[str]:
-    """Re-mesh vessels COMSOL could not solve, finer, and try them again.  Returns what is
-    still unsolved.
+    """Rescue vessels COMSOL could not solve, and return what is still unsolved.
 
-    Solve failure used to be terminal and silent: the vessel was skipped, ``mesh_to_graph``
-    wrote a pack anyway with an all-zero ``y`` and ``is_anchor=False``, and the cohort shipped
-    short with every preflight check passing.  On 2026-08-28 that lost 39 of 250 vessels
-    (15.6%), **all of them stenosis geometries**, at a rate that climbed with stenosis ratio
-    (2.9% below 1.5, 40.6% above 3.0) -- so the loss fell precisely on the severe tail the
-    cohort exists to provide.
+    Two stages, in order (see :data:`ANCHOR_REPAIR_SCHEDULE`):
 
-    The geometry is NOT re-rolled.  Each vessel is re-meshed from its own stored wall polylines
-    at a smaller element size, so the cohort's designed pathology mix survives the repair; a
-    re-roll would bias it toward the shapes that solve easily.
+    1. **Re-mesh the same geometry finer.**  Exact -- the wall polylines come from the vessel's
+       own ``.json`` -- so the cohort's designed pathology mix is untouched.
+    2. **Re-draw a different vessel of the same class.**  For the geometries that no mesh can
+       solve.  Same ``level``, same ``pathology_mode``, different RNG stream, and a
+       ``reshaped_from`` stamp in the metadata so the substitution is auditable.
+
+    Stage 2 biases the corpus toward solvable realisations within a class.  That is a real cost,
+    accepted only because the alternative measured worse: leaving them unsolved dropped 15% of
+    the cohort and the loss fell entirely on the severe-stenosis tail the corpus exists to
+    provide (RGP_DEQ_REPAIR_PLAN.md B27).
     """
-    from src.data_gen.lib.vessel_generator import VesselGenerator, remesh_vessels_from_meta
+    from src.config import VesselConfig
+    from src.data_gen.lib.vessel_generator import (
+        VesselGenerator, remesh_vessels_from_meta, reshape_vessels_from_meta)
 
-    cfg_dict = VesselGenerator(phase="kinematics")._cfg_dict()
+    vg = VesselGenerator(phase="kinematics")
+    cfg_dict = vg._cfg_dict()
+    cfg = VesselConfig(phase="kinematics")
     pending = _unsolved_stems(gen)
     if not pending:
         return []
 
-    for r, (refine, elems) in enumerate(ANCHOR_REPAIR_SCHEDULE[:max(0, int(rounds))], start=1):
+    n_reshaped = 0
+    stages = ANCHOR_REPAIR_SCHEDULE[: max(0, int(rounds))]
+    for r, (kind, refine, elems) in enumerate(stages, start=1):
+        what = ("re-meshing" if kind == "mesh" else "RE-DRAWING")
         _safe_print(
-            f"\n--- Anchor repair round {r}/{min(rounds, len(ANCHOR_REPAIR_SCHEDULE))}: "
-            f"{len(pending)} unsolved vessel(s), re-meshing at "
-            f"mesh_refine={refine} min_elems_across={elems} ---\n"
+            f"\n--- Anchor repair {r}/{len(stages)} ({kind}): {len(pending)} unsolved, "
+            f"{what} at mesh_refine={refine} min_elems_across={elems} ---\n"
         )
-        results = remesh_vessels_from_meta(
-            pending, gen.mesh_dir, cfg_dict, mesh_refine=refine, min_elems_across=elems,
-        )
-        remeshed = [stem for stem, ok, _ in results if ok]
+        if kind == "mesh":
+            results = remesh_vessels_from_meta(
+                pending, gen.mesh_dir, cfg_dict, mesh_refine=refine, min_elems_across=elems)
+        else:
+            results = reshape_vessels_from_meta(
+                pending, gen.mesh_dir, cfg, cfg_dict, attempt=r,
+                mesh_refine=refine, min_elems_across=elems)
+
+        rebuilt = [stem for stem, ok, _ in results if ok]
         for stem, ok, err in results:
             if not ok:
-                _safe_print(f"    re-mesh failed: {stem}: {err[:90]}")
-        if not remeshed:
-            _safe_print("    nothing could be re-meshed; stopping repair.\n")
+                _safe_print(f"    {kind} failed: {stem}: {err[:90]}")
+        if not rebuilt:
+            _safe_print("    nothing could be rebuilt; stopping repair.\n")
             break
 
         gen.run_batch(
-            max_new=len(remeshed),
+            max_new=len(rebuilt),
             max_json_to_scan=max_json_to_scan,
             shuffle_candidates=False,
             shuffle_seed=None,
             allow_overwrite=allow_overwrite,
             continuation_steps=None,
         )
-        recovered = len(pending) - len(_unsolved_stems(gen))
-        pending = _unsolved_stems(gen)
-        _safe_print(f"    round {r}: recovered {recovered}, still unsolved {len(pending)}\n")
+        still = _unsolved_stems(gen)
+        recovered = len(pending) - len(still)
+        if kind == "reshape":
+            n_reshaped += recovered
+        pending = still
+        _safe_print(f"    {kind} round {r}: recovered {recovered}, still unsolved "
+                    f"{len(pending)}\n")
         if not pending:
             break
+
+    if n_reshaped:
+        _safe_print(f"  {n_reshaped} vessel(s) were replaced by a new draw of the same class "
+                    f"(`reshaped_from` in their .json).\n")
     return pending
 
 

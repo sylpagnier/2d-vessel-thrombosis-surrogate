@@ -86,6 +86,13 @@ def _build_meta(
         "d_bar": float(d_bar),
         "d_inlet": float(d_inlet),
         "num_outlets": 1,
+        # What the sampler drew, so `reshape_vessels_from_meta` can replace an unsolvable
+        # vessel with another of the same class instead of a random one.
+        "pathology_mode": params.get("pathology_mode"),
+        "magnitude_mode": params.get("magnitude_mode"),
+        "hit_configured_max": bool(params.get("hit_configured_max", False)),
+        # Set when this vessel replaced one COMSOL could not solve at any mesh resolution.
+        "reshaped_from": params.get("reshaped_from"),
         "centerline_pts": (pts / d_bar).tolist(),
         "centerline_tangents": tangents.tolist(),
         "top_wall_pts": (top_coords / d_bar).tolist(),

@@ -420,6 +420,41 @@ def _sample_wound_sites(
     return sites
 
 
+def _straighten_curve_weights(active: Dict[str, float], cfg: VesselConfig) -> Dict[str, float]:
+    """Blend a level's curve weights toward the straight-vessel preference for severe pathology.
+
+    Severe stenoses and aneurysms occur in straight vessels far more than in tortuous ones, and
+    that is what the deploy cohort looks like.  Drawing severity independently of curvature
+    produced shapes that are both clinically odd and hard to solve.
+
+    A blend, not an override: ``w' = (1 - a) * w_level + a * w_severe``.  Each level keeps its
+    character -- L2 is deliberately bendy and stays bendier than L0 -- while severe cases move
+    toward straight within it.
+    """
+    a = float(np.clip(cfg.severe_pathology_straighten, 0.0, 1.0))
+    if a <= 0.0:
+        return dict(active)
+    # A curve type the level has zeroed is an EXCLUSION, not a low weight.  L2 sets
+    # `straight: 0.0` because its whole job is the bendy-and-pathological corner of the space;
+    # L0 already supplies straight-and-severe in bulk (60% straight).  Blending straight back
+    # into L2 would delete a deliberate contrast class to duplicate coverage we already have.
+    # So the tilt only redistributes among the types the level actually allows -- which for L2
+    # still means moving severe cases off hooks and onto arcs.
+    # A zero entry counts as excluded even when the key is present: the pro-thrombotic map
+    # spells out `{"straight": 0.0, ...}` rather than omitting it.
+    active = {k: float(v) for k, v in active.items() if float(v) > 0.0}
+    if not active:
+        return {}
+    pref = {k: float(cfg.severe_curve_weights.get(k, 0.0)) for k in active}
+    tot = sum(pref.values())
+    if tot <= 0.0:
+        return dict(active)
+    pref = {k: v / tot for k, v in pref.items()}
+    out = {k: (1.0 - a) * float(active[k]) + a * pref[k] for k in active}
+    out = {k: v for k, v in out.items() if v > 0}
+    return out or dict(active)
+
+
 def _sample_params(
         idx: int,
         level: int,
@@ -441,6 +476,11 @@ def _sample_params(
     straight_max = pathology_mode == "straight_max"
     forced_max = pathology_mode in _FORCED_MAX_PATHOLOGY_MODES
 
+    # Whether this vessel will carry a max-magnitude pathology is decided HERE, before the
+    # curve is drawn, so the curve can be conditioned on it.  It used to be rolled inside the
+    # offset block, which made severity and curvature independent.
+    hit_max_roll = bool(rng.random() < float(cfg.pathology_max_hit_prob))
+
     if straight_max:
         # Dedicated class: straight along x, no bendiness, extreme pathology.
         curve_type = "straight"
@@ -453,6 +493,12 @@ def _sample_params(
         else:
             weights_map = _CURVE_WEIGHTS.get(min(level, 1), _CURVE_WEIGHTS)
             active = {k: v for k, v in weights_map.items() if v > 0}
+
+        # A severe pathology belongs in a straighter vessel (`severe_pathology_straighten`).
+        # `forced_max` is known now; for the random mode the roll above stands in for it.
+        will_be_severe = forced_max or hit_max_roll
+        if will_be_severe:
+            active = _straighten_curve_weights(active, cfg)
 
         keys = list(active.keys())
         probs = np.array(list(active.values()), dtype=float)
@@ -492,7 +538,7 @@ def _sample_params(
         elif v_type in ("stenosis", "occlusion"):
             mult = cfg.stenosis_pro_thrombotic_mult if pro_thrombotic else 1.0
             stenosis_cap = 0.5 * float(cfg.max_stenosis_diameter_occlusion)
-            if float(rng.random()) < float(cfg.pathology_max_hit_prob):
+            if hit_max_roll:        # drawn before the curve, so the two are coupled
                 mag = cfg.max_stenosis_wall_offset(width)
                 hit_configured_max = True
             else:
@@ -634,6 +680,10 @@ def _sample_params(
         "level": level,
         "v_type": v_type,
         "curve_type": curve_type,
+        # Carried into the written `.json` so a repair can re-draw the SAME class of vessel.
+        "pathology_mode": pathology_mode,
+        "magnitude_mode": magnitude_mode,
+        "hit_configured_max": bool(hit_configured_max),
         "width": width,
         "angle_span": angle_span,
         "amplitude": amplitude,
@@ -1071,6 +1121,144 @@ def remesh_vessels_from_meta(
                 results.append((stem, False, f"cannot rebuild geometry: {exc}"))
                 continue
             _, ok, err = _mesh_geometry(geom, cfg, str(mesh_dir))
+            results.append((stem, ok, err))
+    finally:
+        if _owned:
+            gmsh.finalize()
+    return results
+
+
+
+def _wall_severity(top: np.ndarray, bot: np.ndarray, v_type: str) -> float:
+    """Stenosis ratio ``median(w)/min(w)`` or aneurysm ratio ``max(w)/median(w)``."""
+    w = np.linalg.norm(np.asarray(top) - np.asarray(bot), axis=1)
+    med = float(np.median(w))
+    if v_type == "aneurysm":
+        return float(w.max() / max(med, 1e-12))
+    return float(med / max(w.min(), 1e-12))
+
+
+def _class_from_meta(meta: Dict[str, Any]) -> Tuple[str, str, float]:
+    """``(v_type, pathology_mode, severity)`` of an existing vessel, from its own ``.json``.
+
+    ``pathology_mode`` is recorded by the sampler since 2026-08-29; older packs are read off
+    ``type`` instead.  The fallback must NOT be ``"random"`` for a pathological vessel -- that
+    draws freely from ``[straight, stenosis, aneurysm]`` and turns a 5.0 stenosis into a healthy
+    tube, which is how this was caught.
+    """
+    v_type = str(meta.get("type", "straight_straight")).split("_")[0]
+    mode = meta.get("pathology_mode")
+    if not mode or str(mode) == "random":
+        mode = {"stenosis": "max_stenosis", "aneurysm": "max_aneurysm"}.get(v_type, "random")
+    d_bar = float(meta.get("d_bar", 1.0))
+    top = np.asarray(meta["top_wall_pts"], dtype=float) * d_bar
+    bot = np.asarray(meta["bot_wall_pts"], dtype=float) * d_bar
+    return v_type, str(mode), _wall_severity(top, bot, v_type)
+
+
+def reshape_vessels_from_meta(
+    stems: List[str],
+    mesh_dir: Path | str,
+    cfg: VesselConfig,
+    cfg_dict: Dict[str, Any],
+    *,
+    attempt: int = 1,
+    mesh_refine: float = 0.8,
+    min_elems_across: Optional[int] = None,
+    max_draws: int = 24,
+    severity_floor: float = 0.85,
+) -> List[Tuple[str, bool, str]]:
+    """Re-draw an unsolvable vessel as a DIFFERENT sample of the same class and severity.
+
+    Refinement is the right first answer -- it preserves the exact geometry -- but some shapes
+    are degenerate at the extreme of the sampler's range: an 80% occlusion whose throat walls
+    very nearly touch, or a Gaussian bump landing on a tight bend.  No mesh saves those.  The
+    2026-08-29 regeneration measured it: two rounds of global refinement (0.6x then 0.4x, the
+    second reaching 25.7k nodes) recovered **2 of 39**, and the survivors were the extreme tail
+    -- the worst fifteen all at stenosis ratio 4.4+ against a cohort median of 1.29.
+
+    So the last stage replaces the *shape*: same ``level``, same pathology class, a different RNG
+    draw.  **Severity is preserved by rejection sampling**, not by hope.  Candidates are built
+    (cheaply, without meshing) until one is the same ``v_type`` and at least ``severity_floor``
+    of the original's stenosis / aneurysm ratio; the most severe candidate wins if none clears
+    the bar.  Without that guard the replacement is drawn from the class's whole range and the
+    severe tail quietly evaporates -- a 5.00 stenosis came back as a 1.04 straight tube.
+
+    This still biases the corpus toward solvable realisations at a given severity, which is why
+    it runs last.  ``reshaped_from`` records the substitution in the metadata.
+    """
+    mesh_dir = Path(mesh_dir)
+    cfg_d = dict(cfg_dict)
+    cfg_d["mesh_refine"] = float(mesh_refine)
+    if min_elems_across is not None:
+        cfg_d["mesh_min_elems_across"] = int(min_elems_across)
+
+    from src.data_gen.lib.vessel_geometry import (
+        GeometryValidationError, compute_geometry_from_params, validate_geometry)
+
+    unit_scale = 100.0 if str(cfg_d.get("unit", "m")) == "cm" else 1.0
+    lc_min, lc_max = _gmsh_size_bounds(cfg_d, unit_scale)
+
+    results: List[Tuple[str, bool, str]] = []
+    _owned = not gmsh.isInitialized()
+    if _owned:
+        gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.Algorithm", 6)
+        gmsh.option.setNumber("Mesh.Smoothing", 5)
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+        gmsh.option.setNumber("Mesh.Binary", 0)
+        gmsh.option.setNumber("Mesh.SaveGroupsOfNodes", 1)
+        gmsh.option.setNumber("Mesh.SaveAll", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFactor", cfg_d["mesh_size_factor"])
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc_max)
+
+        for stem in stems:
+            try:
+                meta = json.loads((mesh_dir / f"{stem}.json").read_text(encoding="utf-8"))
+                idx = int(meta["id"])
+                level = int(meta.get("level", 0))
+                v_type, mode, want = _class_from_meta(meta)
+            except Exception as exc:
+                results.append((stem, False, f"cannot read class: {exc}"))
+                continue
+
+            best = None       # (severity, params)
+            for k in range(int(max_draws)):
+                rng = np.random.default_rng(
+                    abs(hash((idx, "reshape", int(attempt), k))) % (2**32))
+                params = _sample_params(idx, level, cfg, rng, pathology_mode=mode)
+                if str(params.get("v_type")) != v_type:
+                    continue
+                try:
+                    geom = compute_geometry_from_params(params, cfg_d)
+                    validate_geometry(geom, cfg_d)
+                except (GeometryValidationError, Exception):
+                    continue
+                sev = _wall_severity(geom.top_coords, geom.bot_coords, v_type)
+                if best is None or sev > best[0]:
+                    best = (sev, params)
+                if sev >= float(severity_floor) * want:
+                    break
+
+            if best is None:
+                results.append((stem, False,
+                                f"no valid {v_type} candidate in {max_draws} draws"))
+                continue
+            sev, params = best
+            params["reshaped_from"] = {
+                "attempt": int(attempt),
+                "original_type": meta.get("type"),
+                "pathology_mode": mode,
+                "severity_was": round(float(want), 3),
+                "severity_now": round(float(sev), 3),
+            }
+            _, ok, err = _build_and_mesh(params, cfg_d, str(mesh_dir))
+            if ok and sev < float(severity_floor) * want:
+                err = (f"severity {sev:.2f} below the original {want:.2f} "
+                       f"(floor {severity_floor:.2f}x) -- best of {max_draws} draws")
             results.append((stem, ok, err))
     finally:
         if _owned:

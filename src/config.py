@@ -185,7 +185,15 @@ class VesselConfig:
             self.mesh_size_factor = float(os.environ["GMSH_SIZE_FACTOR"])
 
     mesh_size_factor: float = 0.75
-    mesh_lc: float = 1/1000  # [m]  -- the size in the OPEN lumen; throats refine below it.
+    # [m] -- the size in the OPEN lumen; throats refine below it.
+    # 0.90 mm, not 1.00: measured over 53 biochem anchor packs and 32 elevated synthetic ones,
+    # the training corpus sat 17% COARSER than deployment in the units the model actually
+    # consumes (non-dimensional edge length: deploy p10/med/p90 0.0195/0.0245/0.0339 against
+    # synthetic 0.0216/0.0287/0.0405, only 66% of vessels inside deploy's p10-p90 band).  The
+    # local throat sizing does not touch that -- it moves the global median by 0.6% -- so the
+    # global size carries it.  Node count scales as 1/lc^2; preflight reports the achieved
+    # `h_nd` against the deploy band so this is verified on the cohort, not extrapolated.
+    mesh_lc: float = 0.90/1000
 
     # Lumen-aware sizing.  `mesh_lc` alone is a uniform element size, and a severe stenosis
     # closes the lumen to ~1.6 mm (`width_min` 8 mm, `stenosis_factor_max` 0.4 on both walls),
@@ -217,6 +225,17 @@ class VesselConfig:
     max_aneurysm_factor: float = 1.0  # both walls -> local width = 3x inlet (see max_aneurysm_width_scale)
     # Chance that random stenosis/aneurysm sampling snaps to the configured max (both walls).
     pathology_max_hit_prob: float = 0.25
+    # Severe pathology sits in straight vessels, not bendy ones.  Clinically that is where
+    # severe stenoses and aneurysms are actually found, and it is what the deploy cohort looks
+    # like; sampling severity independently of curvature produced shapes that do not occur and
+    # that COMSOL struggles to solve.  A vessel drawing a max-magnitude pathology has its curve
+    # weights blended toward `severe_curve_weights` by this fraction (0 = no coupling,
+    # 1 = ignore the level's own weights).  The blend keeps each level's character rather than
+    # overriding it -- L2 is deliberately bendy and stays relatively bendier than L0.
+    severe_pathology_straighten: float = 0.70
+    severe_curve_weights: Dict[str, float] = field(
+        default_factory=lambda: {"straight": 0.55, "arc": 0.35, "s_curve": 0.10, "hook": 0.00}
+    )
     stenosis_pro_thrombotic_mult: float = 1.2  # L2 random-sampling stenosis boost (capped at max)
     aneurysm_pro_thrombotic_mult: float = 1.5  # L2 random-sampling aneurysm boost (capped at max)
     num_ctrl_pts: int = 50

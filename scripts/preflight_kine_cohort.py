@@ -39,6 +39,19 @@ def main() -> int:
         print(f"[ERR] no .pt under {args.src}")
         return 1
 
+    import json as _json
+
+    from src.config import VesselConfig as _VCfg
+
+    _mesh_dir = _VCfg(phase="kinematics").mesh_input_dir
+
+    def meta_of(pack_path):
+        jf = _mesh_dir / f"{pack_path.stem}.json"
+        try:
+            return _json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
     rows, results = [], []
 
     def check(name, status, detail):
@@ -56,8 +69,12 @@ def main() -> int:
         if y is not None and y.dim() == 2 and y.shape[1] >= 2:
             yv = y[:, 0:2]
             prior_rel = float((x[:, 11:13] - yv).norm() / yv.norm().clamp(min=1e-30))
+        ei = d.edge_index
+        _el = (x[ei[1], 0:2] - x[ei[0], 0:2]).norm(dim=1)
+        _el = _el[_el > 0]
         rows.append(dict(
             stem=f.stem, n=n, mid=float(mid.float().mean()),
+            h_nd=float(_el.median()) if _el.numel() else float("nan"),
             sten=float(r.median() / r.min()),
             d1=float(x[:, 16].abs().max()), d2=float(x[:, 17].abs().max()),
             wn0=float((x[:, 4:6].norm(dim=1) < 1e-8).float().mean()),
@@ -78,6 +95,7 @@ def main() -> int:
             ),
             glevel=int(getattr(d, "geometry_level", torch.tensor([-1])).reshape(-1)[0])
             if hasattr(d, "geometry_level") else -1,
+            reshaped=bool((meta_of(f) or {}).get("reshaped_from")),
         ))
 
     n_f = len(rows)
@@ -152,6 +170,12 @@ def main() -> int:
           f"{100 * frac2:.0f}% of SOLVED vessels at ratio >= 2.0 (deployment: 14%; "
           f"{100 * frac2_all:.0f}% before dropping unsolved); "
           f"median {np.median(st):.2f}, max {st.max():.2f}")
+    n_reshaped = sum(1 for r in rows if r.get("reshaped"))
+    if n_reshaped:
+        check("geometry substitutions", OK,
+              f"{n_reshaped}/{n_f} vessels were re-drawn after COMSOL could not solve the "
+              f"original at any mesh resolution (same level, class and severity)")
+
     if not solved.all():
         lost = [(r["stem"], r["sten"]) for r in rows if not r["solved"]]
         lost.sort(key=lambda t: -t[1])
@@ -160,6 +184,28 @@ def main() -> int:
             print(f"    {stem:14s} stenosis ratio {sr:.2f}")
         if len(lost) > 15:
             print(f"    ... and {len(lost) - 15} more")
+
+    # 6b. resolution against deployment, in the units the model consumes.
+    # The biochem anchor pipeline is fixed, so this is the corpus's job to match.  Positions are
+    # stored as `x / d_bar`, which makes edge length comparable across vessels of any physical
+    # size.  P2 elevation halves every edge exactly (a mid-side node per edge), so a P1 cohort's
+    # deploy-equivalent spacing is `h_nd / 2`.
+    # Deploy reference, measured over 53 biochem anchor packs: p10 0.0195, med 0.0245, p90 0.0339.
+    DEPLOY_H_MED, DEPLOY_H_LO, DEPLOY_H_HI = 0.0245, 0.0195, 0.0339
+    hn = g("h_nd")
+    hn = hn[np.isfinite(hn)]
+    if hn.size:
+        h_p2 = np.median(hn) / (2.0 if args.expect_p1 else 1.0)
+        ratio = h_p2 / DEPLOY_H_MED
+        per = hn / (2.0 if args.expect_p1 else 1.0)
+        inband = float(((per >= DEPLOY_H_LO) & (per <= DEPLOY_H_HI)).mean())
+        # +-15% of the deploy median; the corpus sat at 1.17x before `mesh_lc` was set from this.
+        check("resolution matches deployment", OK if 0.85 <= ratio <= 1.15 else WARN,
+              f"h_nd {h_p2:.4f} at P2 vs deployment {DEPLOY_H_MED:.4f} ({ratio:.2f}x); "
+              f"{100 * inband:.0f}% of vessels inside deploy's p10-p90 band "
+              f"[{DEPLOY_H_LO:.4f}, {DEPLOY_H_HI:.4f}]")
+    else:
+        check("resolution matches deployment", WARN, "no usable edges to measure")
 
     # 7a. the inlet BC the analytic prior is anchored on (B4).  Without it
     # `inlet_anchored_umax_nd` silently falls back to fixed module constants -- the prior is
@@ -190,6 +236,9 @@ def main() -> int:
     print("=" * 78)
     print(f"  nodes      median {np.median(g('n')):.0f}   range {g('n').min():.0f}-{g('n').max():.0f}")
     print(f"  stenosis   median {np.median(st):.2f}   p95 {np.percentile(st, 95):.2f}")
+    if hn.size:
+        print(f"  h_nd       median {np.median(hn):.4f} (P1)   "
+              f"{np.median(hn) / 2:.4f} at P2   <- deployment {DEPLOY_H_MED:.4f}")
     print(f"  width_d1   p95 {new_d1:8.2f}   width_d2   p95 {new_d2:8.1f}"
           f"   <- src/config.py WIDTH_D1_MAX / WIDTH_D2_MAX")
 
