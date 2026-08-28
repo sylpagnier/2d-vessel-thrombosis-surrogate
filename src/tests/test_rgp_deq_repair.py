@@ -1011,3 +1011,44 @@ def test_builder_does_not_store_the_dead_sparse_operators_by_default():
     i = src.find("data.G_x, data.G_y = G_x, G_y")
     assert i > 0, "the opt-in path is missing"
     assert "KINEMATICS_STORE_G_OPERATORS" in src[max(0, i - 300):i]
+
+
+def test_sampled_params_record_a_resolved_mode_so_retries_can_reuse_it():
+    """B26.  The retry path re-samples rejected geometries and used to pass the caller's
+    `pathology_mode` verbatim.  With `--pathology-mix` that argument is a spec
+    ("random:0.72,max_stenosis:0.18,...") which `_sample_params` cannot parse -- it expects a
+    single resolved mode, because the main loop expands the spec per vessel before calling it.
+
+    So a 250-vessel run crashed the moment any geometry was rejected and had to be resampled
+    (3 of 250: "outlet curled back past L/3") -- after the meshes were already generated.
+    """
+    import numpy as np
+
+    from src.config import VesselConfig
+    from src.data_gen.lib.vessel_generator import (
+        _sample_params, normalize_pathology_mode, parse_pathology_mix,
+    )
+
+    cfg = VesselConfig(phase="kinematics")
+    rng = np.random.default_rng(3)
+    modes = parse_pathology_mix("random:0.5,max_stenosis:0.3,max_aneurysm:0.2", 10, rng)
+
+    for i, mode in enumerate(modes):
+        params = _sample_params(i, i % 3, cfg, rng, pathology_mode=mode)
+        stored = params.get("pathology_mode")
+        assert stored is not None, "params do not record their mode; a retry cannot reuse it"
+        # The retry feeds this straight back in, so it must be a single resolved mode.
+        assert normalize_pathology_mode(stored) is not None or stored == "random"
+        _sample_params(i, i % 3, cfg, rng, pathology_mode=stored)   # must not raise
+
+
+def test_retry_path_reuses_the_stored_mode_not_the_raw_argument():
+    src = (REPO / "src" / "data_gen" / "lib" / "vessel_generator.py").read_text(encoding="utf-8")
+    i = src.find("# ---- Retry failed samples ----")
+    assert i > 0
+    block = src[i : i + 2000]
+    assert 'pathology_mode=failed_p.get("pathology_mode")' in block, (
+        "the retry path passes the caller's pathology_mode, which is a mix SPEC under "
+        "--pathology-mix and will raise on the first rejected geometry"
+    )
+    assert "pathology_mode=pathology_mode," not in block

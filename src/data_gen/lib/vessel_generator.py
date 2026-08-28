@@ -1264,12 +1264,19 @@ class VesselGenerator:
                 break
             logger.info(f"Retry {retry_round}/{max_retries}: {len(failed_params)} samples")
 
+            # Reuse the mode this vessel was ORIGINALLY assigned, not the caller's argument.
+            # With `--pathology-mix` the argument is a spec like "random:0.72,max_stenosis:0.18"
+            # which `_sample_params` cannot parse -- it expects a single resolved mode, and the
+            # main loop expands the spec per vessel before calling it.  Passing the raw spec
+            # here crashed the run the moment any geometry was rejected and had to be resampled
+            # (3 of 250: "outlet curled back past L/3").  Reusing the stored mode also keeps the
+            # mix counts exact across retries instead of redrawing them.
             retry_batch = [
                 self._sample_one(
                     int(failed_p["idx"]),
                     int(failed_p.get("level", level)),
                     rng,
-                    pathology_mode=pathology_mode,
+                    pathology_mode=failed_p.get("pathology_mode") or "random",
                     aneurysm_wall_mode=aneurysm_wall_mode,
                     wound_probability=wound_probability,
                     wound_at_pathology=wound_at_pathology,
