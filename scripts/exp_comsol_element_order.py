@@ -49,6 +49,14 @@ def wall_metrics(pos, ei, u, v, u_ref, d_bar, wall):
     sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)
     lo, sep = sr[wall] < lss, dsrx[wall] < sgt
+    # A zero shear field is not a result.  COMSOL's own wall shear on these vessels runs
+    # 20-200 1/s; anything near zero means the operator or the evaluation is broken, not that
+    # the vessel is stagnant -- and it would otherwise print as `fire=100%` and look like data.
+    if float(np.median(sr[wall])) < 1e-3:
+        raise RuntimeError(
+            f"wall shear rate is ~0 (median {float(np.median(sr[wall])):.3e} 1/s). "
+            "The MLS operator or the COMSOL evaluation is broken; these numbers are not usable."
+        )
     return dict(sr_med=float(np.median(sr[wall])), dsrx_sd=float(np.std(dsrx[wall])),
                 fire=float((lo | sep).mean()), low=float(lo.mean()), sep=float(sep.mean()),
                 sep_only=float((sep & ~lo).sum() / max((lo | sep).sum(), 1)))
@@ -75,7 +83,10 @@ with AnchorGenerator(phase="kinematics", rheology="carreau") as gen:
 
         m = meshio.read(msh)
         pos = np.ascontiguousarray(m.points[:, :2], dtype=float)
-        ei = edge_index_from_mesh(m).T
+        # ALREADY (2, 2E) -- a PyG edge_index, not edge pairs.  Transposing it made
+        # `_khop_neighbors` read the first two EDGES as the row/col arrays, every stencil
+        # came out empty, and the operator was all zeros: `sr_med` 0 and `fire` 100%.
+        ei = edge_index_from_mesh(m).numpy()
         wall = np.zeros(pos.shape[0], dtype=bool)
         try:
             for j, tag in enumerate(m.get_cell_data("gmsh:physical", "line")):
