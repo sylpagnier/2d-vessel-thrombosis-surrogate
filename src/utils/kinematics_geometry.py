@@ -374,7 +374,20 @@ def split_clinical_anchor_train_val(
   """
     import os
 
-    raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", "patient007").strip()
+    # RGP_DEQ_REPAIR_PLAN.md B21.  The default used to be the single stem "patient007", so the
+    # other three FINAL_HALF vessels (013/031/043) were TRAINED ON.  Setting the env var in
+    # `finetune_kine_patient_anchors.py` fixed only that launcher: anything invoking
+    # `train_kinematics_predictor` directly still got the one-stem holdout and silently
+    # contaminated the seal.  Derive it from the canonical split definitions here, at the point
+    # of use, so the protection does not depend on how training was started.
+    raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", "").strip()
+    if not raw:
+        try:
+            from src.core_physics.wall_cohort_splits import DEV, SEALED
+
+            raw = ",".join(sorted(set(SEALED) | set(DEV)))
+        except Exception:
+            raw = "patient007"
     if holdout_stems is None:
         holdout = {s.strip() for s in raw.split(",") if s.strip()}
     else:

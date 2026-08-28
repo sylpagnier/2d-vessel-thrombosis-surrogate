@@ -203,6 +203,51 @@ class RGPBlock(nn.Module):
 GINOBlock = RGPBlock
 
 
+
+#: How absolute node coordinates enter the encoder.  ``"absolute"`` reproduces every historical
+#: run bit-for-bit and is the default; ``"centered"`` subtracts the graph's own centroid.
+KINEMATICS_COORD_MODE_ENV = "KINEMATICS_COORD_MODE"
+
+
+def _canonical_coords(nodes_nd: Tensor) -> Tensor:
+    """Optionally remove the absolute frame from the coordinates the Fourier block sees.
+
+    RGP_DEQ_REPAIR_PLAN.md §8 A2.  ``_apply_fourier_encoding`` feeds ABSOLUTE ``x, y`` through
+    16 sin/cos frequencies -- the NeRF construction, whose entire purpose is to let a network
+    memorise what happens at a location.  Every synthetic training vessel lives in the same box
+    (``x`` in [0, 5.54], ``y`` in [-0.63, 0.56], inlet at ``x = 0``), so absolute ``x`` is a
+    near-perfect proxy for "fraction of the way along the vessel" and the shortcut is free.
+
+    Measured: translating a vessel -- which changes nothing physical -- moves the prediction by
+
+    ```
+    shift of vessel length      1%      10%     100%
+    patient020  rel change    0.059    0.391    0.552
+    patient041  rel change    0.206    0.264    0.286
+    ```
+
+    against a model whose total error versus COMSOL is ~0.20.  A 10% translation moves the
+    answer by more than the entire error budget, which is spatial memorisation, not physics.
+
+    Centring on the graph's own centroid makes the encoder exactly translation-invariant.  It
+    does NOT give rotation invariance (``wall_normal`` is covariant, not invariant) and it does
+    not remove streamwise position as a feature -- position along the vessel is genuine physics
+    for a developing flow.  What it removes is the shared absolute frame that makes that
+    position memorisable across a corpus of similarly-placed vessels.
+
+    Default is ``"absolute"``: this changes what the weights mean, so it is a retrain-time
+    choice, not something to flip under a trained checkpoint.
+    """
+    mode = os.environ.get(KINEMATICS_COORD_MODE_ENV, "absolute").strip().lower()
+    if mode in ("", "absolute", "xy"):
+        return nodes_nd
+    if mode == "centered":
+        return nodes_nd - nodes_nd.mean(dim=0, keepdim=True)
+    raise ValueError(
+        f"{KINEMATICS_COORD_MODE_ENV} must be 'absolute' or 'centered', got {mode!r}"
+    )
+
+
 class RGP_DEQ(nn.Module):
     """Stage-A flow surrogate: RGP-DEQ (mu-coupled PM-GAT-Perceiver DEQ).
 
@@ -361,6 +406,7 @@ class RGP_DEQ(nn.Module):
         mu_prior = xb[:, NodeFeat.MU_PRIOR]
         wss_prior = xb[:, NodeFeat.WSS_PRIOR]
 
+        nodes_nd = _canonical_coords(nodes_nd)
         features_to_encode = torch.cat([nodes_nd, sdf_nd, wall_normal], dim=1)
         N, C = features_to_encode.shape
 
@@ -480,6 +526,12 @@ class RGP_DEQ(nn.Module):
                 pos_nd = data.x[:, NodeFeat.XY]
                 # Leaf tensor so autograd can differentiate NS / hard-BC terms w.r.t. coordinates.
                 pos_nd = pos_nd.clone().requires_grad_(True)
+            # The SIREN is a COORDINATE network -- feeding it the absolute frame is the single
+            # strongest memorisation path in the model, stronger than the encoder's Fourier
+            # block.  Centring the encoder alone left `patient041` at 0.715 relative change
+            # under a full-span translation (0.284 before); both paths have to be canonicalised
+            # together or the invariance is not real.  See `_canonical_coords`.
+            pos_nd = _canonical_coords(pos_nd)
             uvp, siren_pos = self.siren_decoder(z, pos_nd)
             data.siren_pos = siren_pos
             u_v_p = uvp[:, PredChannels.KINEMATICS]

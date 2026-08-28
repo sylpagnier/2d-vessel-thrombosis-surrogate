@@ -162,6 +162,44 @@ def _kinematics_promotion_gate_limits() -> dict[str, float]:
     }
 
 
+def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | None = None):
+    """Mean wall `dsrx` correlation / gate Jaccard over a graph subset (T7).
+
+    These are what `clot_ml` consumes; rel-L2 is not.  Returns NaNs when no graph in the
+    subset carries the GT needed to compute them, so a missing metric can never look like a
+    passing one.
+    """
+    from src.utils.kinematics_selection import wall_shear_selection_metrics
+
+    subset = graphs if stems is None else [
+        g for g in graphs if getattr(g, "graph_stem", "") in stems
+    ]
+    # Each graph here costs a full 25-iteration Anderson solve, and validation runs every other
+    # epoch.  The metric is a cohort mean, so a capped, DETERMINISTIC subset gives the same
+    # signal for a fraction of the wall clock; raise it for the final selection pass.
+    cap = int(os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6") or 0)
+    if cap > 0 and len(subset) > cap:
+        subset = sorted(subset, key=lambda g: str(getattr(g, "graph_stem", "")))[:cap]
+    corr, jac = [], []
+    model.eval()
+    with torch.no_grad():
+        for g in subset:
+            try:
+                gg = g.clone().to(device)
+                out = model(gg, solver="anderson")
+                pred = out[0] if isinstance(out, tuple) else out
+                m = wall_shear_selection_metrics(pred[:, :2].detach().cpu(), g)
+            except Exception:
+                continue
+            if m.get("dsrx_corr") is not None and math.isfinite(m.get("dsrx_corr", float("nan"))):
+                corr.append(m["dsrx_corr"])
+            if math.isfinite(m.get("gate_jaccard", float("nan"))):
+                jac.append(m["gate_jaccard"])
+    model.train()
+    mean = lambda v: float(sum(v) / len(v)) if v else float("nan")
+    return mean(corr), mean(jac), len(subset)
+
+
 def _kinematics_promotion_gates_pass(
     *,
     patient_rel: float,
@@ -170,6 +208,8 @@ def _kinematics_promotion_gates_pass(
     synthetic_n: int,
     synthetic_l2_rel: float,
     synthetic_l2_n: int,
+    dsrx_corr: float = float("nan"),
+    gate_jaccard: float = float("nan"),
 ) -> tuple[bool, dict[str, bool]]:
     limits = _kinematics_promotion_gate_limits()
     patient_ok = (
@@ -187,11 +227,25 @@ def _kinematics_promotion_gates_pass(
         and math.isfinite(synthetic_l2_rel)
         and synthetic_l2_rel <= limits["max_synthetic_l2"]
     )
-    return patient_ok and synth_ok and synth_l2_ok, {
-        "patient": patient_ok,
-        "synthetic": synth_ok,
-        "synthetic_l2": synth_l2_ok,
-    }
+    # T7: optional gates on what the clot stack actually consumes.  Unset means "not checked",
+    # which keeps historical runs identical; a set threshold that cannot be evaluated FAILS
+    # rather than passes, so a missing metric never looks like a passing one.
+    import os as _os
+
+    bits = {"patient": patient_ok, "synthetic": synth_ok, "synthetic_l2": synth_l2_ok}
+    ok = patient_ok and synth_ok and synth_l2_ok
+
+    min_corr = _os.environ.get("KINEMATICS_MIN_DSRX_CORR", "").strip()
+    if min_corr:
+        good = math.isfinite(dsrx_corr) and dsrx_corr >= float(min_corr)
+        bits["dsrx_corr"] = good
+        ok = ok and good
+    min_jac = _os.environ.get("KINEMATICS_MIN_GATE_JACCARD", "").strip()
+    if min_jac:
+        good = math.isfinite(gate_jaccard) and gate_jaccard >= float(min_jac)
+        bits["gate_jaccard"] = good
+        ok = ok and good
+    return ok, bits
 
 # Ignore known PyTorch scheduler deprecation noise in training logs.
 warnings.filterwarnings("ignore", category=UserWarning, message="The epoch parameter.*")
@@ -336,7 +390,46 @@ def load_dataset(
                 f"[kin] Merged {len(added)} clinical patient kine anchors "
                 f"(KINEMATICS_INCLUDE_PATIENT_ANCHORS=1)."
             )
-    return _apply_prior_source_to_dataset(dataset)
+    return _apply_prior_source_to_dataset(_elevate_dataset_to_p2(dataset))
+
+
+def _elevate_dataset_to_p2(dataset):
+    """Match the deployment mesh order (RGP_DEQ_REPAIR_PLAN.md §8, A1).
+
+    COMSOL exports ``triangle6`` and the biochem anchor pipeline is expensive and fixed, so P2
+    is the deployment domain and training has to meet it there.  The synthetic corpus is P1 --
+    measured, **0.0% of its nodes are degree-2 against 74.5% of every deploy mesh**, and it is
+    5x smaller (N 2983 vs 14830).  Elevation inserts a mid-side node on every edge and rewires
+    to COMSOL's exact convention (corner-midside half-edges only, no corner-corner edge).
+
+    Interpolated mid-side labels cost 0.2-2.2% mean relative error against a true P2 solution,
+    an order of magnitude under the model's own ~15-20%, so no new CFD is required.
+
+    Off by default: an unset environment reproduces historical runs exactly.  The clinical
+    anchors are already P2 and are skipped.
+    """
+    import os as _os
+
+    if _os.environ.get("KINEMATICS_ELEVATE_P2", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return dataset
+    from src.data_gen.lib.p1_corner_graph import identify_midside_nodes
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+
+    out, n_up = [], 0
+    for d in dataset:
+        try:
+            already, _ = identify_midside_nodes(d)
+            if bool(already.any()):     # clinical anchors are native P2
+                out.append(d)
+                continue
+            out.append(elevate_to_p2(d))
+            n_up += 1
+        except Exception as exc:        # never let one malformed graph kill a run
+            print(f"[kin] WARN P2 elevation failed on "
+                  f"{getattr(d, 'graph_stem', '?')}: {type(exc).__name__}: {exc}")
+            out.append(d)
+    print(f"[kin] Elevated {n_up}/{len(dataset)} graphs to the P2 deployment topology.")
+    return out
 
 
 def _apply_prior_source_to_dataset(dataset):
@@ -438,6 +531,56 @@ def evaluate_mass_flow_health(model, dataset, device, max_graphs=12):
 # -------------------------------------------------------------------------
 # Forward & Loss Computation
 # -------------------------------------------------------------------------
+#: Historical relative weights, expressed against ``weight_data`` = 1.0.  Reproduces the shipped
+#: recipe exactly when no calibration file is supplied.
+_DEFAULT_REL_WEIGHTS = {
+    "l_cont": 50.0 / 500.0,
+    "l_mom": 1.0 / 500.0,
+    "l_bc": 5.0 / 500.0,
+    "l_io": 5.0 / 500.0,
+    "l_wss": 10.0 / 500.0,
+    "l_shear_grad": 50.0 / 500.0,
+    "l_band_sr": 0.0,
+    "l_band_dsrx": 0.0,
+    "l_band_gate": 0.0,
+    "l_prior_floor": 0.0,
+}
+
+
+def _resolve_loss_weights() -> dict:
+    """Relative loss weights, from a calibration file when one is given.
+
+    RGP_DEQ_REPAIR_PLAN.md s12.  Every weight in one place, expressed relative to the
+    supervised data term, so the numbers are comparable to each other instead of being a mix of
+    unit conversions and priorities.  ``KINEMATICS_LOSS_WEIGHTS`` points at the JSON emitted by
+    ``scripts/calibrate_kine_loss_weights.py``; unset reproduces the historical recipe.
+
+    A term the calibration DROPPED as inert (gradient below 1e-4 of the reference term's) stays
+    dropped here -- it is given weight 0 rather than its historical value, because the
+    calibration measured that it has no gradient to contribute.
+    """
+    import json as _json
+
+    rel = dict(_DEFAULT_REL_WEIGHTS)
+    path = os.environ.get("KINEMATICS_LOSS_WEIGHTS", "").strip()
+    if not path:
+        return rel
+    try:
+        payload = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[kin] WARN could not read KINEMATICS_LOSS_WEIGHTS={path!r}: {exc}; using defaults")
+        return rel
+    got = payload.get("weights", payload)
+    if not isinstance(got, dict) or not got:
+        print(f"[kin] WARN {path} carries no weights; using defaults")
+        return rel
+    for k in rel:
+        rel[k] = float(got[k]) if k in got and got[k] is not None else 0.0
+    print(f"[kin] loss weights from {path}: "
+          + " ".join(f"{k.replace('l_', '')}={v:.4g}" for k, v in sorted(rel.items())))
+    return rel
+
+
 def compute_step_loss(
     model,
     data,
@@ -539,13 +682,16 @@ def compute_step_loss(
         weight_mu = weight_mu_base
         weight_wss = weight_wss_base
 
-    # 5. Static PDE weights (Kendall weighter disabled — avoids negative weighted PDE collapse)
+    # 5. Static PDE weights (Kendall weighter disabled — avoids negative weighted PDE collapse).
+    # All relative to `weight_data_base` so one calibration file can set the whole recipe.
     _ = loss_weighter
-    weighted_pdes = 1.0 * l_mom + 50.0 * l_cont
+    _rel = _resolve_loss_weights()
+    _s = float(weight_data_base)
+    weighted_pdes = (_rel["l_mom"] * _s) * l_mom + (_rel["l_cont"] * _s) * l_cont
 
     # Scale up IO/BC weight severely ONLY in Stage 2 when interior data supervision is removed.
-    io_weight = 100.0 if stage == 2 else 5.0
-    bc_weight = 50.0 if stage == 2 else 5.0
+    io_weight = 100.0 if stage == 2 else _rel["l_io"] * _s
+    bc_weight = 50.0 if stage == 2 else _rel["l_bc"] * _s
 
     l_shear_grad = terms.get("l_shear_grad", torch.tensor(0.0, device=device))
 
@@ -554,7 +700,16 @@ def compute_step_loss(
     w_shear = 0.1
     if pred.shape[1] > PredChannels.SHEAR_RATE and stage in (1, 3):
         node_is_anchor = anchor_node_mask(data)
-        if node_is_anchor is not None and node_is_anchor.any() and hasattr(data, 'G_x'):
+        # RGP_DEQ_REPAIR_PLAN.md B18.  This used to require `hasattr(data, 'G_x')`, but
+        # `compute_gt_shear_rate` routes through `graph_gradient_operators`, which defaults to
+        # MLS mode and builds its operators from positions + connectivity -- it does not touch
+        # `data.G_x` unless BIOCHEM_GRAD_OPERATOR=legacy.  The guard therefore silently
+        # disabled this term on any graph that does not carry the packs' [N,N] operators,
+        # which is every P2-elevated graph.  Gate on what is actually needed instead.
+        from src.core_physics.mls_gradient import gradient_operator_mode
+
+        _shear_ok = gradient_operator_mode() != "legacy" or hasattr(data, "G_x")
+        if node_is_anchor is not None and node_is_anchor.any() and _shear_ok:
             gt_shear = compute_gt_shear_rate(data)
             pred_shear = pred[:, PredChannels.SHEAR_RATE]
             l_shear = torch.nn.functional.smooth_l1_loss(
@@ -568,9 +723,20 @@ def compute_step_loss(
     # matters because every measured `sr`/`dsrx` scale is < 1 against COMSOL.  Off by default:
     # set KINEMATICS_WALL_SHEAR_WEIGHT to enable, so an unset environment reproduces the
     # historical loss exactly.
-    w_band = float(os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "0.0"))
+    w_band = float(os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "") or
+                   (_rel["l_band_sr"] * _s))
     l_band_sr = terms.get("l_band_sr", torch.tensor(0.0, device=device))
     l_band_dsrx = terms.get("l_band_dsrx", torch.tensor(0.0, device=device))
+    # The ONLY Stage-A metric measured to predict the clot outcome (+0.918).  Optimise it
+    # directly rather than hoping the continuous sr/dsrx terms imply it.
+    w_gate = float(os.environ.get("KINEMATICS_GATE_WEIGHT", "") or
+                   (_rel["l_band_gate"] * _s))
+    l_band_gate = terms.get("l_band_gate", torch.tensor(0.0, device=device))
+    # T6: make the analytic prior a performance FLOOR.  Zero wherever the model beats the
+    # prior it was handed, positive only where it is worse -- which today is 45 of 52 packs.
+    w_floor = float(os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "") or
+                    (_rel["l_prior_floor"] * _s))
+    l_prior_floor = terms.get("l_prior_floor", torch.tensor(0.0, device=device))
 
     loss = (
         weighted_pdes
@@ -579,9 +745,11 @@ def compute_step_loss(
         + (bc_weight * l_bc)
         + (io_weight * l_io)
         + (1.0 * p_grad_loss)
-        + (weight_wss * l_wss)
-        + (50.0 * l_shear_grad)
+        + ((_rel['l_wss'] * _s) * l_wss)
+        + ((_rel['l_shear_grad'] * _s) * l_shear_grad)
         + (w_band * (l_band_sr + l_band_dsrx))
+        + (w_gate * l_band_gate)
+        + (w_floor * l_prior_floor)
         + (w_shear * l_shear)
         + (0.1 * jac_loss)
     )
@@ -591,9 +759,10 @@ def compute_step_loss(
     weighted_bc = bc_weight * l_bc
     weighted_io = io_weight * l_io
     weighted_pgrad = 1.0 * p_grad_loss
-    weighted_wss = weight_wss * l_wss
-    weighted_shear_grad = 50.0 * l_shear_grad
+    weighted_wss = (_rel['l_wss'] * _s) * l_wss
+    weighted_shear_grad = (_rel['l_shear_grad'] * _s) * l_shear_grad
     weighted_band = w_band * (l_band_sr + l_band_dsrx)
+    weighted_floor = w_floor * l_prior_floor
     weighted_shear = w_shear * l_shear
     weighted_jac = 0.1 * jac_loss
     metrics = {
@@ -601,6 +770,8 @@ def compute_step_loss(
         "L_cont": l_cont.item(),
         "L_band_sr": float(l_band_sr.item()),
         "L_band_dsrx": float(l_band_dsrx.item()),
+        "L_band_gate": float(l_band_gate.item()),
+        "L_prior_floor": float(l_prior_floor.item()),
         "C_band_shear": float(weighted_band.item()) if torch.is_tensor(weighted_band) else float(weighted_band),
         "L_data": l_data_kine.item(),
         "L_mu": l_data_mu.item(),
@@ -727,6 +898,8 @@ def train_kinematics(
     last_val_continuity = float("nan")
     last_val_composite = float("nan")
     n_validations = 0
+    n_since_improve = 0
+    best_select = float("inf")
     train_prior_source = resolve_prior_source()
     accum_steps = max(1, int(accum_steps))
     max_lbfgs_graphs = max(1, int(max_lbfgs_graphs))
@@ -1198,10 +1371,17 @@ def train_kinematics(
             s_rel, s_n = float("nan"), 0
             s_l2_rel, s_l2_n = float("nan"), 0
             dual_gates = _kinematics_dual_promotion_gates_enabled()
+            # T7: the metrics the downstream actually consumes.  Computed on the SAME holdout
+            # the promotion gates read, so selection and reporting cannot diverge.
+            sel_corr = sel_jac = float("nan")
+            sel_n = 0
             if holdout_raw and os.environ.get("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "").strip():
                 holdout = {s.strip() for s in holdout_raw.split(",") if s.strip()}
                 p_rel, p_n = _mean_rel_l2_on_graphs(
                     model, val_data, kernels, device, stems=holdout
+                )
+                sel_corr, sel_jac, sel_n = _selection_metrics_on_graphs(
+                    model, val_data, device, stems=holdout
                 )
                 if p_n > 0 and math.isfinite(p_rel):
                     patient_msg = f" | patient_holdout_rel_L2={p_rel:.3f} (n={p_n})"
@@ -1225,19 +1405,45 @@ def train_kinematics(
                         patient_msg += (
                             f" | synthetic_L2_val_rel_L2={s_l2_rel:.3f} (n={s_l2_n})"
                         )
+            if sel_n > 0 and (math.isfinite(sel_corr) or math.isfinite(sel_jac)):
+                patient_msg += (
+                    f" | SELECT dsrx_corr={sel_corr:.3f} gate_J={sel_jac:.3f} (n={sel_n})"
+                )
             if math.isfinite(rel_l2) and math.isfinite(continuity):
                 shear_msg = ""
                 if "shear_rel_l2" in scores:
                     shear_msg = f" | [i] shear_rel_l2: {scores['shear_rel_l2']:.4f}"
+                # One line, fixed field order, so a run log can be scanned or grepped.  The
+                # SELECT block is what promotion reads; rel_l2 is reported but is a tie-break
+                # only (s10.3), so it is deliberately not first.
+                sel_txt = (f"gateJ={sel_jac:.3f} dsrxR={sel_corr:+.3f}"
+                           if sel_n > 0 else "gateJ=--- dsrxR=---")
                 print(
-                    f"[kin] [Validation] Rel L2: {rel_l2:.4f} | "
-                    f"div_u mean: {continuity:.3e} | composite: {val_comp:.4f}{level_msg}{patient_msg}{shear_msg}"
+                    f"[kin] ep{epoch:<4d} SELECT {sel_txt} | relL2={rel_l2:.4f} "
+                    f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{patient_msg}{shear_msg}"
                 )
             else:
                 print(
                     f"[kin] [Validation] non-finite metrics "
                     f"(rel_l2={rel_l2}, continuity={continuity}); best ckpt unchanged"
                 )
+            # Stop a run that is going nowhere rather than burning the GPU to the last epoch.
+            # Scored on the SELECTION metric (gate Jaccard first), not on rel-L2.
+            if sel_n > 0 and math.isfinite(sel_jac):
+                from src.utils.kinematics_selection import selection_score
+
+                cur_sel = selection_score(sel_corr, sel_jac, rel_l2)
+                if cur_sel < best_select - 1e-4:
+                    best_select, n_since_improve = cur_sel, 0
+                else:
+                    n_since_improve += 1
+                patience = int(os.environ.get("KINEMATICS_SELECT_PATIENCE", "0") or 0)
+                if patience > 0 and n_since_improve >= patience:
+                    print(f"[kin] ABORT: selection score has not improved in {n_since_improve} "
+                          f"validations (best {best_select:.4f}). Set KINEMATICS_SELECT_PATIENCE=0 "
+                          f"to disable.")
+                    break
+
             save_best = False
             if stage == 3 and math.isfinite(val_comp):
                 if dual_gates:
@@ -1248,6 +1454,8 @@ def train_kinematics(
                         synthetic_n=s_n,
                         synthetic_l2_rel=s_l2_rel,
                         synthetic_l2_n=s_l2_n,
+                        dsrx_corr=sel_corr,
+                        gate_jaccard=sel_jac,
                     )
                     if gates_ok and val_comp < best_val_composite_loss:
                         save_best = True
@@ -1310,6 +1518,14 @@ def train_kinematics(
                         val_record[key] = float(lvl_val)
                 if patient_msg:
                     val_record["patient_holdout_rel_l2"] = float(p_rel)
+                if sel_n > 0:
+                    val_record["select_dsrx_corr"] = float(sel_corr)
+                    val_record["select_gate_jaccard"] = float(sel_jac)
+                    val_record["select_score"] = float(
+                        __import__("src.utils.kinematics_selection", fromlist=["x"]).selection_score(
+                            sel_corr, sel_jac, rel_l2
+                        )
+                    )
                     val_record["patient_holdout_n"] = int(p_n)
                 if dual_gates and s_n > 0:
                     val_record["synthetic_val_rel_l2"] = float(s_rel)

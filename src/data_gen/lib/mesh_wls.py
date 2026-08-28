@@ -259,13 +259,19 @@ def rank_aware_pinv_sym(M: torch.Tensor, rcond: float = WLS_RCOND) -> torch.Tens
     error of 0.72 against 4.2e-16 on the full-rank rows.  Truncation states that honestly;
     :func:`math_operators._fill_rank_deficient_rows` is what actually repairs it.
     """
-    evals, evecs = torch.linalg.eigh(M.double())
+    # Batched eigh on 5x5 matrices is arithmetically trivial, but cuSOLVER's batched path asks
+    # for a pathological workspace: on a 15,754-node graph it requested **5.76 GiB** and OOM'd a
+    # 4 GB card.  This runs once per graph and is not on the training hot path, so do it on the
+    # CPU where the same decomposition costs a few MB.
+    dev = M.device
+    Md = M.detach().to("cpu", torch.float64)
+    evals, evecs = torch.linalg.eigh(Md)
     lam_max = evals.abs().amax(dim=1, keepdim=True).clamp(min=1e-300)
     keep = (evals.abs() / lam_max) > float(rcond)
     safe = torch.where(keep, evals, torch.ones_like(evals))
     inv = torch.where(keep, 1.0 / safe, torch.zeros_like(evals))
     out = evecs @ torch.diag_embed(inv) @ evecs.transpose(1, 2)
-    return out.to(M.dtype)
+    return out.to(device=dev, dtype=M.dtype)
 
 
 def rebuild_wls_operators_from_graph(data):

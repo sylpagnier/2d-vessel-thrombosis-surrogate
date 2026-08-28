@@ -421,6 +421,22 @@ class PhysicsKernels:
         grad_sr_gt = c_sr_gt[mask, :, 0]
         grad_sr_pr = c_sr_pr[mask, :, 0]
 
+        # RGP_DEQ_REPAIR_PLAN.md B16.  This is an ABSOLUTE MSE on d(shear rate)/dx, whose units
+        # are (1/s)/m -- so its raw magnitude is ~1e4 where every other term in the objective is
+        # O(1).  At its weight of 50 it is **99.98% of the total loss** even for a spatially
+        # smooth 15% error (i.e. a realistically-trained model); the supervised data term at
+        # weight 500 contributes 0.00%.  Normalising by the ground truth's own spread on the
+        # supervised nodes makes the term commensurate with everything else, so the configured
+        # weights start meaning what they say.
+        #
+        # Opt-in: an unset environment reproduces historical runs exactly.
+        import os as _os
+
+        if _os.environ.get("KINEMATICS_NORMALIZE_SHEAR_GRAD", "").strip().lower() in (
+            "1", "true", "yes", "on"
+        ):
+            denom = grad_sr_gt.pow(2).mean().clamp(min=1e-12)
+            return torch.nn.functional.mse_loss(grad_sr_pr, grad_sr_gt) / denom
         return torch.nn.functional.mse_loss(grad_sr_pr, grad_sr_gt)
 
 

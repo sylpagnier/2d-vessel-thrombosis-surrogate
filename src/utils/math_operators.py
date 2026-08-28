@@ -115,15 +115,23 @@ _DEFICIENT_CACHE_MAX = 512
 
 
 def _deficient_rows(M_inv_eff):
+    # `data_ptr()` alone is NOT a safe cache key: freeing one operator and allocating another
+    # of the same shape can reuse the address, which would serve a stale mask for a different
+    # mesh.  Mix in a cheap value fingerprint so a collision has to agree on content too.
+    with torch.no_grad():
+        fp = float(M_inv_eff.reshape(-1)[:: max(1, M_inv_eff.numel() // 64)].abs().sum())
     key = (M_inv_eff.data_ptr(), tuple(M_inv_eff.shape), str(M_inv_eff.device),
-           str(M_inv_eff.dtype))
+           str(M_inv_eff.dtype), round(fp, 6))
     hit = _DEFICIENT_CACHE.get(key)
     if hit is not None and hit.shape[0] == M_inv_eff.shape[0]:
         return hit
-    evals = torch.linalg.eigvalsh(M_inv_eff.detach().double())
+    # CPU for the same reason as `mesh_wls.rank_aware_pinv_sym`: cuSOLVER's batched 5x5 eigh
+    # workspace is enormous (5.76 GiB observed on a 15.7k-node graph).  Memoised per operator,
+    # so this runs once per graph, not once per step.
+    evals = torch.linalg.eigvalsh(M_inv_eff.detach().to("cpu", torch.float64))
     lam_max = evals.abs().amax(dim=1, keepdim=True).clamp(min=1e-300)
     rank = ((evals.abs() / lam_max) > 1e-10).sum(dim=1)
-    out = rank < _WLS_FULL_RANK
+    out = (rank < _WLS_FULL_RANK).to(M_inv_eff.device)
     if len(_DEFICIENT_CACHE) >= _DEFICIENT_CACHE_MAX:
         _DEFICIENT_CACHE.clear()
     _DEFICIENT_CACHE[key] = out

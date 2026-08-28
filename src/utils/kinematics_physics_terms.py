@@ -202,12 +202,12 @@ def wall_band_shear_losses(
     """
     zero = pred.sum() * 0.0
     if (not hasattr(data, "y")) or (data.y is None) or (data.y.shape[1] <= PredChannels.V):
-        return zero, zero
+        return zero, zero, zero
     band = wall_band_mask(data, hops).view(-1)
     if node_is_anchor is not None:
         band = band & node_is_anchor.view(-1).bool()
     if int(band.sum()) < 2:
-        return zero, zero
+        return zero, zero, zero
     if props is None:
         props = kernels._get_geometric_props(data)
 
@@ -222,13 +222,106 @@ def wall_band_shear_losses(
     s = sr_gt[band].std().clamp(min=1e-8)
     l_sr = F.mse_loss(sr_pr[band] / s, sr_gt[band] / s)
 
-    # `dsrx` in `build_features` is the plain x-derivative of the shear rate; match it exactly
-    # so training and the downstream feature stack agree on the operator, not just the field.
+    # `dsrx` in `build_features` is the plain x-derivative of the shear rate.  This uses the
+    # kernels' WLS operator rather than `build_mls_gradient(hops=6)` (which is numpy and not
+    # differentiable), so the two are not literally the same call.  Measured, they agree on
+    # STRUCTURE and differ only in amplitude -- wall-node correlation 0.966-0.999 for `dsrx`
+    # and 0.986-0.998 for `sr`, at a scale ratio of 1.8-2.6x, which is the known stencil-width
+    # attenuation.  Both terms below are normalised by the ground truth's own spread, so the
+    # amplitude difference cancels and what is optimised is the structure the consumer reads.
     dsr_pr = kernels._compute_derivatives(sr_pr.unsqueeze(1), props)[:, 0, 0]
     dsr_gt = kernels._compute_derivatives(sr_gt.unsqueeze(1), props)[:, 0, 0]
     sd = dsr_gt[band].std().clamp(min=1e-8)
     l_dsrx = F.mse_loss(dsr_pr[band] / sd, dsr_gt[band] / sd)
-    return l_sr, l_dsrx
+    l_gate = _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s, sd)
+    return l_sr, l_dsrx, l_gate
+
+
+def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
+    """Differentiable agreement with the GT deposition gate.
+
+    RGP_DEQ_REPAIR_PLAN.md §10.3/§11.  Gate union Jaccard is the ONLY Stage-A metric measured
+    to predict the clot model's own oracle-F1 (+0.918 pooled, +0.765 within a single flow arm,
+    against `dsrx` correlation's -0.073) -- yet nothing in the objective optimised it.  `sr` and
+    `dsrx` were supervised as continuous fields, which is a proxy for the threshold crossing
+    that actually matters.
+
+    The shipped gate is `(sr < lss) | (dsrx < sgt)`.  Its soft form is the complement of "both
+    branches stay off":
+
+        p_fire = 1 - (1 - sigma((lss - sr)/tau_s)) * (1 - sigma((sgt - dsrx)/tau_d))
+
+    with temperatures set from the ground truth's own spread, so the sharpness follows the
+    vessel rather than a hand-picked constant.  The target is the HARD GT gate, computed with
+    the same operator -- verified well-posed: under the WLS operator the GT gate fires on
+    10.1 / 36.0 / 10.1 % of wall nodes on patient020 / 001 / 041, identical to the shipped
+    3-hop MLS convention to one decimal.
+    """
+    from src.clot_ml.features import M_TO_CM
+    from src.config import BiochemConfig
+
+    bio = BiochemConfig(phase="biochem")
+    lss = float(bio.lss)
+    sgt = float(bio.sgt) / M_TO_CM
+
+    u_ref = float(data.u_ref.reshape(-1)[0]) if hasattr(data, "u_ref") else 1.0
+    d_bar = float(data.d_bar.reshape(-1)[0]) if hasattr(data, "d_bar") else 1.0
+    k_sr = u_ref / max(d_bar, 1e-12)
+    k_dx = k_sr / (max(d_bar, 1e-12) * M_TO_CM)
+
+    tau_s = (s_scale * k_sr * 0.1).clamp(min=1e-6)
+    tau_d = (d_scale * k_dx * 0.1).clamp(min=1e-6)
+
+    off_low = torch.sigmoid((lss - sr_pr[band] * k_sr) / tau_s)
+    off_sep = torch.sigmoid((sgt - dsr_pr[band] * k_dx) / tau_d)
+    p_fire = 1.0 - (1.0 - off_low) * (1.0 - off_sep)
+
+    with torch.no_grad():
+        tgt = ((sr_gt[band] * k_sr < lss) | (dsr_gt[band] * k_dx < sgt)).to(p_fire.dtype)
+    return F.binary_cross_entropy(p_fire.clamp(1e-6, 1 - 1e-6), tgt)
+
+
+def prior_floor_loss(pred, data, *, node_is_anchor: Optional[torch.Tensor] = None):
+    """Penalise the model **only where it is worse than the prior it was handed**.
+
+    RGP_DEQ_REPAIR_PLAN.md T6.  The DEQ is already residual -- ``u = uv_prior + sdf * uvp`` --
+    but ``uvp`` is unconstrained, so nothing stops the model from being worse than its own
+    input.  Measured, it usually is: on **45 of 52 packs** the cached prediction is farther from
+    COMSOL than the prior it started from (median 0.141 against 0.025), and under deploy-legal
+    priors the surrogate *lowers* wall ``dsrx`` correlation from 0.644 to 0.316.
+
+    A plain shrinkage penalty on ``uvp`` would fight the model everywhere, including where it is
+    right.  A one-sided hinge on the squared error does not:
+
+        L = mean( relu( |pred - y|^2 - |prior - y|^2 ) )
+
+    It is exactly zero wherever the model beats the prior and grows only where it does not, so
+    the analytic prior becomes a performance **floor** rather than merely a starting point.
+    That is the robustness property the deployable arm needs: a retrain can then only improve on
+    a closed-form baseline that is already competitive (§1g), never regress below it.
+
+    Normalised by the graph's own mean square so it is on the same scale as the relative data
+    term (D3) and comparable across vessels.
+    """
+    zero = pred.sum() * 0.0
+    y = getattr(data, "y", None)
+    if y is None or y.shape[1] <= PredChannels.V:
+        return zero
+    uv_cols = slice(PredChannels.U, PredChannels.V + 1)
+    prior = data.x[:, 11:13]
+    if prior.shape != y[:, uv_cols].shape:
+        return zero
+    m = node_is_anchor
+    if m is None:
+        m = torch.ones(int(data.num_nodes), dtype=torch.bool, device=pred.device)
+    m = m.reshape(-1).bool()
+    if not bool(m.any()):
+        return zero
+    tgt = y[m][:, uv_cols]
+    e_model = ((pred[m][:, uv_cols] - tgt) ** 2).sum(dim=1)
+    e_prior = ((prior[m] - tgt) ** 2).sum(dim=1)
+    denom = (tgt**2).mean().clamp(min=1e-12)
+    return torch.relu(e_model - e_prior).mean() / denom
 
 
 def compute_kinematics_physics_terms(
@@ -293,6 +386,7 @@ def compute_kinematics_physics_terms(
         l_shear_grad = z
         l_band_sr = z
         l_band_dsrx = z
+        l_band_gate = z
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
     else:
         l_mom = kernels.navier_stokes_residual(pred, data, props=props, re_ref=re_ref, re_scale=re_scale)
@@ -302,7 +396,7 @@ def compute_kinematics_physics_terms(
         l_cont = kernels.continuity_loss(du_ij, data=data)
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
         l_shear_grad = kernels.wall_shear_gradient_loss(pred, data, props=props)
-        l_band_sr, l_band_dsrx = wall_band_shear_losses(
+        l_band_sr, l_band_dsrx, l_band_gate = wall_band_shear_losses(
             pred, data, kernels, props=props, hops=wall_band_hops,
             node_is_anchor=node_is_anchor,
         )
@@ -312,6 +406,8 @@ def compute_kinematics_physics_terms(
         "l_shear_grad": l_shear_grad,
         "l_band_sr": l_band_sr,
         "l_band_dsrx": l_band_dsrx,
+        "l_band_gate": l_band_gate,
+        "l_prior_floor": prior_floor_loss(pred, data, node_is_anchor=node_is_anchor),
         "l_data_kine": l_data_kine,
         "l_data_mu": l_data_mu,
         "l_mom": l_mom,
@@ -326,6 +422,7 @@ __all__ = [
     "WALL_BAND_HOPS",
     "wall_band_mask",
     "wall_band_shear_losses",
+    "prior_floor_loss",
     "boundary_weighted_mse",
     "compute_anchor_kinematic_importance",
     "compute_kinematics_physics_terms",

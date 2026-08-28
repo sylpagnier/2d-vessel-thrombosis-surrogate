@@ -16,6 +16,7 @@ Active design and operator docs for **HemoRGP**. Lab notebooks, sweep logs, and 
 |-----|---------|
 | [KINEMATICS_BEST_ARCHITECTURE.md](KINEMATICS_BEST_ARCHITECTURE.md) | Locked architecture + training recipe |
 | **[RGP_DEQ_REPAIR_PLAN.md](RGP_DEQ_REPAIR_PLAN.md)** | **Why the deployable flow arm fails: prior leak, wall-band blindness, bug list + redesign** |
+| [PILOT_COHORT_RUNBOOK.md](PILOT_COHORT_RUNBOOK.md) | Generate on the COMSOL box, slim, preflight, workshop — the step before a full retrain |
 | [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md) | Optional k-hop clot diversion GNN |
 | [COMSOL_PHYSICS_VALIDATION.md](COMSOL_PHYSICS_VALIDATION.md) | Flow / physics parity vs COMSOL |
 | [COMSOL_MU_RHEOLOGY_CHECKLIST.md](COMSOL_MU_RHEOLOGY_CHECKLIST.md) | Viscosity / rheology checklist |
