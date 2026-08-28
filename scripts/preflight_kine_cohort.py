@@ -167,8 +167,10 @@ def main() -> int:
     st = g("sten")
     frac2 = float((st[solved] >= 2.0).mean()) if solved.any() else 0.0
     frac2_all = float((st >= 2.0).mean())
+    # 26% is measured over all 53 biochem anchor packs (p50 1.36, p75 2.41, p90 4.59, max 20.5).
+    # The 14% this used to quote came from a smaller sample and understated the deploy tail.
     check("severe-stenosis coverage (solved)", OK if frac2 >= 0.10 else WARN,
-          f"{100 * frac2:.0f}% of SOLVED vessels at ratio >= 2.0 (deployment: 14%; "
+          f"{100 * frac2:.0f}% of SOLVED vessels at ratio >= 2.0 (deployment: 26%; "
           f"{100 * frac2_all:.0f}% before dropping unsolved); "
           f"median {np.median(st):.2f}, max {st.max():.2f}")
     resh = [r["resh"] for r in rows if r.get("reshaped")]
@@ -223,6 +225,20 @@ def main() -> int:
               f"[{DEPLOY_H_LO:.4f}, {DEPLOY_H_HI:.4f}]")
     else:
         check("resolution matches deployment", WARN, "no usable edges to measure")
+
+    # 6c. the width derivative channels against deployment.  These are model INPUTS, and the
+    # clamp in `ginodeq` is applied to both corpora, so a corpus that never reaches deploy's
+    # range trains the model on an unsaturated channel it will find saturated at deploy.
+    # Deploy reference (53 biochem anchor packs, per-vessel max |channel|):
+    #   width_d1  p50  10.54  p95    112.1     width_d2  p50  2109  p95  121295
+    DEPLOY_D1_MED, DEPLOY_D2_MED = 10.54, 2109.4
+    d1m, d2m = float(np.median(d1a)), float(np.median(d2))
+    r1, r2 = d1m / DEPLOY_D1_MED, d2m / DEPLOY_D2_MED
+    check("width channels reach deployment's range",
+          OK if (0.25 <= r1 <= 4.0 and 0.25 <= r2 <= 4.0) else WARN,
+          f"median per-vessel max: d1 {d1m:.2f} vs deploy {DEPLOY_D1_MED:.2f} ({r1:.2f}x), "
+          f"d2 {d2m:.1f} vs deploy {DEPLOY_D2_MED:.0f} ({r2:.3f}x); "
+          f"config clamps {100 * over_d1:.0f}%/{100 * over_d2:.0f}% here vs 38%/70% at deploy")
 
     # 7a. the inlet BC the analytic prior is anchored on (B4).  Without it
     # `inlet_anchored_umax_nd` silently falls back to fixed module constants -- the prior is
