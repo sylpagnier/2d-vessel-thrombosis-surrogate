@@ -97,7 +97,14 @@ with AnchorGenerator(phase="kinematics", rheology="carreau") as gen:
                 row[f"order{order}"] = None
                 continue
             u, v, p, mu = gen._evaluate_at_coords(pos)
-            u_nd, v_nd = u / u_ref, v / u_ref
+            # COMSOL's `Interp.getData()` comes back 2-D (1, N); the MLS operators are (N, N).
+            u_nd = np.asarray(u, dtype=float).reshape(-1) / u_ref
+            v_nd = np.asarray(v, dtype=float).reshape(-1) / u_ref
+            if u_nd.size != pos.shape[0]:
+                print(f"[skip] {stem} order={order}: got {u_nd.size} values for "
+                      f"{pos.shape[0]} nodes")
+                row[f"order{order}"] = None
+                continue
             row[f"order{order}"] = wall_metrics(pos / d_bar, ei, u_nd, v_nd, u_ref, d_bar, wall)
             row[f"order{order}"]["prop_group"] = grp
             print(f"  {stem} order={order}: " + "  ".join(

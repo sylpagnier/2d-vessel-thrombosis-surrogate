@@ -82,7 +82,12 @@ def load_selection_packs(*, limit: int = 0, prior_source: str | None = None, ver
         print("[kin] WARN selection packs are using the STORED prior block -- on these vessels "
               "that is COMSOL's own t=0 velocity (s17 Z2). Any gate Jaccard read from it is "
               "meaningless. Set SPECIES_PRIOR_SOURCE=analytic.")
-    stems = selection_pack_stems()
+    # The STRIDED subset the run actually scores, not the whole legal pool.  One definition:
+    # loading 25 and then capping to 8 inside the metric made "the selection set" mean two
+    # different things, and a training pool built as "everything except the selection set" then
+    # legitimately overlapped the 25 while being disjoint from the 8 -- which is what the
+    # train/select leak assert tripped on.
+    stems = selection_subset_stems()
     if limit and limit > 0:
         stems = stems[:limit]
     out, missing = [], []
