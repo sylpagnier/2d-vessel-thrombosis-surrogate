@@ -683,7 +683,7 @@ def _run_batch_for_phase(
         print(
             f"--- Vessel generation: rheology={rheology} levels={level_label} n={num_vessels} "
             f"seed={vessel_seed!r} bend_sign_mode={bend_label} "
-            f"pathology={args.pathology_mode} ---\n"
+            f"pathology={pathology_mode} ---\n"
         )
         if getattr(args, "dry_run", False):
             # Print the plan and stop. The cheapest way to confirm flags parse the way you
