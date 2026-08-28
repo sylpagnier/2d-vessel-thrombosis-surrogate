@@ -129,7 +129,21 @@ class PhysicsKernels:
         props=None,
         re_ref: Optional[float] = None,
         re_scale: Optional[float] = None,
+        floor: Optional[torch.Tensor] = None,
+        return_field: bool = False,
     ):
+        """Steady NS momentum residual.
+
+        ``return_field`` returns the per-node squared residual ``|r|^2`` (full ``N``, before any
+        masking or reduction) instead of a scalar -- used to precompute the label floor.
+
+        ``floor`` is a per-node ``|r_gt|^2`` computed from the COMSOL labels themselves.  When
+        given, the loss becomes the one-sided hinge ``relu(|r_pred|^2 - |r_gt|^2)``: zero
+        wherever the model is at least as consistent as the data, positive only where it is
+        worse.  Without it the term asks the model to satisfy the discrete strong form better
+        than the labels do, which on this corpus is a real conflict rather than a technicality
+        -- see :func:`src.utils.kinematics_physics_terms.compute_pde_floors`.
+        """
         if props is None:
             if hasattr(data, 'M_inv'):
                 props = data
@@ -208,10 +222,16 @@ class PhysicsKernels:
             mom_x = (u * u_x + v * u_y) + p_x - visc_x
             mom_y = (u * v_x + v * v_y) + p_y - visc_y
 
+        mom_sq_full = mom_x ** 2 + mom_y ** 2
+        if return_field:
+            return mom_sq_full
+
         interior_mask = self.fluid_interior_mask(data)
 
         if interior_mask.any():
-            mom_sq = mom_x[interior_mask] ** 2 + mom_y[interior_mask] ** 2
+            mom_sq = mom_sq_full[interior_mask]
+            if floor is not None:
+                mom_sq = torch.relu(mom_sq - floor.reshape(-1)[interior_mask])
             if self.momentum_loss_mode == "mse":
                 loss_mom = torch.mean(mom_sq)
             else:
@@ -229,6 +249,7 @@ class PhysicsKernels:
         data=None,
         interior_mask: Optional[torch.Tensor] = None,
         disabled: bool = False,
+        floor: Optional[torch.Tensor] = None,
     ):
         """
         Mean squared divergence (∇·u)².
@@ -236,6 +257,9 @@ class PhysicsKernels:
         When ``data`` is provided (or ``interior_mask`` is passed), averages only over
         :meth:`fluid_interior_mask` so continuity matches the momentum residual domain.
         If neither is given, averages over all rows of ``du_ij`` (synthetic / unit tests).
+
+        ``floor`` is a per-node ``(div u_gt)^2`` from the COMSOL labels; when given the term is
+        the one-sided hinge ``relu((div u_pred)^2 - (div u_gt)^2)``.
         """
         if disabled:
             return du_ij.sum() * 0.0
@@ -253,7 +277,10 @@ class PhysicsKernels:
             return torch.mean(div_u**2)
 
         if m.any():
-            return torch.mean(div_u[m] ** 2)
+            sq = div_u[m] ** 2
+            if floor is not None:
+                sq = torch.relu(sq - floor.reshape(-1)[m])
+            return torch.mean(sq)
         return div_u.sum() * 0.0
 
     def _compute_carreau_viscosity(self, du_ij, data, carreau_n: Optional[float] = None):
@@ -264,8 +291,14 @@ class PhysicsKernels:
         du_dx, du_dy = du_ij[:, 0], du_ij[:, 1]
         dv_dx, dv_dy = du_ij[:, 2], du_ij[:, 3]
 
-        # Raw WLS velocity gradients are dimensional when geometry is in meters.
-        gamma_dot_dim = compute_shear_rate(du_dx, du_dy, dv_dx, dv_dy, eps=1e-6)
+        # B28.  The WLS operators are built on ``x_nd`` / ``y_nd`` (`nodes_nd = nodes / d_bar`
+        # in `mesh_to_graph`; `node_positions` reads the same channels), and `u`/`v` are
+        # `u_raw / u_ref`.  So `d(u_nd)/d(x_nd)` is ALREADY non-dimensional -- the same contract
+        # `graph_gradient_operators` documents, and the same one
+        # `BiochemPhysicsKernels._compute_shear_rate` and `clot_kinematics_fields` rely on when
+        # they multiply by `u_ref / d_bar` to reach SI 1/s.  This function used to do the
+        # opposite, scaling by `d_bar / u_ref` on the belief the raw gradients were dimensional.
+        gamma_dot_nd = compute_shear_rate(du_dx, du_dy, dv_dx, dv_dy, eps=1e-6)
 
         # --- BATCH-AWARE BROADCASTING ---
         batch_idx = get_batch_tensor(data, data.num_nodes, du_ij.device)
@@ -276,10 +309,12 @@ class PhysicsKernels:
             u_ref_b = data.u_ref[batch_idx].squeeze() if isinstance(data.u_ref, torch.Tensor) else data.u_ref
             d_bar_b = data.d_bar[batch_idx].squeeze() if isinstance(data.d_bar, torch.Tensor) else data.d_bar
 
-        # Convert shear rate to non-dimensional form: gamma_nd = gamma_dim * (d_bar / u_ref).
-        gamma_dot_nd = gamma_dot_dim * (d_bar_b / torch.clamp(u_ref_b, min=1e-8))
-
-        # Scale the relaxation time (lambda) into the non-dimensional domain dynamically.
+        # `lam * gamma_dot_SI` is the dimensionless Carreau argument, and
+        # `gamma_dot_SI = gamma_dot_nd * (u_ref / d_bar)`, so the whole conversion lives in
+        # `lambda_nd` and `gamma_dot_nd` is used as-is.  The old extra `d_bar / u_ref` factor
+        # shrank the shear rate by ~7.7x on this cohort (d_bar ~ 0.013 m, u_ref ~ 0.1 m/s),
+        # pushing the Carreau law up its shear-thinning curve toward the `mu_0` plateau: the
+        # target came out ~2x COMSOL's own `mu` on every vessel.
         lambda_nd = self.cfg.lam * (u_ref_b / d_bar_b)
 
         a = self.cfg.a

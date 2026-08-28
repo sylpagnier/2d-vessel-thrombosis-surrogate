@@ -16,7 +16,7 @@ Two of them (`node_type`, the stenosis tail) would have survived a regeneration 
 Confirm the plan first.  This writes nothing and takes about a second:
 
 ```bash
-python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --dry-run
+python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --repair-rounds 2 --dry-run
 ```
 
 ```
@@ -27,13 +27,15 @@ python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --m
   pathology     random:0.72,max_stenosis:0.18,max_aneurysm:0.10
   seed          20260828
   mode          OVERWRITE
+  mesh          lc=1.00mm x0.75, >=8 elements across the throat
+  repair        2 round(s) -- unsolved vessels are re-meshed finer on their own geometry
   mix expands   {'random': 180, 'max_stenosis': 45, 'max_aneurysm': 25}
 ```
 
 Then run it for real by dropping `--dry-run`:
 
 ```bash
-python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --num-workers 8
+python -m src.data_gen.pipeline_kinematics --batch --rheology carreau -n 250 --mixed-levels --pathology-mix "random:0.72,max_stenosis:0.18,max_aneurysm:0.10" --seed 20260828 --overwrite --anchor-max-new 250 --repair-rounds 2 --num-workers 8
 ```
 
 **One command, not two.**  `--pathology-mix` assigns a mode per vessel — weights as fractions,
@@ -124,6 +126,25 @@ Exit code 1 on any FAIL.  Every check is a bug that has already cost a run:
 | `node_type` populated | was a hardcoded `torch.zeros((N, 4))` placeholder in the builder (B24) |
 | severe-stenosis coverage | the old corpus had 0% at ratio ≥ 2.0 against deployment's 14% |
 | `u_ref` overlaps deployment | BC range; currently fine, checked so it stays fine |
+| COMSOL solve rate | 39/250 packs shipped with an all-zero `y` and every check passed (B27) |
+
+**Failed solves now repair themselves.**  `--repair-rounds N` (default 2) re-meshes any vessel
+COMSOL could not solve at a finer element size and tries it again, on the *same* geometry — the
+wall polylines are re-read from the vessel's own `.json`, so the cohort keeps its designed
+pathology mix rather than drifting toward the shapes that solve easily.  The run ends with a
+`COHORT HEALTH  <solved>/<total>` block naming anything still unsolved.  Meshes are also sized to
+the local lumen now (`mesh_min_elems_across`, default 8), which is what the 39 failures were
+asking for: a uniform 1 mm element puts ~5 elements across a 3.7 mm throat.  Cost is +6-8% nodes
+on stenosed vessels, zero on open ones.
+
+**A failed solve still writes a pack.**  `mesh_to_graph` emits `is_anchor=False` and a zero
+placeholder `y` when COMSOL produced no `.npz`; training uses those as unsupervised
+physics-only graphs.  That is fine, but it used to be invisible — the `labels present` check
+tests `y is not None`, and a zero tensor is not None.  The 2026-08-28 cohort lost **15.6%** this
+way, and the loss is not uniform: it rises monotonically with stenosis ratio (2.9% below 1.5,
+40.6% above 3.0), i.e. it eats exactly the tail the cohort is generated to add.  Preflight now
+counts the severe-stenosis tail over *solved* vessels and prints the failures worst-stenosis
+first so they can be reopened in COMSOL.
 
 ---
 
@@ -132,6 +153,11 @@ Exit code 1 on any FAIL.  Every check is a bug that has already cost a run:
 ```bash
 python scripts/calibrate_kine_loss_weights.py --graphs 8
 ```
+
+It attaches the PDE label floors first, because training does (`KINEMATICS_PDE_FLOOR`, on by
+default).  Un-floored, `l_cont` and `l_mom` carry the labels' own near-wall stencil residual —
+up to 22 at the training weight on the sharpest vessels — so calibrating without the floor
+weights a different objective than the one that runs (§13.1).
 
 Then a short run with the launch config (§12 of the repair plan; PowerShell users set these with
 `$env:NAME = "value"` rather than inline):

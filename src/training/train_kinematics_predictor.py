@@ -390,7 +390,43 @@ def load_dataset(
                 f"[kin] Merged {len(added)} clinical patient kine anchors "
                 f"(KINEMATICS_INCLUDE_PATIENT_ANCHORS=1)."
             )
-    return _apply_prior_source_to_dataset(_elevate_dataset_to_p2(dataset))
+    return _attach_pde_floors(_apply_prior_source_to_dataset(_elevate_dataset_to_p2(dataset)))
+
+
+def _attach_pde_floors(dataset):
+    """Precompute the label PDE residual that ``l_cont`` / ``l_mom`` hinge against.
+
+    See :func:`src.utils.kinematics_physics_terms.compute_pde_floors` for why: on this corpus
+    the labels' own discrete continuity residual reaches 0.22 (times the training weight of 100:
+    **22**), concentrated in the first ring off the wall on exactly the severe-stenosis vessels
+    the cohort was generated to add.  Un-floored, the PDE terms fight the data there.
+
+    Runs **after** P2 elevation -- the floor is a property of the graph the model will actually
+    see.  Unsolved vessels carry no floor (their labels are an all-zero placeholder), so their
+    PDE terms are unchanged; that is the only supervision they can contribute.
+
+    ``KINEMATICS_PDE_FLOOR=0`` restores the un-floored terms.
+    """
+    import os as _os
+
+    if _os.environ.get("KINEMATICS_PDE_FLOOR", "1").strip().lower() in ("0", "false", "no", "off"):
+        print("[kin] KINEMATICS_PDE_FLOOR=0: l_cont / l_mom run un-floored.")
+        return dataset
+    from src.config import PhysicsConfig as _PhysCfg
+    from src.core_physics.physics_kernels import PhysicsKernels as _PK
+    from src.utils.kinematics_physics_terms import attach_pde_floors
+
+    kernels = _PK(_PhysCfg(phase="kinematics"))
+    n_ok = 0
+    for d in dataset:
+        try:
+            n_ok += bool(attach_pde_floors(d, kernels))
+        except Exception as exc:        # never let one malformed graph kill a run
+            print(f"[kin] WARN PDE floor failed on "
+                  f"{getattr(d, 'graph_stem', '?')}: {type(exc).__name__}: {exc}")
+    print(f"[kin] PDE label floors on {n_ok}/{len(dataset)} graphs "
+          f"({len(dataset) - n_ok} unsolved / unlabelled, left un-floored).")
+    return dataset
 
 
 def _elevate_dataset_to_p2(dataset):

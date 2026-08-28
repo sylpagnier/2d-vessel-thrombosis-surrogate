@@ -206,6 +206,7 @@ def _v4w_bundle():
                 wound=manifest["wound"], manifest=manifest)
 
 
+@pytest.mark.slow
 def test_v4w_is_bit_identical_to_v4_on_a_no_wound_pack():
     """The licence for v4w superseding v4 outright. If this fails, it must not ship."""
     from src.clot_ml.locked import predict_temporal_v4, predict_temporal_v4_wound
@@ -222,6 +223,7 @@ def test_v4w_is_bit_identical_to_v4_on_a_no_wound_pack():
         assert np.array_equal(a["series"][int(ti)], b["series"][int(ti)]), f"series drift at {ti}"
 
 
+@pytest.mark.slow
 def test_v4w_commits_the_wound_and_touches_nothing_else():
     from src.clot_ml.locked import predict_temporal_v4, predict_temporal_v4_wound
 
@@ -334,6 +336,7 @@ def test_recursive_lumen_is_strictly_additive_and_gated():
         assert not (sh & wnd).any(), f"ring {k} overlaps the wound boundary itself"
 
 
+@pytest.mark.slow
 def test_dispatcher_lumen_defaults_to_the_shipped_single_shell():
     """An artifact with no ``lumen`` key must run ``shell``, bit-for-bit.
 
@@ -358,6 +361,7 @@ def test_dispatcher_lumen_defaults_to_the_shipped_single_shell():
     assert np.array_equal(np.asarray(implicit["onset"]), np.asarray(explicit["onset"]))
 
 
+@pytest.mark.slow
 def test_dispatcher_recursive_is_inert_on_a_nine_x_wound():
     """``recursive`` must add nothing on a wound that only reaches ~9x crit.
 
@@ -380,6 +384,7 @@ def test_dispatcher_recursive_is_inert_on_a_nine_x_wound():
         "recursive deepened a wound whose Mat cannot clear the second shell's bar")
 
 
+@pytest.mark.slow
 def test_dispatcher_recursive_never_removes_a_committed_node():
     """``recursive`` must be additive in the committed SET, not merely in the ownership map.
 
@@ -410,6 +415,7 @@ def test_dispatcher_recursive_never_removes_a_committed_node():
             "deeper shells may only add")
 
 
+@pytest.mark.slow
 def test_dispatcher_lumen_is_a_noop_without_a_wound():
     """No wound mask -> the dispatcher returns v4 unchanged whatever the depth rule says."""
     from src.clot_ml.locked import predict_temporal_v4, predict_temporal_v4_wound

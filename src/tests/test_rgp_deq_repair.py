@@ -918,8 +918,9 @@ def test_preflight_fails_a_cohort_with_a_leaked_prior_block():
     """The preflight's whole job is to be the last gate before GPU time."""
     src = (REPO / "scripts" / "preflight_kine_cohort.py").read_text(encoding="utf-8")
     for needle in ("prior block is NOT the CFD solution", "node_type populated",
-                   "wall_normal populated", "width_d2 within training range",
-                   "severe-stenosis coverage"):
+                   "wall_normal populated", "width_d2 operator is sane",
+                   "clamp bounds match this cohort", "inlet BC present",
+                   "geometry_level present", "severe-stenosis coverage"):
         assert needle in src, f"preflight does not check: {needle}"
     assert "return 1 if n_fail else 0" in src, "preflight does not fail the exit code"
 
@@ -1052,3 +1053,301 @@ def test_retry_path_reuses_the_stored_mode_not_the_raw_argument():
         "--pathology-mix and will raise on the first rejected geometry"
     )
     assert "pathology_mode=pathology_mode," not in block
+
+
+# --- B27: the width clamp is a corpus property, defined once -----------------------------
+
+def test_width_clamp_has_exactly_one_definition():
+    """The bounds were hardcoded in TWO places -- `kinematics_inference` (deploy-time clamp) and
+    `ginodeq._apply_fourier_encoding` (the encoder clamping its own inputs).  Both carried
+    4.14 / 73.8, derived from a 40-vessel corpus containing no severe stenosis.  On the
+    250-vessel cohort those bounds clamp **44% / 34%** of vessels, which would have silently
+    truncated exactly the sharp-throat signal the cohort was generated to provide.
+    """
+    from src.architecture.ginodeq import WIDTH_D1_MAX as ENC_D1, WIDTH_D2_MAX as ENC_D2
+    from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX
+    from src.utils.kinematics_inference import WIDTH_D1_MAX as INF_D1, WIDTH_D2_MAX as INF_D2
+
+    assert (WIDTH_D1_MAX, WIDTH_D2_MAX) == (ENC_D1, ENC_D2) == (INF_D1, INF_D2)
+
+    enc = (REPO / "src" / "architecture" / "ginodeq.py").read_text(encoding="utf-8")
+    assert "-4.14, 4.14" not in enc and "-73.8, 73.8" not in enc, (
+        "the encoder still hardcodes the old corpus bounds"
+    )
+
+
+def test_checkpoints_record_the_clamp_they_were_trained_under(tmp_path):
+    """The clamp is a property of the checkpoint's training corpus, so it has to travel with the
+    weights -- otherwise changing the constant silently re-interprets every older checkpoint."""
+    import torch.nn as nn
+
+    from src.architecture.kinematics_model_config import save_kinematics_checkpoint_file
+    from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX
+
+    f = tmp_path / "c.pth"
+    save_kinematics_checkpoint_file(f, nn.Linear(2, 2), checkpoint_role="kinematics_best",
+                                    rel_l2=0.1, continuity=0.001, composite=0.2,
+                                    run_id="X", prior_source="analytic")
+    raw = torch.load(f, map_location="cpu", weights_only=False)
+    assert raw["width_clamp"] == [float(WIDTH_D1_MAX), float(WIDTH_D2_MAX)]
+
+
+def test_preflight_reports_the_clamp_bounds_the_cohort_implies():
+    """A stale clamp is invisible unless something computes the cohort's own p95 and compares."""
+    src = (REPO / "scripts" / "preflight_kine_cohort.py").read_text(encoding="utf-8")
+    assert "clamp bounds match this cohort" in src
+    assert "WIDTH_D1_MAX" in src and "percentile(d1a, 95)" in src
+
+
+# --- B26: the PDE label floor --------------------------------------------------------------
+
+def test_pde_floor_zeroes_the_terms_on_the_labels_themselves():
+    """B26: `l_cont` / `l_mom` must cost nothing when the model reproduces COMSOL exactly.
+
+    Un-floored they do not: on the 250-vessel cohort the labels' own discrete continuity
+    residual reaches 0.22 -- 22 at the training weight of 100 -- concentrated in the first ring
+    off the wall on the severe-stenosis vessels the cohort exists to teach.  The hinge makes the
+    labels the floor rather than a target to beat.
+    """
+    import numpy as np
+    from torch_geometric.data import Data
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.utils.kinematics_physics_terms import (
+        PDE_FLOOR_CONT, PDE_FLOOR_MOM, attach_pde_floors, compute_kinematics_physics_terms)
+
+    # structured grid -> real WLS operators, so the labels carry genuine stencil residual
+    gx, gy = torch.meshgrid(torch.linspace(0, 0.01, 14), torch.linspace(-1e-3, 1e-3, 9),
+                            indexing="ij")
+    pos = torch.stack([gx.flatten(), gy.flatten()], dim=1)
+    n = pos.shape[0]
+    dist = torch.cdist(pos, pos)
+    ei = (dist < 1.2e-3).nonzero(as_tuple=False).t()
+    ei = ei[:, ei[0] != ei[1]]
+
+    d = Data(x=torch.zeros(n, 18), edge_index=ei)
+    d.num_nodes = n
+    d.x[:, 0:2] = pos
+    d.mask_wall = (pos[:, 1].abs() > 9.5e-4)
+    d.mask_inlet = pos[:, 0] < 1e-4
+    d.mask_outlet = pos[:, 0] > 9.9e-3
+    d.mask_wound = torch.zeros(n, dtype=torch.bool)
+    d.u_ref = torch.tensor([0.1])
+    d.d_bar = torch.tensor([1.5e-3])
+    d.is_anchor = torch.tensor([True])
+    d.u_inlet_bc = torch.full((n, 1), 0.1)
+    d.mu_inlet_bc = torch.ones(n, 1)
+    d.mu_wall_bc = torch.ones(n, 1)
+
+    row, col = d.edge_index
+    dr = pos[col] - pos[row]
+    dx, dy = dr[:, 0], dr[:, 1]
+    d.V = torch.stack([dx, dy, 0.5 * dx**2, dx * dy, 0.5 * dy**2], dim=1)
+    d.W = torch.ones(d.edge_index.size(1))
+    d.M_inv = torch.eye(5).unsqueeze(0).repeat(n, 1, 1)
+
+    # a Poiseuille-ish label field, non-trivial in every channel the momentum term reads
+    yn = pos[:, 1] / 1e-3
+    d.y = torch.zeros(n, 5)
+    d.y[:, 0] = 1.0 - yn**2
+    d.y[:, 1] = 0.02 * yn * (pos[:, 0] / 1e-2)
+    d.y[:, 2] = -pos[:, 0] / 1e-3
+    d.y[:, 3] = 1.0
+    d.y_valid_mask = torch.ones(n, 5, dtype=torch.bool)
+
+    kern = PhysicsKernels(PhysicsConfig(phase="kinematics"))
+    raw = compute_kinematics_physics_terms(d.y.clone(), d, kern, phase="kinematics")
+    assert attach_pde_floors(d, kern), "labels are non-trivial, a floor must be attachable"
+    assert getattr(d, PDE_FLOOR_CONT).shape == (n,)
+    assert getattr(d, PDE_FLOOR_MOM).shape == (n,)
+
+    hinged = compute_kinematics_physics_terms(d.y.clone(), d, kern, phase="kinematics")
+    assert float(raw["l_cont"]) > 0.0, "the labels DO carry stencil residual (else no test)"
+    assert float(hinged["l_cont"]) == 0.0, "COMSOL's own answer must cost nothing"
+    assert float(hinged["l_mom"]) == 0.0, "COMSOL's own answer must cost nothing"
+
+    # ... and the hinge must still bite on a field that is worse than the labels
+    g = torch.Generator().manual_seed(0)
+    worse = d.y.clone()
+    worse[:, 0:2] += 0.1 * torch.randn(n, 2, generator=g)
+    t_worse = compute_kinematics_physics_terms(worse, d, kern, phase="kinematics")
+    assert float(t_worse["l_cont"]) > 0.0, "a model worse than the labels must pay"
+    assert float(t_worse["l_mom"]) > 0.0, "a model worse than the labels must pay"
+
+
+def test_pde_floor_is_not_attached_to_an_unsolved_vessel():
+    """B27: 39/250 packs of the 2026-08-28 cohort have an all-zero `y` -- COMSOL never solved
+    them.  Granting those a floor would grant a floor of exactly zero everywhere, which reads as
+    "the labels are perfect" when there are no labels.  They must stay un-floored."""
+    from torch_geometric.data import Data
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.utils.kinematics_physics_terms import compute_pde_floors
+
+    n = 16
+    d = Data(x=torch.zeros(n, 18), edge_index=torch.tensor([[0, 1], [1, 0]]))
+    d.num_nodes = n
+    d.y = torch.zeros(n, 5)          # the unsolved-vessel placeholder
+    d.is_anchor = torch.tensor([False])
+    assert compute_pde_floors(d, PhysicsKernels(PhysicsConfig(phase="kinematics"))) is None
+
+
+# --- B28: the Carreau shear rate is already non-dimensional --------------------------------
+
+def test_carreau_target_uses_the_nd_shear_rate_directly():
+    """B28: `_compute_carreau_viscosity` must NOT rescale the WLS shear rate.
+
+    The WLS operators are built on `x_nd = x / d_bar` and the velocities are `u / u_ref`, so
+    `d(u_nd)/d(x_nd)` is already non-dimensional -- the contract `graph_gradient_operators`
+    documents and the one `BiochemPhysicsKernels._compute_shear_rate` and
+    `clot_kinematics_fields` rely on when they multiply by `u_ref / d_bar` to reach SI 1/s.
+    This function used to scale by `d_bar / u_ref` instead, ~7.7x too small on the 250-vessel
+    cohort, which pushed the Carreau law toward its `mu_0` plateau: the target came out ~2x
+    COMSOL's own `mu` on every vessel (`l_rheo` at `pred = y` had median 6.107).
+    """
+    from torch_geometric.data import Data
+
+    from src.config import PhysicsConfig
+    from src.core_physics.physics_kernels import PhysicsKernels
+    from src.utils.rheology import carreau_yasuda_viscosity
+
+    cfg = PhysicsConfig(phase="kinematics")
+    kern = PhysicsKernels(cfg)
+
+    n = 8
+    d = Data(x=torch.zeros(n, 18), edge_index=torch.tensor([[0, 1], [1, 0]]))
+    d.num_nodes = n
+    d.u_ref = torch.tensor([0.105])
+    d.d_bar = torch.tensor([0.0133])
+
+    # a pure shear `du_nd/dy_nd = g`, so the invariant is exactly `g`
+    g = torch.linspace(0.5, 40.0, n)
+    du_ij = torch.zeros(n, 4)
+    du_ij[:, 1] = g
+
+    got = kern._compute_carreau_viscosity(du_ij, d)
+    lambda_nd = cfg.lam * (float(d.u_ref) / float(d.d_bar))
+    want = carreau_yasuda_viscosity(
+        gamma_dot_nd=g, mu_inf_nd=torch.tensor(kern.mu_inf_nd),
+        mu_0_nd=torch.tensor(kern.mu_0_nd), lambda_nd=torch.tensor(lambda_nd),
+        n=cfg.n, a=cfg.a,
+    )
+    assert torch.allclose(got, want, rtol=2e-3), (
+        "the Carreau argument must be `lam * gamma_SI` = `lambda_nd * gamma_nd`, with the "
+        "WLS shear rate used as-is"
+    )
+
+    # and the regression itself: the old `d_bar / u_ref` rescale sits far up the mu_0 plateau
+    stale = carreau_yasuda_viscosity(
+        gamma_dot_nd=g * (float(d.d_bar) / float(d.u_ref)), mu_inf_nd=torch.tensor(kern.mu_inf_nd),
+        mu_0_nd=torch.tensor(kern.mu_0_nd), lambda_nd=torch.tensor(lambda_nd),
+        n=cfg.n, a=cfg.a,
+    )
+    assert float(stale.median() / got.median()) > 1.4, (
+        "guard is only meaningful if the two conventions actually differ here"
+    )
+
+
+# --- B27: the throat has to be resolved, and the repair path has to be exact ----------------
+
+def _straight_stenosed_walls(n=60, length=0.1, width=0.018, throat_frac=0.20):
+    """Two wall polylines with a Gaussian throat, in SI metres."""
+    import numpy as np
+
+    x = np.linspace(0.0, length, n)
+    bump = 1.0 - (1.0 - throat_frac) * np.exp(-0.5 * ((x - 0.5 * length) / (0.06 * length)) ** 2)
+    half = 0.5 * width * bump
+    top = np.stack([x, half], axis=1)
+    bot = np.stack([x, -half], axis=1)
+    return top, bot
+
+
+def test_mesh_sizing_resolves_the_stenosis_throat(tmp_path):
+    """B27: a uniform element size spans a severe throat instead of resolving it.
+
+    The 2026-08-28 cohort meshed at a uniform 1 mm (x0.75), which puts about five elements
+    across a 3.7 mm throat.  COMSOL then fails to converge: all 39 unsolved vessels were
+    stenosis geometries and the failure rate climbed monotonically with stenosis ratio (2.9%
+    below 1.5, 40.6% above 3.0).
+
+    The guard is that the throat gets the requested resolution AND that the open lumen does not
+    pay for it -- a global refine would work too but multiplies the node count everywhere.
+    """
+    import numpy as np
+    import pytest
+
+    gmsh = pytest.importorskip("gmsh")
+
+    from src.config import VesselConfig
+    from src.data_gen.lib.vessel_generator import _mesh_geometry
+    from src.data_gen.lib.vessel_geometry import compute_geometry_from_walls
+
+    cfg = VesselConfig(phase="kinematics")
+    cfg_dict = {
+        "mesh_lc": cfg.mesh_lc,
+        "mesh_size_factor": cfg.mesh_size_factor,
+        "mesh_min_elems_across": cfg.mesh_min_elems_across,
+        "mesh_lc_min_ratio": cfg.mesh_lc_min_ratio,
+        "unit": "m",
+        "TAGS": cfg.TAGS,
+        "base_length": cfg.base_length,
+    }
+
+    def mesh(top, bot, idx):
+        geom = compute_geometry_from_walls(top, bot, idx=idx, unit="m")
+        gmsh.initialize()
+        try:
+            gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.option.setNumber("Mesh.Algorithm", 6)
+            gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+            gmsh.option.setNumber("Mesh.SaveGroupsOfNodes", 1)
+            gmsh.option.setNumber("Mesh.SaveAll", 0)
+            gmsh.option.setNumber("Mesh.MeshSizeFactor", cfg_dict["mesh_size_factor"])
+            lc_min = cfg.mesh_lc * cfg.mesh_lc_min_ratio
+            gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
+            gmsh.option.setNumber("Mesh.CharacteristicLengthMax", cfg.mesh_lc)
+            _, ok, err = _mesh_geometry(geom, cfg_dict, str(tmp_path))
+            assert ok, err
+        finally:
+            gmsh.finalize()
+        lines = (tmp_path / f"vessel_{idx}.msh").read_text().splitlines()
+        i = lines.index("$Nodes")
+        n = int(lines[i + 1])
+        return np.array([[float(v) for v in lines[i + 2 + k].split()[1:3]] for k in range(n)])
+
+    top_s, bot_s = _straight_stenosed_walls(throat_frac=0.20)
+    pts_s = mesh(top_s, bot_s, 9001)
+    top_o, bot_o = _straight_stenosed_walls(throat_frac=1.0)   # same vessel, no throat
+    pts_o = mesh(top_o, bot_o, 9002)
+
+    from scipy.spatial import cKDTree
+
+    def spacing_near(pts, x0, r):
+        near = pts[np.abs(pts[:, 0] - x0) < r]
+        assert len(near) > 8
+        dd, _ = cKDTree(near).query(near, k=2)
+        return float(np.median(dd[:, 1]))
+
+    throat_w = 0.018 * 0.20
+    h_throat = spacing_near(pts_s, 0.05, throat_w)
+    across = throat_w / h_throat
+    assert across >= float(cfg.mesh_min_elems_across), (
+        f"throat resolved by only {across:.1f} elements, asked for "
+        f"{cfg.mesh_min_elems_across} -- the size callback is not taking effect.  Setting `lc` "
+        f"on `addPoint` does NOT work here: the wall stations are B-spline control points, not "
+        f"model vertices, so `Mesh.MeshSizeFromPoints` ignores them and the node count comes "
+        f"back byte-identical to a uniform mesh."
+    )
+
+    # the inlet, far from the throat, must keep the open-lumen size: refinement is LOCAL
+    h_inlet = spacing_near(pts_s, 0.01, 0.008)
+    assert h_inlet > 2.0 * h_throat, (
+        f"inlet spacing {h_inlet:.2e} vs throat {h_throat:.2e} -- the whole vessel refined, "
+        f"which multiplies node count everywhere instead of where it is needed"
+    )
+    # and the cost stays modest against the same vessel with no throat at all
+    assert len(pts_s) < 2.0 * len(pts_o), (
+        f"{len(pts_s)} nodes with a throat vs {len(pts_o)} without -- too expensive"
+    )

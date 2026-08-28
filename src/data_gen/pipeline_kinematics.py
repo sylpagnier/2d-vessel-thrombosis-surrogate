@@ -371,6 +371,13 @@ def _execute_phase_interactive_plan(
                     allow_overwrite=plan.allow_overwrite_anchor,
                     continuation_steps=None,
                 )
+                pending = _repair_unsolved_anchors(
+                    gen,
+                    rounds=len(ANCHOR_REPAIR_SCHEDULE),
+                    allow_overwrite=plan.allow_overwrite_anchor,
+                    max_json_to_scan=plan.anchor_max_json_scan,
+                )
+            _report_cohort_health(gen, pending)
 
     if plan.run_mesh:
         _safe_print("\n--- Mesh to graph ---")
@@ -467,6 +474,11 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
     p.add_argument("--append", action="store_true",
                    help="Add to an existing cohort: indices continue from the highest "
                         "on disk. Mutually exclusive with --overwrite.")
+    p.add_argument(
+        "--repair-rounds", type=int, default=2, metavar="N",
+        help="Re-mesh finer and retry vessels COMSOL could not solve, up to N times "
+             "(0 disables). Geometry is preserved -- only the mesh changes -- so the cohort "
+             "keeps its designed pathology mix. Default 2.")
     p.add_argument("--dry-run", action="store_true",
                    help="Print the plan (counts, mix, target dirs) and exit without writing.")
     p.add_argument(
@@ -702,6 +714,11 @@ def _run_batch_for_phase(
             print(f"  meshes  ->    {_cfg.mesh_input_dir}")
             print(f"  graphs  ->    {_cfg.graph_output_dir / rheology}")
             print(f"  mode          {'OVERWRITE' if args.overwrite else ('APPEND' if getattr(args, 'append', False) else 'fresh')}")
+            _rr = int(getattr(args, "repair_rounds", 2))
+            print(f"  mesh          lc={_cfg.mesh_lc * 1000:.2f}mm x{_cfg.mesh_size_factor}, "
+                  f">={_cfg.mesh_min_elems_across} elements across the throat")
+            print(f"  repair        {_rr} round(s)" + (" (DISABLED)" if _rr <= 0 else
+                  " -- unsolved vessels are re-meshed finer on their own geometry"))
             if args.pathology_mix:
                 import numpy as _np
                 from collections import Counter as _C
@@ -758,6 +775,13 @@ def _run_batch_for_phase(
                 allow_overwrite=effective_allow_overwrite,
                 continuation_steps=None,
             )
+            pending = _repair_unsolved_anchors(
+                gen,
+                rounds=int(getattr(args, "repair_rounds", 2)),
+                allow_overwrite=effective_allow_overwrite,
+                max_json_to_scan=args.anchor_max_json_scan,
+            )
+        _report_cohort_health(gen, pending)
 
     if not args.skip_mesh:
         _safe_print(f"--- Mesh to graph (rheology={rheology}) ---")
@@ -776,6 +800,103 @@ def _run_batch_for_phase(
         except Exception as exc:
             _safe_print(f"\nMesh-to-graph failed: {exc}\n")
             raise
+
+
+#: Element-size multipliers tried, in order, on a vessel COMSOL could not solve.  Paired with a
+#: rising throat-resolution target: a stenosis that fails at 8 elements across is given 12, then
+#: 16.  Refining is the fix the failures asked for -- manually refining the 39 unsolved vessels
+#: of the 2026-08-28 cohort in COMSOL let every one of them solve.
+ANCHOR_REPAIR_SCHEDULE: tuple[tuple[float, int], ...] = ((0.6, 12), (0.4, 16))
+
+
+def _unsolved_stems(gen) -> list[str]:
+    """Vessels that are CFD-ready but have no ``.npz`` -- i.e. the solve did not produce one."""
+    out_dir = gen.target_output_dir()
+    stems = []
+    for jf in sorted(gen.mesh_dir.glob("vessel_*.json"),
+                     key=lambda q: int(q.stem.split("_")[-1])):
+        nas = jf.with_suffix(".nas")
+        if not (nas.exists() and nas.stat().st_size > 0):
+            continue
+        if not (out_dir / f"{jf.stem}.npz").exists():
+            stems.append(jf.stem)
+    return stems
+
+
+def _repair_unsolved_anchors(gen, *, rounds: int, allow_overwrite: bool,
+                             max_json_to_scan=None) -> list[str]:
+    """Re-mesh vessels COMSOL could not solve, finer, and try them again.  Returns what is
+    still unsolved.
+
+    Solve failure used to be terminal and silent: the vessel was skipped, ``mesh_to_graph``
+    wrote a pack anyway with an all-zero ``y`` and ``is_anchor=False``, and the cohort shipped
+    short with every preflight check passing.  On 2026-08-28 that lost 39 of 250 vessels
+    (15.6%), **all of them stenosis geometries**, at a rate that climbed with stenosis ratio
+    (2.9% below 1.5, 40.6% above 3.0) -- so the loss fell precisely on the severe tail the
+    cohort exists to provide.
+
+    The geometry is NOT re-rolled.  Each vessel is re-meshed from its own stored wall polylines
+    at a smaller element size, so the cohort's designed pathology mix survives the repair; a
+    re-roll would bias it toward the shapes that solve easily.
+    """
+    from src.data_gen.lib.vessel_generator import VesselGenerator, remesh_vessels_from_meta
+
+    cfg_dict = VesselGenerator(phase="kinematics")._cfg_dict()
+    pending = _unsolved_stems(gen)
+    if not pending:
+        return []
+
+    for r, (refine, elems) in enumerate(ANCHOR_REPAIR_SCHEDULE[:max(0, int(rounds))], start=1):
+        _safe_print(
+            f"\n--- Anchor repair round {r}/{min(rounds, len(ANCHOR_REPAIR_SCHEDULE))}: "
+            f"{len(pending)} unsolved vessel(s), re-meshing at "
+            f"mesh_refine={refine} min_elems_across={elems} ---\n"
+        )
+        results = remesh_vessels_from_meta(
+            pending, gen.mesh_dir, cfg_dict, mesh_refine=refine, min_elems_across=elems,
+        )
+        remeshed = [stem for stem, ok, _ in results if ok]
+        for stem, ok, err in results:
+            if not ok:
+                _safe_print(f"    re-mesh failed: {stem}: {err[:90]}")
+        if not remeshed:
+            _safe_print("    nothing could be re-meshed; stopping repair.\n")
+            break
+
+        gen.run_batch(
+            max_new=len(remeshed),
+            max_json_to_scan=max_json_to_scan,
+            shuffle_candidates=False,
+            shuffle_seed=None,
+            allow_overwrite=allow_overwrite,
+            continuation_steps=None,
+        )
+        recovered = len(pending) - len(_unsolved_stems(gen))
+        pending = _unsolved_stems(gen)
+        _safe_print(f"    round {r}: recovered {recovered}, still unsolved {len(pending)}\n")
+        if not pending:
+            break
+    return pending
+
+
+def _report_cohort_health(gen, pending: list[str]) -> None:
+    """Say plainly how many vessels the cohort actually has labels for."""
+    total = sum(1 for jf in gen.mesh_dir.glob("vessel_*.json")
+                if jf.with_suffix(".nas").exists())
+    solved = total - len(pending)
+    _safe_print("\n" + "=" * 62)
+    _safe_print(f"  COHORT HEALTH   {solved}/{total} vessels solved")
+    if pending:
+        _safe_print(f"  {len(pending)} STILL UNSOLVED after repair -- these ship with an "
+                    f"all-zero `y` and can only contribute PDE terms:")
+        for stem in pending[:20]:
+            _safe_print(f"    {stem}")
+        if len(pending) > 20:
+            _safe_print(f"    ... and {len(pending) - 20} more")
+        _safe_print("  Open these in COMSOL, or raise --repair-rounds.")
+    else:
+        _safe_print("  Every CFD-ready vessel solved.")
+    _safe_print("=" * 62 + "\n")
 
 
 def run_batch_pipeline(args: argparse.Namespace) -> None:

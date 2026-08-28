@@ -44,6 +44,7 @@ def _cfgs():
     return BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
 
 
+@pytest.mark.slow
 def test_gt_sample_reproduces_the_shipped_v5_cache_bit_for_bit():
     """The locked artifact's normaliser is only valid against these exact columns."""
     src = V5_CACHE / "patient020.npz"
@@ -82,6 +83,7 @@ def test_gt_sample_reproduces_the_shipped_v5_cache_bit_for_bit():
                     "(scripts/build_clot_ml_cache_v4.py) and re-promote clot_gnn_v4")
 
 
+@pytest.mark.slow
 def test_pred_flow_reaches_the_v4_indicator_channels():
     """The bug: these five were identical under both flow sources."""
     from src.clot_ml.locked import build_sample

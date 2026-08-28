@@ -141,6 +141,8 @@ class AnchorGenerator:
         rheology: Optional[str] = None,
     ):
         self.vessel_config = VesselConfig(phase=phase)
+        # Why the most recent single-anchor attempt failed; collected per vessel by `run_batch`.
+        self._last_fail_reason: str = ""
         inferred_rheology = None
         if rheology is None and output_dir is not None:
             leaf = Path(output_dir).name.strip().lower()
@@ -507,12 +509,19 @@ class AnchorGenerator:
                         f"NaNs detected in {nas_file.name} at n={n_val} | Total Nodes: {total_nodes} | "
                         f"NaN counts -> u: {nan_u}, v: {nan_v}, p: {nan_p}, mu: {nan_mu}"
                     )
+                    self._last_fail_reason = (
+                        f"NaNs at n={n_val} (u={nan_u}, v={nan_v}, p={nan_p}, mu={nan_mu} "
+                        f"of {total_nodes})"
+                    )
                     return False
 
                 p_std = np.std(p)
                 u_max = np.max(np.abs(u))
                 if p_std < 1e-9 or u_max < 1e-7:
                     logger.warning(f"[{i}] Skipping: Trivial solution detected at n={n_val}")
+                    self._last_fail_reason = (
+                        f"trivial solution at n={n_val} (p_std={p_std:.3e}, u_max={u_max:.3e})"
+                    )
                     return False
 
                 np.savez(
@@ -543,8 +552,10 @@ class AnchorGenerator:
                     type(e).__name__,
                     e,
                 )
+                self._last_fail_reason = f"solver did not converge: {type(e).__name__}: {e}"
             else:
                 _safe_log("error", "Error on %s: %s", i, e)
+                self._last_fail_reason = f"{type(e).__name__}: {e}"
             self._clear_all_solution_data()
             return False
 
@@ -622,6 +633,8 @@ class AnchorGenerator:
                 "new_written": 0,
                 "attempted": 0,
                 "failed_or_discarded": 0,
+                "failed_stems": [],
+                "failures": [],
                 "pool_full": pool_full,
                 "pool_attempted": len(candidates),
                 "pool_exhausted": True,
@@ -633,11 +646,17 @@ class AnchorGenerator:
         new_written = 0
         attempted = 0
         n_failed = 0
+        # Which vessels failed, and why.  Without this a failed solve is invisible downstream:
+        # `mesh_to_graph` still writes a pack (all-zero `y`, `is_anchor=False`) and the cohort
+        # ships short with nothing saying so -- 39/250 on 2026-08-28, all stenosis geometries
+        # (RGP_DEQ_REPAIR_PLAN.md B27).
+        failures: List[Tuple[str, str]] = []
         for json_file in _tqdm_or_plain(candidates, desc="Anchors"):
             if new_written >= max_new:
                 break
             attempted += 1
             ok = False
+            self._last_fail_reason = ""
             try:
                 ok = self._process_single_anchor(
                     json_file,
@@ -667,6 +686,7 @@ class AnchorGenerator:
                     continue
                 consecutive_fast_fails = 0
                 _safe_log("error", "Unhandled error on %s: %s", json_file.stem, exc)
+                self._last_fail_reason = f"{type(exc).__name__}: {exc}"
                 ok = False
 
             if ok:
@@ -674,6 +694,7 @@ class AnchorGenerator:
                 consecutive_fast_fails = 0
             else:
                 n_failed += 1
+                failures.append((json_file.stem, self._last_fail_reason or "unknown"))
 
         pool_exhausted = new_written < max_new and attempted >= len(candidates)
         if new_written < max_new:
@@ -691,12 +712,21 @@ class AnchorGenerator:
         else:
             logger.info(f"Anchor batch: wrote {new_written} new .npz (target was {max_new}).")
 
+        if failures:
+            _safe_log("warning", "%d vessel(s) did not solve:", len(failures))
+            for stem, why in failures[:20]:
+                _safe_log("warning", "    %-16s %s", stem, why[:96])
+            if len(failures) > 20:
+                _safe_log("warning", "    ... and %d more", len(failures) - 20)
+
         return {
             "existing_before": existing_npz,
             "requested_new": max_new,
             "new_written": new_written,
             "attempted": attempted,
             "failed_or_discarded": n_failed,
+            "failed_stems": [stem for stem, _ in failures],
+            "failures": failures,
             "pool_full": pool_full,
             "pool_attempted": len(candidates),
             "pool_exhausted": pool_exhausted,

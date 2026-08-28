@@ -1140,3 +1140,247 @@ still win where set, so a sweep of one or two terms on top of a calibrated base 
 
 Re-run the calibration from a mid-training checkpoint if the balance drifts; it is cheap, and
 the balance measured at a poorly-trained reference state is a starting point, not a law.
+
+---
+
+## 13. The cohort: one dead assumption and one dead sixth
+
+Two separate defects, found by measuring the 250-vessel cohort's labels instead of trusting a
+threshold.  Neither is a bad COMSOL solve.
+
+### 13.1 B26 — `l_cont` and `l_mom` asked the model to beat the data
+
+`TestComsolAnchorPhysicsStrict` fails on the new cohort with
+`vessel_100: train_conflict_budget=12.6522 > 0.4`.  The budget is `l_mom + 100*l_cont + 10*l_wss`
+evaluated at **`pred = data.y`** — what the model would pay for reproducing COMSOL exactly.  The
+first response was to raise the cap.  That was wrong, and the measurement says why.
+
+`l_cont` on COMSOL's own labels, 211 solved vessels:
+
+```
+                     median      p90       p99       max
+l_cont             2.54e-04  1.07e-01  1.36e-01  2.22e-01
+  x100 (the training weight)   0.025     10.7      13.6      22.2
+```
+
+**It is not solve quality.**  Three measurements separate the two hypotheses:
+
+| measurement | value | reads as |
+|---|---|---|
+| `rms(div u) / rms(\|u_x\| + \|v_y\|)` | median **1.9%** | the field *is* divergence-free |
+| spearman(`l_cont`, stenosis ratio) | **+0.82** | tracks geometry |
+| spearman(`l_cont`, that scale-free ratio) | **+0.10** | does *not* track quality |
+
+And the residual is not spread over the mesh — it is a handful of nodes:
+
+```
+single worst node   carries  median 10.3%  of the vessel's total squared divergence
+worst 10 nodes               median 47.6%
+worst 1% of nodes            median 70.0%
+```
+
+Those nodes sit at `sdf_nd ~ 0.047` (56% below 0.05) — **the first interior ring off the wall** —
+at normal element size (`h_min/h_global` 0.79) and normal degree (6).  It is the one-sided WLS
+stencil meeting the profile's sharpest curvature, not a mesh or solver defect.  Excluding rings:
+
+```
+vessel      l_cont(all)      -1hop      -2hop      -3hop    drop
+vessel_87     9.124e-02  1.117e-02  1.153e-03  3.632e-04   251x
+vessel_215    9.123e-02  1.418e-02  9.345e-04  3.553e-04   257x
+vessel_100    1.265e-01  1.439e-02  1.729e-03  6.312e-04   200x
+vessel_0      1.244e-04  3.123e-05  2.276e-05  1.424e-05     9x   <- already smooth
+```
+
+Three rings collapse the worst vessels by **113–257x**, onto the same 5e-04 the smooth ones
+already sit at.  So the term was asking the model to be *more* PDE-consistent than the labels
+it is simultaneously fit to, hardest on exactly the severe-stenosis vessels this cohort was
+generated to add.  That is a real conflict in the objective, not a tolerance question.
+
+**The fix is the hinge**, the same one-sided form as T6's `prior_floor_loss`:
+
+```
+L = mean( relu( |r_pred|^2 - |r_gt|^2 ) )
+```
+
+zero wherever the model is as PDE-consistent as the data, positive only where it is worse.  The
+floor is a property of the graph and its labels, so `compute_pde_floors` computes it once at
+load and stores it as a node tensor (`pde_floor_cont`, `pde_floor_mom`) that PyG collates.
+`KINEMATICS_PDE_FLOOR=0` restores the un-floored terms.  Verified:
+
+```
+vessel        l_cont raw    hinged |  l_mom raw    hinged | budget raw   hinged
+vessel_100     1.265e-01 0.000e+00 |  4.128e-03 0.000e+00 |    12.6522   0.0000
+vessel_232     1.467e-01 0.000e+00 |  4.016e-03 0.000e+00 |    14.6706   0.0000
+vessel_0       1.244e-04 0.000e+00 |  4.492e-04 0.000e+00 |     0.0129   0.0000
+```
+
+and it still bites on a worse-than-labels field — noise 0.02 -> `l_cont` 2.04e-02, noise 0.10 ->
+4.39e-01.  The T1/T2 caps go **back to tight** rather than staying inflated: with the floor
+wired they assert that COMSOL's own answer costs the model nothing.  Unsolved vessels get no
+floor (below), so their PDE terms are unchanged.
+
+Calibration must run with the floor attached — `calibrate_kine_loss_weights.py` builds its own
+graphs, so it now does too, or it would weight a different objective than the one training runs.
+
+### 13.2 B27 — 39 of 250 vessels were never solved, and nothing said so
+
+15.6% of the cohort has an **identically zero** `y`.  `mesh_to_graph` writes the pack anyway when
+COMSOL produced no `.npz`, with `is_anchor=False` and a zero placeholder.  Training treats those
+as unsupervised physics-only graphs, which is a legitimate design — but nothing reported it, and
+**preflight passed 0 FAIL / 0 WARN**, because its `labels present` check tests `y is not None`
+and a zero tensor is not None.
+
+The loss is not uniform.  It rises monotonically with the thing the cohort exists to teach:
+
+```
+stenosis ratio   n     failed
+  [1.0, 1.5)   140    4  ( 2.9%)
+  [1.5, 2.0)    32    6  (18.8%)
+  [2.0, 2.5)    26    9  (34.6%)
+  [2.5, 3.0)    20    7  (35.0%)
+  [3.0,  ..)    32   13  (40.6%)
+```
+
+Aneurysm ratio does not predict failure (non-monotone, 5.6–30.7%); node count and geometry level
+barely move it (L0 17%, L1 17%, L2 10%).  The four sub-1.5 failures are all near the top of the
+node-count range.  The failure path is in `AnchorGenerator._solve_one`: a non-converged
+`model.solve()`, any NaN in `u/v/p/mu`, or a trivial solution (`p_std < 1e-9` or `u_max < 1e-7`)
+all `return False` and write nothing.
+
+**Consequence for the cohort:** `severe-stenosis coverage` read 31%, but only 23% of *solved*
+vessels are at ratio >= 2.0.  Still above deployment's 14%, so the cohort remains usable — but
+the check was reporting a tail a third of which carries no labels.  Preflight now counts solved
+vessels only, adds a `COMSOL solve rate` check, and prints the unsolved vessels worst-stenosis
+first so they can be opened in COMSOL.
+
+**Open, for the COMSOL box:** the 39 failures are a solver-settings question, not a data
+question — the geometries are valid (they meshed, and their duals at the same ratio solved
+fine).  Worth trying on the worst of them (`vessel_245` 3.94, `vessel_218` 3.89, `vessel_112`
+3.77, `vessel_201` 3.62, `vessel_88` 3.48): whether the Carreau `n` continuation ramp is too
+coarse at high shear, and whether the throat needs boundary-layer mesh refinement.  A 40% loss
+rate above ratio 3.0 is worth ~13 vessels of the sharpest data in the cohort.
+
+### 13.3 B28 — FIXED: the Carreau shear rate was non-dimensionalised twice
+
+`l_rheo` at `pred = y` compares COMSOL's own `mu` against our Carreau law evaluated at the WLS
+shear rate from COMSOL's own velocity.  It should be near zero.  It was not:
+
+```
+l_rheo on COMSOL's OWN labels, 211 solved vessels
+  median 6.107   p90 8.368   p99 10.057   max 10.213
+  median mu ratio (COMSOL / ours) 0.38-0.55   -- our target was ~2x COMSOL's
+```
+
+**Not the §13.1 disease.**  It got *worse* away from the wall (vessel_87: 13.9 all nodes, 16.7
+excluding one wall ring, 23.6 excluding three), so it was not a near-wall stencil artifact, and
+the offset was on every vessel including the mild ones.
+
+**Root cause.**  The WLS operators are built on `x_nd = x / d_bar` (`nodes_nd = nodes / d_bar` in
+`mesh_to_graph`; `node_positions` reads the same channels) and the velocities are `u / u_ref`, so
+`d(u_nd)/d(x_nd)` is **already non-dimensional** — the contract `graph_gradient_operators`
+documents in its own docstring.  `_compute_carreau_viscosity` believed the opposite:
+
+```python
+# "Raw WLS velocity gradients are dimensional when geometry is in meters."
+gamma_dot_nd = gamma_dot_dim * (d_bar_b / clamp(u_ref_b))
+```
+
+Two other modules had it right and disagreed with it in the same file tree:
+`BiochemPhysicsKernels._compute_shear_rate` and `clot_kinematics_fields` both take the raw WLS
+shear rate as non-dimensional and multiply by `u_ref / d_bar` to *reach* SI 1/s.  The kinematics
+kernel multiplied by the reciprocal.
+
+The correct Carreau argument is `lam * gamma_SI = (lam * u_ref / d_bar) * gamma_nd`, which is
+exactly `lambda_nd * gamma_nd` — the whole conversion already lives in `lambda_nd`, so
+`gamma_dot_nd` is used as-is.  The extra factor made the shear rate ~7.7x too small on this
+cohort (`d_bar` ~ 0.013 m, `u_ref` ~ 0.1 m/s), pushing the law up its shear-thinning curve toward
+the `mu_0` plateau.
+
+**After the fix**, over the same 211 vessels:
+
+```
+l_rheo    median 6.107 -> 0.349    p90 8.368 -> 0.867    max 10.213 -> 1.166
+mu ratio  0.38-0.55    -> 0.998    (p10-p90 0.985-1.010)
+```
+
+Essentially exact agreement with COMSOL.  The residual 0.35 is the §13.1 near-wall stencil — the
+shear rate is a gradient too.  The T2 cap goes 8.5 -> 1.5 and is now a real gate.  `l_rheo`
+carries no weight in the kinematics loss, so this did not affect Stage A training; it did affect
+Stage B, where `mu` drives the shear the clot model reads.
+
+---
+
+## 14. Solve failure is no longer terminal, and no longer silent
+
+B27 (§13.2) left 39 of 250 vessels unsolved.  Manually refining those meshes in COMSOL let
+**every one of them solve**, which identifies the cause as resolution, not geometry.
+
+### 14.1 B29 — the throat was spanned, not resolved
+
+`mesh_lc` is a single characteristic length with `CharacteristicLengthMin` and `Max` **both** set
+to it, so the mesh is uniform by construction.  A severe stenosis closes the lumen to ~3.7 mm
+against a 1 mm element (x0.75 size factor): about **five elements across the throat**, in the one
+place the solution has its sharpest gradients.
+
+Sizing is now local: a Gmsh **size callback** returns `local_lumen_width / mesh_min_elems_across`
+(default 8) at each query point, clamped to `[mesh_lc * mesh_lc_min_ratio, mesh_lc]`.
+`top_coords[i]` and `bot_coords[i]` are the two walls at one station, so their separation is the
+lumen width there.
+
+**It has to be a callback.**  The first attempt passed per-point `lc` to `addPoint`, which does
+nothing here: the wall stations are B-spline *control points*, not model vertices, so
+`Mesh.MeshSizeFromPoints` ignores them.  That failed silently — the re-meshed node counts came
+back byte-identical to the shipped uniform meshes (3525, 3969, ...), which is the only reason it
+was caught.  A test now pins both the throat resolution and its locality.
+
+Measured on the vessels that failed, and one that did not:
+
+```
+                 nodes   throat (m)   h_throat   elems across
+vessel_245        3820     0.003659   0.000338         10.8
+vessel_218        3392     0.003061   0.000288         10.6
+vessel_100        4207     0.003926   0.000385         10.2
+vessel_0          4385     0.013707   0.000744         18.4   <- no throat, unchanged
+```
+
+The cost is **+6-8% nodes** on stenosed vessels and **zero** on open ones, because the refinement
+goes only where the lumen is narrow.
+
+### 14.2 B30 — an automatic repair round, on the same geometry
+
+A failed solve used to be terminal: the vessel was skipped, `mesh_to_graph` wrote a pack anyway
+with an all-zero `y`, and the cohort shipped short with every preflight check passing.
+
+`_repair_unsolved_anchors` now re-meshes the unsolved vessels finer and tries them again,
+`--repair-rounds` times (default 2), on a rising schedule:
+
+```
+round 1   mesh_refine 0.6   min_elems_across 12     (~16 elements across, ~2.6x nodes)
+round 2   mesh_refine 0.4   min_elems_across 16
+```
+
+**The geometry is not re-rolled.**  Each vessel is re-meshed from its own stored wall polylines
+via `remesh_vessels_from_meta`, so the cohort keeps its designed pathology mix.  Re-rolling would
+have been easier and wrong: solve failure rises monotonically with stenosis ratio, so replacing
+failures with fresh samples biases the corpus toward the shapes that solve easily — exactly the
+tail it exists to provide.
+
+Two details that matter for correctness:
+
+* `_build_meta` stores the wall polylines **non-dimensionally** (`coords / d_bar`) while the
+  mesher works in the mesh's length unit.  Feeding them back unscaled asks Gmsh for a 6.3 m
+  vessel meshed at 1 mm — it hangs.  `meta["d_bar"]` is the exact scale back.
+* `compute_geometry_from_walls` stamps `curve_type="edited"` defaults into a fresh `meta`.  The
+  original `meta` is put back afterwards, plus a `mesh_repair` stamp: rewriting a vessel's
+  `type` / `curve` / `level` would corrupt the cohort's own record of what it contains, and those
+  are the fields preflight and the failure analysis read.
+
+### 14.3 Nothing fails silently any more
+
+* `AnchorGenerator.run_batch` records **why** each vessel failed — non-convergence, NaNs (with
+  counts), or a trivial solution (with `p_std` / `u_max`) — logs them, and returns
+  `failed_stems` / `failures`.
+* The pipeline prints a `COHORT HEALTH  <solved>/<total>` block naming anything still unsolved
+  after the repair rounds.
+* Preflight gained a `COMSOL solve rate` check and counts severe-stenosis coverage over
+  **solved** vessels only (§13.2).

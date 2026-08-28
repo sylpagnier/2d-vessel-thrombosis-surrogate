@@ -32,8 +32,11 @@ def main() -> int:
 
     for k, v in (("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1"), ("SPECIES_PRIOR_SOURCE", "analytic")):
         os.environ.setdefault(k, v)
+    os.environ.setdefault("KINEMATICS_PDE_FLOOR", "1")
+    pde_floor = os.environ["KINEMATICS_PDE_FLOOR"].strip().lower() not in ("0", "false", "no", "off")
     print(f"[i] NORMALIZE_SHEAR_GRAD={os.environ['KINEMATICS_NORMALIZE_SHEAR_GRAD']}"
-          f"  PRIOR_SOURCE={os.environ['SPECIES_PRIOR_SOURCE']}")
+          f"  PRIOR_SOURCE={os.environ['SPECIES_PRIOR_SOURCE']}"
+          f"  PDE_FLOOR={int(pde_floor)}")
 
     import torch
 
@@ -45,6 +48,7 @@ def main() -> int:
     from src.utils.kinematics_inference import (
         load_kinematics_predictor, resolve_kinematics_checkpoint)
     from src.utils.kinematics_paths import kinematics_training_graph_dir
+    from src.utils.kinematics_physics_terms import attach_pde_floors
     from src.utils.loss_calibration import (
         DEFAULT_SHARES, measure_gradient_norms, weights_from_gradient_norms)
 
@@ -62,7 +66,14 @@ def main() -> int:
         d = torch.load(f, map_location="cpu", weights_only=False)
         if not graph_has_anchor(d):
             continue
-        graphs.append(apply_prior_source(elevate_to_p2(d) if args.elevate else d, "analytic"))
+        g = apply_prior_source(elevate_to_p2(d) if args.elevate else d, "analytic")
+        # `l_cont` / `l_mom` are hinged against the labels' own PDE residual in training
+        # (`_attach_pde_floors`).  Calibrating without the floor measures a different objective:
+        # un-floored, both terms carry the labels' near-wall discretisation residual, which on
+        # the severe-stenosis vessels is larger than anything the model contributes.
+        if pde_floor:
+            attach_pde_floors(g, kern)
+        graphs.append(g)
         if len(graphs) >= args.graphs:
             break
     if not graphs:

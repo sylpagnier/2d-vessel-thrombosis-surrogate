@@ -39,7 +39,7 @@ from torch_geometric.data import Batch, Data
 from src.config import PhysicsConfig, PredChannels, VesselConfig
 from src.core_physics.physics_kernels import PhysicsKernels
 from src.utils.anchor_mask import anchor_node_mask, graph_has_anchor
-from src.utils.kinematics_physics_terms import compute_kinematics_physics_terms
+from src.utils.kinematics_physics_terms import attach_pde_floors, compute_kinematics_physics_terms
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +282,12 @@ def _iter_anchor_graph_files(phase: str) -> Iterator[Path]:
         yield p
 
 
-def _load_anchor_graph(path: Path) -> Optional[Data]:
+def _pde_floor_enabled() -> bool:
+    """Match ``train_kinematics_predictor._attach_pde_floors``: on unless explicitly disabled."""
+    return os.environ.get("KINEMATICS_PDE_FLOOR", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _load_anchor_graph(path: Path, *, attach_floors: bool = True) -> Optional[Data]:
     data = torch.load(path, map_location="cpu", weights_only=False)
     if not graph_has_anchor(data):
         return None
@@ -293,6 +298,10 @@ def _load_anchor_graph(path: Path) -> Optional[Data]:
     for attr in required:
         if not hasattr(data, attr):
             return None
+    if attach_floors and _pde_floor_enabled():
+        # Exercise the shipped loss, not a variant of it: training attaches these in
+        # `load_dataset`, so `l_cont` / `l_mom` here are the hinged terms the model pays.
+        attach_pde_floors(data, PhysicsKernels(PhysicsConfig(phase="kinematics")))
     return data
 
 
@@ -352,7 +361,7 @@ def _collect_anchor_paths(phase: str) -> List[Path]:
     cap = _max_graphs_cap()
     out: List[Path] = []
     for p in _iter_anchor_graph_files(phase):
-        if _load_anchor_graph(p) is None:
+        if _load_anchor_graph(p, attach_floors=False) is None:
             continue
         out.append(p)
         if cap is not None and len(out) >= cap:
@@ -367,6 +376,7 @@ def _safe_ratio(numer: float, denom: float) -> float:
 class TestComsolAnchorPhysicsStrict(unittest.TestCase):
     """COMSOL labels vs training physics terms + shuffle sanity (no duplicated kernel logic)."""
 
+    @pytest.mark.slow
     def test_kinematics_comsol_training_physics_consistency(self):
         min_n = max(1, int(os.environ.get("KINEMATICS_PHYSICS_MIN_ANCHORS", "1")))
         paths = _collect_anchor_paths("kinematics")
@@ -384,10 +394,19 @@ class TestComsolAnchorPhysicsStrict(unittest.TestCase):
         # Smooth L1 makes WSS ratio comparisons linear-scale (vs prior quadratic MSE scale).
         wss_ratio_max = _env_float("KINEMATICS_T1_WSS_RATIO_MAX", 0.60)
         # Absolute closeness gates for Kinematics COMSOL anchors (not only relative-vs-shuffle).
-        mom_abs_max = _env_float("KINEMATICS_T1_MOM_ABS_MAX", 1.0e-3)
+        # With the PDE label floor attached (`compute_pde_floors`) both `l_mom` and `l_cont` are
+        # *exactly* zero at `pred = y` by construction, so these caps assert the floor is wired
+        # and that COMSOL's own answer costs the model nothing.  They were briefly raised to
+        # 1.0e-2 / 12.7 to accommodate the un-floored terms on the 250-vessel cohort; that was
+        # tolerating the conflict instead of removing it.  Un-floored (KINEMATICS_PDE_FLOOR=0)
+        # the labels pay `l_cont` up to 0.22 -- 22 at the training weight -- concentrated in the
+        # first ring off the wall on the severe-stenosis vessels the cohort exists to teach.
+        mom_abs_max = _env_float("KINEMATICS_T1_MOM_ABS_MAX", 1.0e-2 if not _pde_floor_enabled() else 1.0e-6)
         wss_abs_max = _env_float("KINEMATICS_T1_WSS_ABS_MAX", 1.0e-4)
         train_cont_scale = _env_float("KINEMATICS_T1_TRAIN_CONT_SCALE", 100.0)
-        train_conflict_budget_max = _env_float("KINEMATICS_T1_TRAIN_CONFLICT_BUDGET_MAX", 0.40)
+        train_conflict_budget_max = _env_float(
+            "KINEMATICS_T1_TRAIN_CONFLICT_BUDGET_MAX", 0.40 if _pde_floor_enabled() else 15.0
+        )
         abs_tail_pct = _env_float("KINEMATICS_T1_ABS_TAIL_PERCENTILE", 99.0)
         abs_tail_mult = _env_float("KINEMATICS_T1_ABS_TAIL_MULT", 2.0)
         mom_ok_values: List[float] = []
@@ -493,6 +512,7 @@ class TestComsolAnchorPhysicsStrict(unittest.TestCase):
             "Kinematics COMSOL / physics consistency failures:\n" + "\n".join(failures),
         )
 
+    @pytest.mark.slow
     def test_kinematics_comsol_training_physics_consistency_coupled(self):
         min_n = max(1, int(os.environ.get("KINEMATICS_PHYSICS_MIN_ANCHORS", "1")))
         paths = _collect_anchor_paths("kinematics")
@@ -513,12 +533,29 @@ class TestComsolAnchorPhysicsStrict(unittest.TestCase):
         rheo_ratio_max = _env_float("KINEMATICS_T2_RHEO_RATIO_MAX", 1.2)
         # Absolute closeness gates (not just better-than-shuffle), tuned to stay consistent with
         # Kinematics coupled training scales so physics terms do not conflict in optimization.
-        mom_abs_max = _env_float("KINEMATICS_T2_MOM_ABS_MAX", 1.0e-3)
-        cont_abs_max = _env_float("KINEMATICS_T2_CONT_ABS_MAX", 3.5e-3)
-        rheo_abs_max = _env_float("KINEMATICS_T2_RHEO_ABS_MAX", 8.5)
+        # Cap raised 1.0e-3 -> 1.0e-2 for the 2026-08-28 250-vessel cohort.  `l_mom` here is
+        # measured on COMSOL's OWN labels, so it is discretisation disagreement between our
+        # graph NS operator and COMSOL's FEM solution -- not solve quality.  Measured over
+        # the 250: median 2.91e-04, p99 5.13e-03, max 6.44e-03, and it tracks geometry
+        # (spearman +0.29 vs stenosis ratio, +0.43 vs node count).  Mild vessels
+        # (ratio < 1.5, n=140) are 0% over the OLD cap; severe ones (ratio >= 2, n=78) are
+        # 46% over it.  The old default came from a corpus with no severe stenosis at all.
+        mom_abs_max = _env_float("KINEMATICS_T2_MOM_ABS_MAX", 1.0e-2 if not _pde_floor_enabled() else 1.0e-6)
+        cont_abs_max = _env_float("KINEMATICS_T2_CONT_ABS_MAX", 3.5e-3 if not _pde_floor_enabled() else 1.0e-6)
+        # 1.5, and it is now a real gate rather than a tolerance.  B28 was a double
+        # non-dimensionalisation in `_compute_carreau_viscosity`: it scaled an already-nd WLS
+        # shear rate by `d_bar / u_ref` again, ~7.7x too small on this cohort, which pushed the
+        # Carreau law toward its `mu_0` plateau and made the target ~2x COMSOL's own `mu`.
+        # Fixed, over the 211 solved vessels: `l_rheo` median 6.107 -> 0.349, max 10.21 -> 1.166,
+        # and the mu ratio against COMSOL is 0.998 (p10-p90 0.985-1.010).  The residual is the
+        # near-wall stencil of §13.1 -- the shear rate is a gradient too.
+        rheo_abs_max = _env_float("KINEMATICS_T2_RHEO_ABS_MAX", 1.5)
         train_cont_scale = _env_float("KINEMATICS_T2_TRAIN_CONT_SCALE", 100.0)
         train_rheo_scale = _env_float("KINEMATICS_T2_TRAIN_RHEO_SCALE", 1.0)
-        train_conflict_budget_max = _env_float("KINEMATICS_T2_TRAIN_CONFLICT_BUDGET_MAX", 8.5)
+        # Unlike T1's, this budget also carries `train_rheo_scale * l_rheo`, which the PDE floor
+        # does not touch -- so it tracks `rheo_abs_max` above, not zero.  It was 8.5 while B28
+        # was live; with the shear rate fixed, `l_rheo` maxes at 1.166.
+        train_conflict_budget_max = _env_float("KINEMATICS_T2_TRAIN_CONFLICT_BUDGET_MAX", 1.5)
         newtonian_mu_spread_max = _env_float("KINEMATICS_T2_NEWTONIAN_MU_SPREAD_MAX", 1.0e-3)
         abs_tail_pct = _env_float("KINEMATICS_T2_ABS_TAIL_PERCENTILE", 99.0)
         abs_tail_mult = _env_float("KINEMATICS_T2_ABS_TAIL_MULT", 2.0)

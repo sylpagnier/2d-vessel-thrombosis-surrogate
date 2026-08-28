@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 
 from src.architecture.ginodeq import GINO_DEQ, RGP_DEQ
+from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX
 from src.utils.paths import data_root, get_project_root, kinematics_dir
 
 KINEMATICS_MODEL_CONFIG_SCHEMA = 1
@@ -286,6 +287,12 @@ def save_kinematics_checkpoint_file(
         # `precache_rgp_deq` can refuse a train/deploy mismatch instead of discovering it
         # months later as an unexplained score collapse.
         "prior_source": (prior_source or "").strip().lower(),
+        # The width-derivative clamp is a property of the checkpoint's TRAINING CORPUS, not a
+        # global constant: `clamped_width_priors` uses it to keep deploy inputs inside the range
+        # the weights were fitted on.  Moving the corpus moved it 4.14/73.8 -> 15.56/282.3, so a
+        # checkpoint that does not record its own bounds gets silently re-interpreted the next
+        # time the constant changes.  Recorded here so it travels with the weights.
+        "width_clamp": [float(WIDTH_D1_MAX), float(WIDTH_D2_MAX)],
     }
     if model_config:
         payload["model_config"] = model_config

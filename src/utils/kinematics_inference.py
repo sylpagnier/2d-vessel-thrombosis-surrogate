@@ -203,8 +203,8 @@ def _store_joint_cache(model: RGP_DEQ, key: tuple[int, int, int], pred: torch.Te
 
 #: Largest ``|width_d1|`` / ``|width_d2|`` the Stage-A checkpoint was trained against --
 #: the 95th percentile of the per-vessel maximum over ``graphs_kinematics/carreau`` (n=40).
-WIDTH_D1_MAX = 4.14
-WIDTH_D2_MAX = 73.8
+#: Re-exported from `src.config` -- one definition, shared with the encoder's own clamp.
+from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX  # noqa: E402,F401
 
 
 @contextlib.contextmanager

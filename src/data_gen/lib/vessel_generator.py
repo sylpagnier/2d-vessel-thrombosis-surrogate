@@ -756,7 +756,7 @@ def build_vessel_mesh(
     """Build and mesh one vessel via Gmsh; returns ``(idx, success, error_msg)``."""
     unit = cfg_dict.get("unit", "m")
     unit_scale = 100.0 if unit == "cm" else 1.0
-    mesh_lc = cfg_dict["mesh_lc"] * unit_scale
+    lc_min, mesh_lc = _gmsh_size_bounds(cfg_dict, unit_scale)
 
     gmsh.initialize()
     try:
@@ -768,11 +768,66 @@ def build_vessel_mesh(
         gmsh.option.setNumber("Mesh.SaveGroupsOfNodes", 1)
         gmsh.option.setNumber("Mesh.SaveAll", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFactor", cfg_dict["mesh_size_factor"])
-        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", mesh_lc)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_lc)
         return _build_and_mesh(params, cfg_dict, str(output_dir))
     finally:
         gmsh.finalize()
+
+
+def _gmsh_size_bounds(cfg_dict: Dict[str, Any], unit_scale: float) -> Tuple[float, float]:
+    """``(lc_min, lc_max)`` for Gmsh, in the mesh's own unit.
+
+    ``CharacteristicLengthMin`` and ``Max`` used to BOTH be set to ``mesh_lc``, which clamps
+    every element to one size and makes the per-point ``lc`` passed to ``addPoint`` inert -- the
+    mesh was uniform no matter what the geometry asked for.  The floor is now
+    ``mesh_lc * mesh_lc_min_ratio`` so lumen-aware point sizes actually take effect.
+
+    ``mesh_refine`` (default 1.0) scales the whole request down for a repair pass on a vessel
+    COMSOL could not solve.
+    """
+    lc_max = float(cfg_dict["mesh_lc"]) * unit_scale * float(cfg_dict.get("mesh_refine", 1.0))
+    ratio = float(cfg_dict.get("mesh_lc_min_ratio", 0.12))
+    return max(lc_max * ratio, 1e-12), lc_max
+
+
+def _install_lumen_size_callback(
+    top_coords: np.ndarray,
+    bot_coords: np.ndarray,
+    lc_min: float,
+    lc_max: float,
+    min_elems_across: int,
+) -> None:
+    """Size the mesh by the LOCAL LUMEN WIDTH, so a stenosis throat is resolved not spanned.
+
+    A uniform ``mesh_lc`` puts about five elements across a severe throat -- the 2026-08-28
+    cohort's tightest vessels close to 3.7 mm against a 0.75 mm element -- and COMSOL then fails
+    to converge there.  Every one of the 39 unsolved vessels was a stenosis geometry, at a rate
+    that climbed monotonically with stenosis ratio (RGP_DEQ_REPAIR_PLAN.md B27).
+
+    This has to be a **size callback**, not per-point ``lc`` on ``addPoint``: the wall stations
+    are B-spline control points, not model vertices, so ``Mesh.MeshSizeFromPoints`` ignores
+    them.  Passing sizes there changed nothing at all -- the re-meshed node counts came back
+    byte-identical to the shipped uniform meshes (3525, 3969, ...), which is how it was caught.
+
+    ``top_coords[i]`` and ``bot_coords[i]`` are the two walls at one station, so their separation
+    is the lumen width there.  A query point takes the width of its nearest station and asks for
+    ``width / min_elems_across``, clamped to ``[lc_min, lc_max]``: the throat refines, the open
+    lumen keeps ``lc_max`` and pays nothing.
+    """
+    top = np.asarray(top_coords, dtype=float)
+    bot = np.asarray(bot_coords, dtype=float)
+    mid = 0.5 * (top + bot)
+    width = np.linalg.norm(top - bot, axis=1)
+    want = np.clip(width / max(int(min_elems_across), 1), lc_min, lc_max)
+
+    def _size(dim, tag, x, y, z, lc):
+        k = int(np.argmin((mid[:, 0] - x) ** 2 + (mid[:, 1] - y) ** 2))
+        return float(want[k])
+
+    gmsh.model.mesh.setSizeCallback(_size)
+
+
 
 
 def _build_and_mesh(
@@ -843,11 +898,9 @@ def _mesh_geometry(
     """Gmsh meshing + file write from a ``VesselGeometry``."""
     idx = int(geom.idx)
     out = Path(output_dir)
-    lc = float(cfg_dict["mesh_lc"])
     unit = str(cfg_dict.get("unit", "m"))
     unit_scale = 100.0 if unit == "cm" else 1.0
-    if unit_scale != 1.0:
-        lc *= unit_scale
+    lc_min, lc = _gmsh_size_bounds(cfg_dict, unit_scale)
 
     top_coords = geom.top_coords
     bot_coords = geom.bot_coords
@@ -912,7 +965,12 @@ def _mesh_geometry(
         if "Wound" in tags and (wound_top_curves or wound_bot_curves):
             gmsh.model.addPhysicalGroup(1, wound_top_curves + wound_bot_curves, tags["Wound"], name="Wound")
 
+        _install_lumen_size_callback(
+            top_coords, bot_coords, lc_min, lc,
+            int(cfg_dict.get("mesh_min_elems_across", 8)),
+        )
         gmsh.model.mesh.generate(2)
+        gmsh.model.mesh.removeSizeCallback()
 
         node_tags, _, _ = gmsh.model.mesh.getNodes()
         if len(node_tags) < 50:
@@ -928,10 +986,96 @@ def _mesh_geometry(
         return idx, True, ""
     except Exception as exc:
         try:
+            gmsh.model.mesh.removeSizeCallback()
+        except Exception:
+            pass
+        try:
             gmsh.model.remove()
         except Exception:
             pass
         return idx, False, str(exc)
+
+
+
+def remesh_vessels_from_meta(
+    stems: List[str],
+    mesh_dir: Path | str,
+    cfg_dict: Dict[str, Any],
+    *,
+    mesh_refine: float = 0.6,
+    min_elems_across: Optional[int] = None,
+) -> List[Tuple[str, bool, str]]:
+    """Re-mesh existing vessels **at their own geometry** but finer.  Returns per-stem results.
+
+    A vessel's ``.json`` carries ``top_wall_pts`` / ``bot_wall_pts`` -- the exact wall polylines
+    its mesh was built from -- so a failed solve can be retried on the *same* vessel at higher
+    resolution instead of being replaced by a different one.  That distinction matters: solve
+    failure is not random, it rises monotonically with stenosis ratio (2.9% below 1.5, 40.6%
+    above 3.0; RGP_DEQ_REPAIR_PLAN.md B27), so re-rolling geometry would quietly bias the cohort
+    toward the shapes that solve easily -- exactly the tail the corpus exists to provide.
+    """
+    from src.data_gen.lib.vessel_geometry import compute_geometry_from_walls
+
+    mesh_dir = Path(mesh_dir)
+    cfg = dict(cfg_dict)
+    cfg["mesh_refine"] = float(mesh_refine)
+    if min_elems_across is not None:
+        cfg["mesh_min_elems_across"] = int(min_elems_across)
+
+    unit_scale = 100.0 if str(cfg.get("unit", "m")) == "cm" else 1.0
+    lc_min, lc_max = _gmsh_size_bounds(cfg, unit_scale)
+
+    results: List[Tuple[str, bool, str]] = []
+    # The repair runs inside a live pipeline process that may already hold a Gmsh session from
+    # vessel generation.  Re-initialising is only a warning, but finalising someone else's
+    # session is not -- so leave it alone if we did not open it.
+    _owned = not gmsh.isInitialized()
+    if _owned:
+        gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Mesh.Algorithm", 6)
+        gmsh.option.setNumber("Mesh.Smoothing", 5)
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+        gmsh.option.setNumber("Mesh.Binary", 0)
+        gmsh.option.setNumber("Mesh.SaveGroupsOfNodes", 1)
+        gmsh.option.setNumber("Mesh.SaveAll", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFactor", cfg["mesh_size_factor"])
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMax", lc_max)
+
+        for stem in stems:
+            try:
+                meta = json.loads((mesh_dir / f"{stem}.json").read_text(encoding="utf-8"))
+                # `_build_meta` stores the wall polylines NON-DIMENSIONALLY (`coords / d_bar`),
+                # while the mesher works in the mesh's own length unit.  `meta["d_bar"]` is
+                # already in that unit, so it is the exact scale back.
+                d_bar = float(meta["d_bar"])
+                top = np.asarray(meta["top_wall_pts"], dtype=float) * d_bar
+                bot = np.asarray(meta["bot_wall_pts"], dtype=float) * d_bar
+                geom = compute_geometry_from_walls(
+                    top, bot, idx=int(meta["id"]), unit=str(meta.get("unit", "m")), params=meta,
+                )
+                # Put the ORIGINAL meta back.  `compute_geometry_from_walls` stamps
+                # `curve_type="edited"` defaults, and rewriting a vessel's `type` / `curve` /
+                # `level` would corrupt the cohort's own record of what it contains -- those
+                # fields are what preflight and the failure analysis read.
+                repaired = dict(meta)
+                repaired["mesh_repair"] = {
+                    "mesh_refine": float(mesh_refine),
+                    "min_elems_across": int(cfg.get("mesh_min_elems_across", 8)),
+                    "rounds": int((meta.get("mesh_repair") or {}).get("rounds", 0)) + 1,
+                }
+                geom.meta = repaired
+            except Exception as exc:
+                results.append((stem, False, f"cannot rebuild geometry: {exc}"))
+                continue
+            _, ok, err = _mesh_geometry(geom, cfg, str(mesh_dir))
+            results.append((stem, ok, err))
+    finally:
+        if _owned:
+            gmsh.finalize()
+    return results
 
 
 def _worker_run_chunk(
@@ -946,7 +1090,7 @@ def _worker_run_chunk(
     """
     unit = cfg_dict.get("unit", "m")
     unit_scale = 100.0 if unit == "cm" else 1.0
-    mesh_lc = cfg_dict["mesh_lc"] * unit_scale
+    lc_min, mesh_lc = _gmsh_size_bounds(cfg_dict, unit_scale)
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal",          0)
@@ -957,7 +1101,7 @@ def _worker_run_chunk(
     gmsh.option.setNumber("Mesh.SaveGroupsOfNodes",    1)
     gmsh.option.setNumber("Mesh.SaveAll",              0)
     gmsh.option.setNumber("Mesh.MeshSizeFactor",       cfg_dict["mesh_size_factor"])
-    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", mesh_lc)
+    gmsh.option.setNumber("Mesh.CharacteristicLengthMin", lc_min)
     gmsh.option.setNumber("Mesh.CharacteristicLengthMax", mesh_lc)
 
     results = [_build_and_mesh(p, cfg_dict, output_dir) for p in chunk]
@@ -1009,6 +1153,8 @@ class VesselGenerator:
             "base_length":        self.cfg.base_length,
             "mesh_lc":            self.cfg.mesh_lc,
             "mesh_size_factor":   self.cfg.mesh_size_factor,
+            "mesh_min_elems_across": self.cfg.mesh_min_elems_across,
+            "mesh_lc_min_ratio":  self.cfg.mesh_lc_min_ratio,
             "width_min":          self.cfg.width_min,
             "width_max":          self.cfg.width_max,
             "stenosis_factor_min": self.cfg.stenosis_factor_min,

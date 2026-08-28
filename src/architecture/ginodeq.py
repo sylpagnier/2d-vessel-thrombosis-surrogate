@@ -12,7 +12,7 @@ from torch import Tensor
 from src.core_physics.anderson import anderson_acceleration
 from src.architecture.spectral_linear import SpectralLinear
 from src.architecture.siren_decoder import SIRENDecoder
-from src.config import NodeFeat, PhysicsConfig, PredChannels
+from src.config import NodeFeat, PhysicsConfig, PredChannels, WIDTH_D1_MAX, WIDTH_D2_MAX
 from src.utils.batching import get_batch_tensor
 def _spectral_or_plain_linear(in_features: int, out_features: int, bias: bool, spectral: bool) -> nn.Module:
     if spectral:
@@ -419,8 +419,12 @@ class RGP_DEQ(nn.Module):
         if getattr(self, "use_width_priors", False):
             if x.size(1) >= NodeFeat.WIDTH_D2.stop:
                 width_features = x[:, NodeFeat.WIDTH_ND.start : NodeFeat.WIDTH_D2.stop].clone()
-                width_features[:, 1] = torch.clamp(width_features[:, 1], -4.14, 4.14)
-                width_features[:, 2] = torch.clamp(width_features[:, 2], -73.8, 73.8)
+                # Bounds live in `src.config` so the encoder and
+                # `kinematics_inference.clamped_width_priors` cannot drift apart.  They were
+                # hardcoded in both places against a 40-vessel corpus with no severe
+                # stenosis; on the 250-vessel cohort that clamped 44% / 34% of vessels.
+                width_features[:, 1] = torch.clamp(width_features[:, 1], -WIDTH_D1_MAX, WIDTH_D1_MAX)
+                width_features[:, 2] = torch.clamp(width_features[:, 2], -WIDTH_D2_MAX, WIDTH_D2_MAX)
             else:
                 width_features = torch.zeros(x.size(0), 3, device=x.device, dtype=x.dtype)
             encoded_x = torch.cat([encoded_x, width_features], dim=1)

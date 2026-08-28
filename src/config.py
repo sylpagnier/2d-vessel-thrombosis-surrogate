@@ -185,7 +185,17 @@ class VesselConfig:
             self.mesh_size_factor = float(os.environ["GMSH_SIZE_FACTOR"])
 
     mesh_size_factor: float = 0.75
-    mesh_lc: float = 1/1000  # [m]
+    mesh_lc: float = 1/1000  # [m]  -- the size in the OPEN lumen; throats refine below it.
+
+    # Lumen-aware sizing.  `mesh_lc` alone is a uniform element size, and a severe stenosis
+    # closes the lumen to ~1.6 mm (`width_min` 8 mm, `stenosis_factor_max` 0.4 on both walls),
+    # so the throat used to get ~2 elements across.  COMSOL then fails to converge there: on the
+    # 2026-08-28 cohort every one of the 39 unsolved vessels was a stenosis geometry, and the
+    # failure rate rose monotonically with stenosis ratio (2.9% below 1.5, 40.6% above 3.0).
+    # Each wall point now asks for `local_lumen_width / mesh_min_elems_across`, floored at
+    # `mesh_lc * mesh_lc_min_ratio` so a pathological throat cannot blow up the node count.
+    mesh_min_elems_across: int = 8
+    mesh_lc_min_ratio: float = 0.12
 
     # Vessel Dimensions
     base_length: float = 0.1  # [m]
@@ -627,3 +637,25 @@ class CurriculumConfig:
     biochem_wall_flux_loss_multiplier: float = 30.0
     # Dual-viscosity regularizer weight (replaces hard-coded scalar in trainer).
     biochem_viscosity_regularization_weight: float = 0.005
+
+
+#: Bounds on the two unnormalised width-derivative channels the RGP-DEQ encoder consumes.
+#:
+#: These are a property of the TRAINING CORPUS, not of physics: they exist so a deploy-time
+#: input cannot land outside the range the weights were fitted on.  Defined as the 95th
+#: percentile of the per-vessel maximum.  Re-derive them whenever the corpus is regenerated --
+#: `scripts/preflight_kine_cohort.py` prints the values for whatever cohort it is given.
+#:
+#: 2026-08-28, 250-vessel Carreau cohort (severe-stenosis tail present, width derivatives taken
+#: through the rank-aware `wls_derivatives`):
+#:
+#:              median     p90     p95     p99     max
+#:   width_d1     3.55   10.38   15.56   19.86   23.01
+#:   width_d2    42.11  171.34  282.31  472.13  594.45
+#:
+#: The previous values (4.14 / 73.8) came from a 40-vessel corpus that contained **no severe
+#: stenosis at all** and computed the derivatives through a different operator.  Carrying them
+#: forward would have clamped **44% / 34%** of the new cohort -- silently truncating exactly
+#: the sharp-throat signal the cohort was generated to provide.
+WIDTH_D1_MAX = 15.56
+WIDTH_D2_MAX = 282.3

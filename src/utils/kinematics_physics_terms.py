@@ -281,6 +281,79 @@ def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
     return F.binary_cross_entropy(p_fire.clamp(1e-6, 1 - 1e-6), tgt)
 
 
+# ---------------------------------------------------------------------------
+# PDE label floors -- the hinge for l_cont / l_mom
+# ---------------------------------------------------------------------------
+#: Node attributes carrying the per-node label residual floors.  Plain node-level tensors so
+#: PyG collates them with the rest of the graph.
+PDE_FLOOR_CONT = "pde_floor_cont"
+PDE_FLOOR_MOM = "pde_floor_mom"
+
+
+def compute_pde_floors(data, kernels: PhysicsKernels, *, re_ref=None, re_scale=None):
+    """Per-node PDE residual of **the COMSOL labels themselves**.
+
+    ``l_cont`` and ``l_mom`` ask the model to satisfy the discrete strong form.  The labels do
+    not satisfy it either -- they are an FEM solution read onto a graph and differentiated by a
+    5-term WLS stencil -- so the terms as written ask the model to be *more* PDE-consistent than
+    the data it is simultaneously being fit to.  On this corpus that conflict is not a rounding
+    detail.  Measured on 211 solved vessels with ``pred = y``:
+
+    * ``l_cont`` median 2.5e-04 but p90 1.1e-01, max 2.2e-01 -- at the training weight of 100
+      that is a residual of **22** on COMSOL's own answer.
+    * It is not solve error.  The scale-free ratio ``rms(div u) / rms(|u_x| + |v_y|)`` has median
+      **1.9%**, and the residual is extraordinarily concentrated: the single worst node carries a
+      median **10%** of a vessel's total squared divergence and the worst 1% of nodes carry
+      **70%**.  Those nodes sit at ``sdf_nd ~ 0.047`` -- the first interior ring off the wall,
+      where the WLS stencil is one-sided and the profile curvature is highest.  Dropping three
+      rings collapses ``l_cont`` by **113-257x** on the worst vessels, to the same 5e-04 the
+      smooth ones already sit at.
+    * It therefore scales with geometry, not with quality: spearman **+0.82** against stenosis
+      ratio and **+0.72** against peak nd velocity, but only **+0.10** against the scale-free
+      divergence ratio.
+
+    Penalising that pulls the model away from COMSOL hardest on exactly the severe-stenosis
+    vessels this cohort was generated to teach.  The fix is the same one-sided hinge used by
+    :func:`prior_floor_loss`: penalise the residual only *in excess of* what the labels achieve,
+
+        L = mean( relu( |r_pred|^2 - |r_gt|^2 ) )
+
+    which is zero where the model is as PDE-consistent as the data and positive only where it is
+    worse.  The floor is a property of the graph and the labels, so it is computed once.
+
+    Returns ``None`` when the graph carries no usable labels (an unsolved vessel, whose ``y`` is
+    an all-zero placeholder) -- there is no floor to grant, and the plain term applies.
+    """
+    y = getattr(data, "y", None)
+    if y is None or y.dim() != 2 or y.shape[1] <= PredChannels.MU_EFF_ND:
+        return None
+    if float(y[:, PredChannels.U:PredChannels.V + 1].abs().max()) <= 0.0:
+        return None  # unsolved vessel: zero placeholder labels, no floor to grant
+
+    with torch.no_grad():
+        props = kernels._get_geometric_props(data)
+        c_u = kernels._compute_derivatives(y[:, PredChannels.U:PredChannels.U + 1], props)
+        c_v = kernels._compute_derivatives(y[:, PredChannels.V:PredChannels.V + 1], props)
+        div = c_u[:, 0, 0] + c_v[:, 1, 0]
+        mom_sq = kernels.navier_stokes_residual(
+            y, data, props=props, re_ref=re_ref, re_scale=re_scale, return_field=True
+        )
+    return {
+        PDE_FLOOR_CONT: (div ** 2).detach().reshape(-1),
+        PDE_FLOOR_MOM: mom_sq.detach().reshape(-1),
+    }
+
+
+def attach_pde_floors(data, kernels: PhysicsKernels, **kw) -> bool:
+    """Attach :func:`compute_pde_floors` to ``data`` in place.  True if a floor was attached."""
+    floors = compute_pde_floors(data, kernels, **kw)
+    if floors is None:
+        return False
+    for name, val in floors.items():
+        setattr(data, name, val)
+    return True
+
+
 def prior_floor_loss(pred, data, *, node_is_anchor: Optional[torch.Tensor] = None):
     """Penalise the model **only where it is worse than the prior it was handed**.
 
@@ -389,11 +462,17 @@ def compute_kinematics_physics_terms(
         l_band_gate = z
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
     else:
-        l_mom = kernels.navier_stokes_residual(pred, data, props=props, re_ref=re_ref, re_scale=re_scale)
+        # One-sided hinge against the labels' own PDE residual when a floor is attached
+        # (`compute_pde_floors`); the plain term otherwise, so every other caller is unchanged.
+        floor_mom = getattr(data, PDE_FLOOR_MOM, None)
+        floor_cont = getattr(data, PDE_FLOOR_CONT, None)
+        l_mom = kernels.navier_stokes_residual(
+            pred, data, props=props, re_ref=re_ref, re_scale=re_scale, floor=floor_mom
+        )
         c_u = kernels._compute_derivatives(pred[:, PredChannels.U:PredChannels.U + 1], props)
         c_v = kernels._compute_derivatives(pred[:, PredChannels.V:PredChannels.V + 1], props)
         du_ij = torch.stack([c_u[:, 0, 0], c_u[:, 1, 0], c_v[:, 0, 0], c_v[:, 1, 0]], dim=1)
-        l_cont = kernels.continuity_loss(du_ij, data=data)
+        l_cont = kernels.continuity_loss(du_ij, data=data, floor=floor_cont)
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
         l_shear_grad = kernels.wall_shear_gradient_loss(pred, data, props=props)
         l_band_sr, l_band_dsrx, l_band_gate = wall_band_shear_losses(
@@ -420,6 +499,10 @@ def compute_kinematics_physics_terms(
 
 __all__ = [
     "WALL_BAND_HOPS",
+    "PDE_FLOOR_CONT",
+    "PDE_FLOOR_MOM",
+    "compute_pde_floors",
+    "attach_pde_floors",
     "wall_band_mask",
     "wall_band_shear_losses",
     "prior_floor_loss",
