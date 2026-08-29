@@ -183,7 +183,7 @@ def _prompt_phase_interactive_plan(rheology_n: int) -> PhaseInteractivePlan:
 
     if run_vessel:
         cohort_mode = _vg_prompt_int_choice(
-            "Vessel cohort [1=single level / 2=mixed L0+L1+L2 (40/40/20)]",
+            "Vessel cohort [1=single level / 2=mixed, `default_level_mix` (now all L2)]",
             (1, 2),
         )
         if cohort_mode == 2:
@@ -427,7 +427,9 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
     p.add_argument(
         "--mixed-levels",
         action="store_true",
-        help="Mixed L0+L1+L2 cohort (default 40/40/20 split; overrides --level).",
+        help="Mixed cohort via `default_level_mix`, which is now ALL L2 because every "
+             "biochem deploy patient is level 2; pass --level-mix for the old L0/L1 spread. "
+             "Overrides --level.",
     )
     p.add_argument(
         "--level-mix",

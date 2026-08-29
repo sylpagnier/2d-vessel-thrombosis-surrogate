@@ -299,8 +299,13 @@ class VesselConfig:
         default_factory=lambda: {"straight": 0.15, "arc": 0.45, "s_curve": 0.20, "hook": 0.20}
     )
     #: Share of level-2 vessels drawn with NO pathology.  L2 used to guarantee one, which is why
-    #: 0% of corpus L2 sat under a 1.15 lumen ratio against 28% of deployment.
-    pro_thrombotic_straight_prob: float = 0.80
+    #: 0% of corpus L2 sat under a 1.15 lumen ratio against 28% of deployment.  Fitted at 0.80
+    #: against analytic wall control points, then re-fitted here on the MESHED footing -- graph
+    #: `width_nd` binned axially, exactly how the deploy reference was measured -- which is
+    #: milder, so 0.80 overshot.  At 0.60 the realised lumen ratio reads
+    #: p10/25/50/75/90 = 1.12/1.14/1.18/1.26/1.46 against deployment's 1.09/1.13/1.21/1.30/1.41,
+    #: 33% under 1.15 against 28%, and centreline excursion 2.64 against 2.69.
+    pro_thrombotic_straight_prob: float = 0.60
     num_ctrl_pts: int = 50
 
     @property
