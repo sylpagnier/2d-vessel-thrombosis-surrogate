@@ -11,3 +11,4 @@ torch-geometric
 meshio
 gmsh
 mph
+scikit-fem
