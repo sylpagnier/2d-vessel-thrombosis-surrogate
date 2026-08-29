@@ -114,7 +114,6 @@ def _mean_rel_l2_on_graphs(
 ):
     """Mean rel-L2 on a graph list with optional cohort filters."""
     from src.utils.kinematics_geometry import graph_geometry_level
-    from src.utils.metrics import quantify_performance
 
     if not graphs:
         return float("nan"), 0

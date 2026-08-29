@@ -217,7 +217,17 @@ def test_fast_forward_curriculum_three_epochs(monkeypatch):
             "C_jac": 0.0,
         }
 
+    # The trainer builds its model through `build_rgp_deq_from_ctor`, not by calling the
+    # class directly, so patching the class alone left the REAL RGP_DEQ in place and the
+    # fake unused.  That stayed invisible until the curriculum started evaluating the
+    # model, at which point the real forward ran against this file's stub graphs.
     monkeypatch.setattr(kin_mod, "GINO_DEQ", _FakeModel)
+    monkeypatch.setattr(kin_mod, "RGP_DEQ", _FakeModel)
+    monkeypatch.setattr(kin_mod, "build_rgp_deq_from_ctor",
+                        lambda *_args, **_kwargs: _FakeModel())
+    # only reads real RGP_DEQ submodule shapes; the curriculum under test does not use it
+    monkeypatch.setattr(kin_mod, "snapshot_rgp_deq_model_config",
+                        lambda *_args, **_kwargs: {})
     monkeypatch.setattr(kin_mod, "PhysicsKernels", _FakeKernels)
     monkeypatch.setattr(kin_mod, "DynamicLossWeighter", _FakeLossWeighter)
     monkeypatch.setattr(kin_mod, "load_dataset", _fake_load_dataset)
