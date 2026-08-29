@@ -126,6 +126,10 @@ def assemble_kinematics_graph_data(
     )
 
 
+class _LabelMeshMismatch(RuntimeError):
+    """A CFD label file that was solved on a different mesh than the one being converted."""
+
+
 class MeshToGraphComplete:
     def __init__(
         self,
@@ -375,7 +379,19 @@ class MeshToGraph(MeshToGraphComplete):
                 cfd = np.load(label_npz)
                 sol_points = np.stack([cfd['x'].flatten(), cfd['y'].flatten()], axis=-1)
                 sol_tree = cKDTree(sol_points)
-                _, idx = sol_tree.query(nodes)
+                dist, idx = sol_tree.query(nodes)
+
+                # The label file is matched to the mesh by NEAREST NEIGHBOUR, so a solution
+                # from a *different* mesh does not fail -- it silently lands every node on the
+                # wrong point.  That is a live hazard whenever a solved corpus is copied in
+                # from the COMSOL box without the meshes it was solved on.  Reject it here.
+                n_sol = int(cfd["gmsh_n_nodes"]) if "gmsh_n_nodes" in cfd else len(sol_points)
+                tol = 0.05 * float(d_bar)
+                if n_sol != len(nodes) or float(np.max(dist)) > tol:
+                    print(f"Skipping labels for {stem}: {label_npz.name} does not belong to this "
+                          f"mesh (nodes {len(nodes)} vs {n_sol}, max node->solution distance "
+                          f"{float(np.max(dist)):.3e} m vs tol {tol:.3e})")
+                    raise _LabelMeshMismatch(stem)
 
                 # 1. Map raw values from CFD
                 u_raw = torch.tensor(cfd['u'].flatten()[idx], dtype=torch.float32)
