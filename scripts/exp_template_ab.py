@@ -85,6 +85,30 @@ def cmd_export(a) -> int:
             mesh_j.run()
             print(f"[i] re-imported mesh {a.mesh_file}")
 
+        if a.coords_npz:
+            zc = np.load(a.coords_npz, allow_pickle=True)
+            coords = np.ascontiguousarray(
+                np.stack([zc["x"], zc["y"]], axis=-1).astype(float))
+            print(f"[i] evaluating at {coords.shape[0]} SUPPLIED coordinates, bbox "
+                  f"{coords.min(0).round(5).tolist()} .. {coords.max(0).round(5).tolist()}")
+            gen._clear_all_solution_data()
+            print("[i] solving ...")
+            model.solve()
+            got = gen._evaluate_exprs(EXPORT_EXPRS, coords)
+            fields = {e.replace("(", "_").replace(")", "").replace(",", "_").replace(".", "_"): v
+                      for e, v in zip(EXPORT_EXPRS, got)}
+            out = Path(a.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            np.savez(out, x=coords[:, 0], y=coords[:, 1], d_bar=a.d_bar, u_ref=a.u_ref,
+                     mesh_unit="m", coords_supplied=True, order_fluid=a.order,
+                     template=Path(a.template).name, **fields)
+            sr = fields["spf_sr"]
+            nan = int(np.sum(~np.isfinite(sr)))
+            print(f"[i] spf.sr: median {np.nanmedian(sr):.2f}  p90 {np.nanpercentile(sr, 90):.2f}"
+                  f"  non-finite {nan} (points outside the domain)")
+            print(f"[save] {out}   ({coords.shape[0]} points)")
+            return 0
+
         try:
             n_v = int(model.java.mesh("mesh1").getNumVertex())
             coords = np.asarray(model.java.mesh("mesh1").getVertex(), dtype=float)
@@ -128,8 +152,11 @@ def cmd_compare(a) -> int:
     z = np.load(a.npz, allow_pickle=True)
     d_bar = float(z["d_bar"])
     u_ref = float(z["u_ref"])
-    unit_scale = 0.01 if str(z["mesh_unit"]) == "cm" else 1.0
-    ab_xy = np.stack([z["x"], z["y"]], axis=-1) * unit_scale      # -> metres
+    # COMSOL reports coordinates in the MODEL's length unit, which is not necessarily the unit
+    # the mesh file was written in -- reading `--mesh-unit` as gospel scaled an already-metre
+    # bbox by 0.01 and matched 2 of 14295 nodes.  Detect it from the geometry instead.
+    ab_xy = np.stack([z["x"], z["y"]], axis=-1).astype(float)
+    unit_scale = 1.0
     print(f"[i] {a.npz}: template={z['template']} order={z['order_fluid']} "
           f"{ab_xy.shape[0]} points, mesh_unit={z['mesh_unit']}")
 
@@ -139,10 +166,23 @@ def cmd_compare(a) -> int:
     wall = pack.mask_wall.reshape(-1).bool().numpy()
     pk_xy = pack.x[:, 0:2].numpy() * float(pack.d_bar.reshape(-1)[0])
 
+    if not bool(z.get("coords_supplied", False)):
+        span_ab = float(np.ptp(ab_xy[:, 0]))
+        span_pk = float(np.ptp(pk_xy[:, 0]))
+        unit_scale = span_pk / span_ab if span_ab > 0 else 1.0
+        if not (0.9 < unit_scale < 1.1):
+            print(f"[i] auto-scaling A/B coordinates by {unit_scale:.4g} "
+                  f"(x-span {span_ab:.4g} -> {span_pk:.4g} m)")
+        ab_xy = ab_xy * unit_scale
+
     # Match by position; both sides are in metres now.
     dist, idx = cKDTree(ab_xy).query(pk_xy)
-    tol = 0.05 * float(np.median(np.linalg.norm(np.diff(pk_xy, axis=0), axis=1)) + 1e-12)
-    matched = dist <= max(tol, 1e-6)
+    if bool(z.get("coords_supplied", False)):
+        matched = np.isfinite(z["spf_sr"][idx]) & (dist <= 1e-9)
+        print("[i] coordinates were supplied to COMSOL -- no matching error by construction")
+    else:
+        tol = 0.5 * float(np.median(np.linalg.norm(np.diff(pk_xy, axis=0), axis=1)) + 1e-12)
+        matched = (dist <= max(tol, 1e-6)) & np.isfinite(z["spf_sr"][idx])
     print(f"[i] matched {int(matched.sum())}/{len(pk_xy)} pack nodes to A/B points "
           f"(median dist {np.median(dist):.3e} m); wall matched "
           f"{int((matched & wall).sum())}/{int(wall.sum())}")
@@ -162,7 +202,7 @@ def cmd_compare(a) -> int:
 
     # --- arm 2: the KINEMATICS template on the same geometry, COMSOL's own shear ------------
     sr_ab = z["spf_sr"][idx]
-    dsrx_ab = z["d_spf_sr_x"][idx] / (unit_scale * M_TO_CM)
+    dsrx_ab = z["d_spf_sr_x"][idx] / (unit_scale * M_TO_CM)   # per model-length -> per cm
     # and reconstructed the same way the packs are, for a like-for-like third column
     u_ab = z["u"][idx] / u_ref
     v_ab = z["v"][idx] / u_ref
@@ -204,6 +244,10 @@ def main() -> int:
     e = sub.add_parser("export", help="run on the COMSOL box")
     e.add_argument("--template", default="comsol_models/phase1_ab_test.mph")
     e.add_argument("--mesh-file", default="", help="re-import this NAS/mesh first (optional)")
+    e.add_argument("--coords-npz", default="",
+                   help="evaluate at THESE coordinates (metres) instead of COMSOL's mesh "
+                        "vertices -- pass the deploy pack's own nodes so the comparison needs "
+                        "no nearest-neighbour matching at all")
     e.add_argument("--d-bar", type=float, required=True, help="the deploy vessel's own d_bar, in metres")
     e.add_argument("--u-ref", type=float, required=True, help="the deploy vessel's own u_ref, in m/s")
     e.add_argument("--mesh-unit", default="cm", choices=("m", "cm"))
