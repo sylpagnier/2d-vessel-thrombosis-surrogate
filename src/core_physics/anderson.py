@@ -1,4 +1,25 @@
+import os
+
 import torch
+
+
+def _history_size(m: int) -> int:
+    """Anderson history depth, overridable by ``KINEMATICS_ANDERSON_M``.
+
+    The solve stacks the history into ``X``, ``F`` and ``G = F - X`` plus two reshaped views,
+    so peak memory is linear in ``m`` and in the node count.  On the P2 deployment topology a
+    graph carries ~4x the nodes the default ``m=8`` was chosen for, which overruns a 4 GB card
+    mid-solve.  Lowering ``m`` trades convergence rate for headroom without changing the node
+    count -- which must stay matched to deployment -- or the architecture.
+    """
+    raw = os.environ.get("KINEMATICS_ANDERSON_M", "").strip()
+    if not raw:
+        return int(m)
+    try:
+        return max(2, int(raw))
+    except ValueError:
+        return int(m)
+
 
 def anderson_acceleration(f, z0, batch_idx=None, m=8, lam=1e-4, max_iter=50, tol=1e-3, beta=1.0, return_history=False,
                           warmup_iters=5, residual_weight=None):
@@ -7,6 +28,7 @@ def anderson_acceleration(f, z0, batch_idx=None, m=8, lam=1e-4, max_iter=50, tol
     Minimizes the residual norm over a history of size m.
     Adds support for weighted residuals to prevent pressure/velocity imbalance.
     """
+    m = _history_size(m)
     if z0.ndim == 2:
         z0 = z0.unsqueeze(0)
 

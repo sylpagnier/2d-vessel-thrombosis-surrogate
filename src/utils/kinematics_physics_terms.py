@@ -429,6 +429,32 @@ def _band_shear_floor_enabled() -> bool:
     )
 
 
+def _gate_tau_mult() -> float:
+    """``KINEMATICS_GATE_TAU_MULT`` -- soft-gate temperature as a fraction of the GT spread."""
+    import os
+
+    raw = os.environ.get("KINEMATICS_GATE_TAU_MULT", "").strip()
+    if not raw:
+        return 0.1
+    try:
+        return max(1e-3, float(raw))
+    except ValueError:
+        return 0.1
+
+
+def _gate_neg_weight() -> float:
+    """``KINEMATICS_GATE_NEG_WEIGHT`` -- cost of a spurious firing node vs a missed one."""
+    import os
+
+    raw = os.environ.get("KINEMATICS_GATE_NEG_WEIGHT", "").strip()
+    if not raw:
+        return 1.0
+    try:
+        return max(1e-3, float(raw))
+    except ValueError:
+        return 1.0
+
+
 def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
     """Differentiable agreement with the GT deposition gate.
 
@@ -461,8 +487,23 @@ def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
     k_sr = u_ref / max(d_bar, 1e-12)
     k_dx = k_sr / (max(d_bar, 1e-12) * M_TO_CM)
 
-    tau_s = (s_scale * k_sr * 0.1).clamp(min=1e-6)
-    tau_d = (d_scale * k_dx * 0.1).clamp(min=1e-6)
+    # Temperature as a fraction of the GT spread.  At the original 0.1 the term is very nearly
+    # gradient-free: the gate's `dsrx` cut is ABSOLUTE (-750 1/(s*cm)) and sits ~1 sigma out, so
+    # a 0.1-sigma temperature puts it ~10 tau from the prediction.  Measured over the 25 deploy
+    # selection packs with the analytic prior standing in for the model (its dsrx scale, 0.092,
+    # matches the trained model's 0.105-0.186):
+    #
+    #     tau_mult   band nodes with |z|>3   median z   mean sigmoid slope
+    #        0.1              94.7%           -10.63          0.0063
+    #        0.5              26.7%            -2.13          0.1039
+    #        1.0               4.0%            -1.06          0.1746
+    #
+    # The `dsrx` GAIN barely moves this (88.3% still saturated at the stencil gain), so the
+    # temperature is the binding quantity, not the amplitude calibration.  Default keeps the
+    # historical 0.1; set KINEMATICS_GATE_TAU_MULT to open the gradient.
+    _tm = _gate_tau_mult()
+    tau_s = (s_scale * k_sr * _tm).clamp(min=1e-6)
+    tau_d = (d_scale * k_dx * _tm).clamp(min=1e-6)
 
     off_low = torch.sigmoid((lss - sr_pr[band] * k_sr) / tau_s)
     off_sep = torch.sigmoid((sgt - dsr_pr[band] * k_dx) / tau_d)
@@ -470,7 +511,19 @@ def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
 
     with torch.no_grad():
         tgt = ((sr_gt[band] * k_sr < lss) | (dsr_gt[band] * k_dx < sgt)).to(p_fire.dtype)
-    return F.binary_cross_entropy(p_fire.clamp(1e-6, 1 - 1e-6), tgt)
+    p_fire = p_fire.clamp(1e-6, 1 - 1e-6)
+
+    # The gate error is ONE-SIDED.  Measured over the 25 deploy selection packs, the union
+    # Jaccard loses 0.366 to SPURIOUS firing against 0.046 to missed firing -- the field does
+    # not miss firing nodes, it invents them, at 8x the rate, and worst on the `sr < lss` branch
+    # (per-branch Jaccard 0.060, firing on 7.1% of wall nodes against the truth's 3.5%).  A
+    # symmetric BCE spends equal effort on the error that is not happening.  `w_neg` > 1 prices
+    # a false positive above a false negative; 1.0 keeps the historical symmetric loss.
+    w_neg = _gate_neg_weight()
+    if w_neg == 1.0:
+        return F.binary_cross_entropy(p_fire, tgt)
+    w = tgt + (1.0 - tgt) * w_neg
+    return F.binary_cross_entropy(p_fire, tgt, weight=w)
 
 
 # ---------------------------------------------------------------------------
