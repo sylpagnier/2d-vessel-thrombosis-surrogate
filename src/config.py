@@ -195,6 +195,33 @@ class VesselConfig:
     # `h_nd` against the deploy band so this is verified on the cohort, not extrapolated.
     mesh_lc: float = 0.90/1000
 
+    #: Along-wall roughness the sampler adds on top of the pathology shape: two harmonics at
+    #: ``wall_noise_freq_*`` cycles over the vessel length, amplitude ``wall_noise_amp_frac`` of
+    #: the nominal width, tapered to zero at the ends.
+    #:
+    #: **This is the knob the deploy gate is sensitive to, and it was never tuned against
+    #: deployment.**  The corpus is matched to deployment on stenosis ratio (36% vs 26% at ratio
+    #: >= 2.0) and on element size (0.94x), and both are the wrong statistic: the gate branch that
+    #: decides ~91% of firing wall nodes at the FIT median is ``dsrx < sgt``, which keys on how
+    #: FAST the wall varies, not how far it deviates.  Measured, the corpus sits at 0.51x of
+    #: deployment on per-vessel max ``width_d1`` and **0.13x on wall ``dsrx`` spread**.
+    #:
+    #: Raise these, regenerate a small batch, and read
+    #: ``preflight_kine_cohort.py``'s ``wall-shear regime matches deployment`` check -- that is
+    #: the acceptance criterion, and it is the only one that sees this.  Defaults are the
+    #: pre-2026-08-28 values, so nothing changes until they are deliberately moved.
+    wall_noise_freq_lo: float = 1.0
+    wall_noise_freq_hi: float = 2.5
+    wall_noise_freq2_lo: float = 2.5
+    wall_noise_freq2_hi: float = 4.0
+    wall_noise_amp_frac: float = 0.05
+    #: Pro-thrombotic vessels already get a rougher wall; same units.
+    wall_noise_freq_lo_pro: float = 2.0
+    wall_noise_freq_hi_pro: float = 4.0
+    wall_noise_freq2_lo_pro: float = 4.0
+    wall_noise_freq2_hi_pro: float = 6.0
+    wall_noise_amp_frac_pro: float = 0.08
+
     #: Target open-lumen element size as a fraction of the vessel's OWN ``d_bar`` -- the
     #: resolution the model actually sees, since packs store positions as ``x / d_bar``.
     #: Overrides ``mesh_lc`` wherever ``d_bar`` is known at meshing time.
@@ -354,7 +381,12 @@ class PhysicsConfig:
     #:
     #: `scripts/exp_comsol_element_order.py` measures how much of that is the element order.
     #: It needs a COMSOL server, so it runs on the generation box, not here.
-    comsol_order_fluid: int = 1
+    #: **2 since 2026-08-28.**  On its own this changes nothing (measured `sr` ratio 0.98-1.00,
+    #: `dsrx_sd` 1.00-1.01, because the graph samples the solution at P1 corner nodes where a P2
+    #: solution matches the P1 one).  Its whole value is that it makes the MID-SIDE evaluation in
+    #: `AnchorGenerator._process_single_anchor` mean something: at order 1 COMSOL's interpolant at
+    #: an edge midpoint IS the corner mean.  Together they are worth 2.2-4.4x of wall `dsrx`.
+    comsol_order_fluid: int = 2
 
     # Carreau momentum residual: if True, ∂μ/∂x does not backprop into predicted μ (PINN-style stability).
     detach_mu_for_ns_gradient: bool = True

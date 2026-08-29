@@ -368,6 +368,7 @@ class MeshToGraph(MeshToGraphComplete):
         # --- Ground Truth Mapping (WSS Calculation) ---
         y_labels = torch.zeros((len(nodes), 5), dtype=torch.float32)
         is_anchor = False
+        p2_probe_xy = p2_probe_y = None
 
         if label_npz is not None and label_npz.exists():
             try:
@@ -387,6 +388,23 @@ class MeshToGraph(MeshToGraphComplete):
 
                 # 3. Proceed with non-dimensionalization
                 u_nd, v_nd = u_raw / u_ref, v_raw / u_ref
+
+                # TRUE P2 mid-side samples, when the solve produced them (order_fluid >= 2).
+                # Carried as a COORDINATE-KEYED probe set rather than an ordered array, so
+                # `elevate_to_p2` matches by position and no ordering contract has to hold
+                # between the generator, the mesher and the elevation.
+                if "mid_x" in cfd and "mid_u" in cfd:
+                    mid_xy = np.stack([cfd["mid_x"].flatten(), cfd["mid_y"].flatten()], axis=-1)
+                    p2_probe_xy = torch.tensor(mid_xy, dtype=torch.float32)
+                    p2_probe_y = torch.stack([
+                        torch.tensor(cfd["mid_u"].flatten() / u_ref, dtype=torch.float32),
+                        torch.tensor(cfd["mid_v"].flatten() / u_ref, dtype=torch.float32),
+                        torch.tensor(cfd["mid_p"].flatten() / p_ref_scale, dtype=torch.float32),
+                        torch.tensor(cfd["mid_mu"].flatten() / ref_mu, dtype=torch.float32)
+                        if "mid_mu" in cfd else torch.ones(mid_xy.shape[0]),
+                    ], dim=1)
+                else:
+                    p2_probe_xy = p2_probe_y = None
                 p_nd = torch.tensor(cfd['p'].flatten()[idx] / p_ref_scale, dtype=torch.float32)
                 mu_nd = torch.tensor(cfd['mu'].flatten()[idx] / ref_mu,
                                      dtype=torch.float32) if 'mu' in cfd else torch.ones_like(u_nd)
@@ -588,6 +606,12 @@ class MeshToGraph(MeshToGraphComplete):
             G_y=G_y,
         )
         data.graph_stem = stem
+        # TRUE P2 mid-side samples, position-keyed and non-dimensional so `elevate_to_p2` can
+        # match them to the midpoints it computes without any ordering contract.  Absent unless
+        # the solve ran at `order_fluid >= 2` (at order 1 they would BE the corner mean).
+        if p2_probe_xy is not None and p2_probe_y is not None:
+            data.p2_probe_xy_nd = p2_probe_xy / float(d_bar)
+            data.p2_probe_y = p2_probe_y
         if meta is not None and meta.get("level") is not None:
             data.geometry_level = torch.tensor([int(meta["level"])], dtype=torch.int8)
         else:

@@ -1779,3 +1779,53 @@ def test_deploy_training_packs_are_disjoint_from_selection_and_carry_no_chemistr
         assert float(kern.wall_shear_stress_loss(pred, g)) == 0.0, (
             f"{g.graph_stem}: the WSS term must self-disable on a 4-channel y"
         )
+
+
+def test_elevation_prefers_true_midside_labels_when_the_pack_carries_them():
+    """A mid-side label must be COMSOL's own value where one was solved, the corner mean where
+    it was not, and exactly zero on the wall either way.
+
+    The corner mean makes the field piecewise-linear along the half-edge by construction, so a
+    quadratic fit through it reads ~zero curvature -- and `dsrx`, the gate branch that decides
+    ~91% of firing wall nodes at the FIT median, IS that curvature.
+    """
+    import torch
+
+    from src.data_gen.lib.p2_elevation import elevate_to_p2, undirected_edges
+
+    d = _load_first_kine_pack()
+    base = elevate_to_p2(d, keep_wls=False)
+    assert int(getattr(base, "p2_midside_true", 0)) == 0, "a legacy pack has no probe set"
+
+    # Manufacture a probe set at the true midpoints with a value the corner mean cannot produce.
+    n = int(d.num_nodes)
+    pairs = undirected_edges(d.edge_index)
+    a, b = pairs[:, 0], pairs[:, 1]
+    mid_xy = 0.5 * (d.x[a, 0:2] + d.x[b, 0:2])
+    half = pairs.shape[0] // 2                      # only half get a probe
+    d.p2_probe_xy_nd = mid_xy[:half].clone()
+    marker = 7.5
+    d.p2_probe_y = torch.full((half, 4), marker, dtype=torch.float32)
+
+    out = elevate_to_p2(d, keep_wls=False)
+    assert int(out.p2_midside_true) == half, f"matched {out.p2_midside_true} of {half}"
+
+    mid_y = out.y[n:]
+    lin = 0.5 * (d.y[a] + d.y[b])
+    wall = d.mask_wall.reshape(-1).bool()
+    wall_mid = (wall[a] & wall[b])
+
+    probed = torch.zeros(pairs.shape[0], dtype=torch.bool)
+    probed[:half] = True
+    interior_probed = probed & ~wall_mid
+    if bool(interior_probed.any()):
+        assert torch.allclose(mid_y[interior_probed][:, 0],
+                              torch.full((int(interior_probed.sum()),), marker)), \
+            "a probed interior mid-side must take COMSOL's value, not the corner mean"
+    unprobed = ~probed
+    if bool(unprobed.any()):
+        assert torch.allclose(mid_y[unprobed], lin[unprobed]), \
+            "an unprobed mid-side must fall back to the corner mean"
+    if bool(wall_mid.any()):
+        assert float(mid_y[wall_mid][:, 0:2].abs().max()) == 0.0, \
+            "no-slip is a boundary condition, not a sample"

@@ -133,7 +133,9 @@ def elevate_to_p2(data, *, interpolate_labels: bool = True, keep_wls: bool = Tru
 
     y = getattr(data, "y", None)
     if torch.is_tensor(y) and y.shape[0] == n and interpolate_labels:
-        out.y = torch.cat([y, 0.5 * (y[a] + y[b])], dim=0)
+        mid_y, n_true = _true_midside_labels(data, x[n:, COL_XY], y, a, b)
+        out.y = torch.cat([y, mid_y], dim=0)
+        out.p2_midside_true = int(n_true)
         ym = getattr(data, "y_valid_mask", None)
         if torch.is_tensor(ym) and ym.shape[0] == n:
             out.y_valid_mask = torch.cat([ym, ym[a] & ym[b]], dim=0)
@@ -167,6 +169,52 @@ def elevate_to_p2(data, *, interpolate_labels: bool = True, keep_wls: bool = Tru
     out.p1_num_nodes = n
     return out
 
+
+
+def _true_midside_labels(data, mid_xy_nd, y, a, b, *, tol: float = 1e-4):
+    """``(mid_labels, n_true)`` -- COMSOL's own mid-side values where the pack carries them.
+
+    **Why the corner mean is not good enough.**  A mid-side value set to the mean of its two
+    corners makes the field piecewise-linear along the half-edge *by construction*, so a
+    quadratic fit through a stencil containing it reads ~zero curvature.  `dsrx` -- the gate
+    branch that decides ~91% of firing wall nodes at the FIT median -- is exactly that
+    curvature.  Measured two independent ways: re-elevating a decimated native-P2 deploy pack
+    costs **6.2x** of wall `dsrx` spread, and asking COMSOL directly on the generation box
+    recovers **2.2-4.4x** (RGP_DEQ_REPAIR_PLAN.md §16.5, PILOT_COHORT_RUNBOOK.md §7.3).
+
+    Matched by POSITION, not by index: the generator, the mesher and this function each build
+    the edge list their own way, and an ordering contract between three modules is exactly the
+    kind of assumption that fails silently.  Falls back to the corner mean per node, so a pack
+    with no probe set -- every pack generated before 2026-08-28, and every one solved at
+    ``order_fluid=1``, where COMSOL's interpolant IS the corner mean -- is unchanged.
+    """
+    lin = 0.5 * (y[a] + y[b])
+    probe_xy = getattr(data, "p2_probe_xy_nd", None)
+    probe_y = getattr(data, "p2_probe_y", None)
+    if not (torch.is_tensor(probe_xy) and torch.is_tensor(probe_y)) or probe_xy.numel() == 0:
+        return lin, 0
+    try:
+        from scipy.spatial import cKDTree
+
+        dist, idx = cKDTree(probe_xy.detach().cpu().numpy()).query(
+            mid_xy_nd.detach().cpu().numpy()
+        )
+        hit = torch.as_tensor(dist, dtype=torch.float32) <= tol
+        if not bool(hit.any()):
+            return lin, 0
+        got = probe_y[torch.as_tensor(idx, dtype=torch.long)]
+        out = lin.clone()
+        c = min(out.shape[1], got.shape[1])
+        out[hit, :c] = got[hit, :c].to(out.dtype)
+        # No-slip is a boundary condition, not a sample: a wall mid-side is exactly zero even
+        # if the solver's interpolant there reads 1e-9.
+        mw = getattr(data, "mask_wall", None)
+        if torch.is_tensor(mw) and mw.reshape(-1).numel() == y.shape[0]:
+            flat = mw.reshape(-1).bool()
+            out[(flat[a] & flat[b]), 0:2] = 0.0
+        return out, int(hit.sum())
+    except Exception:
+        return lin, 0
 
 def _set_width_derivatives(g, V, W, M_inv) -> None:
     """Re-derive ``width_d1``/``width_d2`` on the NEW connectivity.

@@ -290,6 +290,109 @@ lost spread — not the whole thing.
 
 ---
 
+### 7.3 MEASURED 2026-08-28 on the generation box — the two changes only work TOGETHER
+
+`scripts/exp_comsol_element_order.py --stems vessel_0,vessel_5,vessel_7 --p2-nodes`, same mesh,
+same node set, same operator; only the element order and the source of the mid-side labels vary.
+
+```
+                   corner nodes only            P2 node set: TRUE mid-side vs corner-mean
+stem          sr ratio   dsrx_sd ratio      order=1 ratio        order=2 ratio    |du|max
+vessel_0        1.00         1.01               1.00                 2.22       0.001 / 0.025
+vessel_5        0.98         1.00               1.00                 4.14       0.001 / 0.027
+vessel_7        0.99         1.00               1.01                 4.41       0.001 / 0.027
+```
+
+**Read it in this order.**
+
+1. **`order_fluid` alone changes NOTHING** (0.98-1.01 on both `sr` and `dsrx`).  The graph is
+   built from the P1 mesh points, and a P2 solution sampled at corner nodes matches the P1 one
+   there.  §7.1's hypothesis, as stated, is **disproved**.
+2. **Mid-side evaluation alone changes nothing either.**  At `order_fluid=1` the interpolant IS
+   linear, so COMSOL returns the corner mean: ratio 1.00 and `|du|max` 0.001, which is float
+   noise.  §7.2 alone is inert.
+3. **Together they recover 2.2-4.4x of the wall `dsrx` spread.**  That is the same phenomenon,
+   at the same order of magnitude, as the 6.2x measured on a deploy pack by decimating a native
+   P2 pack to corners and re-elevating it (§16.5).
+
+**So the generation change is a single change with two halves, and half of it is worthless.**
+Set `PhysicsConfig.comsol_order_fluid = 2` **and** evaluate `u/v/p/mu` at the mid-side
+coordinates (`AnchorGenerator._evaluate_at_coords` already takes arbitrary points; the P2 node
+set and its wiring are in the script's `p2_node_set`).  The corpus is then native P2 with true
+labels and `KINEMATICS_ELEVATE_P2` becomes an unnecessary no-op.
+
+**Necessary, probably not sufficient.**  `sep%` is 0.00 on all three vessels in every arm, and
+the corpus sits **10.7x** below deployment on wall `dsrx` spread.  A 2.2-4.4x recovery does not
+close that on its own; the residual is the vessel DESIGNS — deployment's walls vary about twice
+as fast (`width_d1` per-vessel max 0.51x of deploy, preflight's second WARN) — which is a
+sampler question, not a solver one.  Cost: the P2 solve ran 5-7 s against 3-6 s at P1 on these
+meshes, and the graphs get ~4x the nodes.
+
+---
+
+### 7.4 What changed 2026-08-28, and the loop to close
+
+**Preflight now gates on the consumer's own statistics.**  Checks 1-8 are producer-side (mesh
+order, operator sanity, element size, stenosis ratio, BC range, solve rate) and all eight passed
+the 2026-08-28 cohort while its labels did not contain what `clot_ml` reads.  The new check
+measures wall `sr`, `dsrx` spread and both gate branches through the consumer's own convention
+(MLS hops=3 on the labels, **after** P2 elevation, because that interpolation is part of what it
+exists to catch) and compares them to a band derived from **FIT deploy packs only**:
+
+```bash
+python scripts/derive_deploy_wall_shear_band.py      # once; writes data/reference/deploy_wall_shear_band.json
+python scripts/preflight_kine_cohort.py --src <cohort> --expect-p1
+```
+
+The 2026-08-28 cohort now reads, correctly, **2 FAIL**:
+
+```
+[FAIL] wall-shear regime matches deployment (n=24)  sep-only median 0 vs deploy 0.9146
+       -- the `dsrx` gate branch NEVER fires here
+[FAIL]    wall_dsrx_sd   median 95.7 vs deploy 717.7 (0.13x); deploy p10-p90 [350.5, 2228]
+[WARN]    wall_sr_med    median 48.0 vs deploy  91.8 (0.52x)
+```
+
+DEV and SEALED are excluded from the band so they stay independent evidence.  The deploy packs
+are **never trained on** -- they define a target distribution, which is the same thing preflight
+already did with `h_nd` and `u_ref`, applied to the statistic that matters.
+
+**Generation now produces true P2 labels.**  `PhysicsConfig.comsol_order_fluid` is **2**, and
+`AnchorGenerator._process_single_anchor` evaluates `u/v/p/mu` at the mid-side coordinates and
+stores them in the `.npz`; `mesh_to_graph` carries them as a position-keyed probe set and
+`elevate_to_p2` matches its own midpoints against it, falling back to the corner mean per node.
+So a pack generated before this date, or solved at `order_fluid=1`, is **bit-identical to
+before** -- pinned by a test.  Matching is by POSITION, not index, because an ordering contract
+between the generator, the mesher and the elevation is exactly the kind of assumption that fails
+silently.
+
+**The wall-variation knobs are exposed and NOT tuned.**  `VesselConfig.wall_noise_*` were
+hardcoded; they are the knob the gate keys on, and the corpus sits at 0.51x of deployment on
+`width_d1` and 0.13x on wall `dsrx` spread.  Defaults are unchanged, so nothing moves until they
+are deliberately raised.  **The value cannot be derived from geometry alone** -- the map from
+wall roughness to wall `dsrx` runs through meshing and the CFD solve -- so close it empirically:
+
+```
+raise wall_noise_freq_* / wall_noise_amp_frac
+  -> generate ~20 vessels (`-n 20 --overwrite`)
+  -> preflight, read `wall_dsrx_sd` and `sep-only`
+  -> repeat until both land inside the deploy band
+  -> only then generate the full cohort
+```
+
+Twenty vessels is minutes, and it is the difference between a cohort that trains and 250 that do
+not.
+
+**One thing this does NOT fix, measured.**  An arm that put 17 real deploy vessels into the
+training pool (right regime, COMSOL's own labels, held disjoint from selection) scored
+`gateJ%` 33.6 against the analytic prior's 32.5 -- the same +-4 oscillation every other arm
+shows, with `dsrxR` pinned at the prior's 0.57-0.62 throughout.  So the corpus regime is
+necessary and not sufficient: something in the architecture or the objective is preventing the
+residual from learning wall `dsrx` at all.  That arm was a **diagnostic only** -- its checkpoint
+must never be promoted, because those vessels are the clot stack's own evaluation cohort.
+
+---
+
 ## 8. Launch configuration (2026-08-28)
 
 ```bash

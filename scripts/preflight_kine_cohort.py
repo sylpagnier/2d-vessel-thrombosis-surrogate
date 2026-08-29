@@ -23,6 +23,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", required=True)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--wall-shear-sample", type=int, default=40,
+                    help="vessels to measure the wall-shear regime on (0 disables). One MLS build each, so sampled, not exhaustive.")
     ap.add_argument("--expect-p1", action="store_true",
                     help="the cohort is pre-elevation P1 (the normal case for fresh synthetic)")
     args = ap.parse_args()
@@ -51,6 +53,15 @@ def main() -> int:
             return _json.loads(jf.read_text(encoding="utf-8"))
         except Exception:
             return None
+
+    def elevate_for_regime(d):
+        """A P1 cohort is elevated at load, so read its regime AFTER elevation --
+        that interpolation is a large part of what this check exists to catch."""
+        from src.data_gen.lib.p2_elevation import elevate_to_p2
+        try:
+            return elevate_to_p2(d, keep_wls=False)
+        except Exception:
+            return d
 
     rows, results = [], []
 
@@ -261,6 +272,49 @@ def main() -> int:
     if ur.size:
         check("u_ref overlaps deployment", OK if 0.05 < np.median(ur) < 0.25 else WARN,
               f"median {np.median(ur):.4f} (deployment 0.076-0.154)")
+
+    # 9. THE CONSUMER'S OWN STATISTICS -- the check every other one here is a proxy for.
+    #
+    # Checks 1-8 are all producer-side: mesh order, operator sanity, element size, stenosis
+    # ratio, BC range, solve rate.  They passed the 2026-08-28 cohort at 0 FAIL while its labels
+    # did not contain what `clot_ml` reads.  The deposition gate is `(sr < lss) | (dsrx < sgt)`,
+    # and at the FIT median **91.5% of firing wall nodes fire through the `dsrx` branch alone**;
+    # in that cohort the branch fired on no wall node at all in more than half the vessels.
+    # No mesh statistic can see that.
+    if args.wall_shear_sample:
+        from src.utils.wall_shear_regime import (
+            compare_to_reference, load_reference, summarise, wall_shear_regime,
+        )
+
+        pick = files
+        if len(pick) > args.wall_shear_sample:
+            step = max(1, len(pick) // args.wall_shear_sample)
+            pick = pick[::step][: args.wall_shear_sample]
+        regime_rows = []
+        for f in pick:
+            try:
+                d = torch.load(f, map_location="cpu", weights_only=False)
+                regime_rows.append(
+                    wall_shear_regime(elevate_for_regime(d) if args.expect_p1 else d))
+            except Exception:
+                regime_rows.append(None)
+        regime_rows = [r for r in regime_rows if r]
+        ref = load_reference()
+        if not regime_rows:
+            check("wall-shear regime matches deployment", WARN, "no vessel could be measured")
+        elif ref is None:
+            check("wall-shear regime matches deployment", WARN,
+                  "no reference band -- run scripts/derive_deploy_wall_shear_band.py")
+        else:
+            verdicts = compare_to_reference(summarise(regime_rows), ref)
+            worst = FAIL if any(v == FAIL for _, v, _ in verdicts) else (
+                WARN if any(v == WARN for _, v, _ in verdicts) else OK)
+            head = next((d for k, _, d in verdicts if k == "wall_sep_only"), "")
+            check(f"wall-shear regime matches deployment (n={len(regime_rows)})", worst,
+                  f"sep-only {head}")
+            for k, v, detail in verdicts:
+                if k != "wall_sep_only":
+                    check("   " + k, v, detail)
 
     print(f"\nPREFLIGHT  {args.src}   n={n_f}\n" + "=" * 78)
     for name, status, detail in results:

@@ -574,6 +574,41 @@ class AnchorGenerator:
                     )
                     return False
 
+                # TRUE P2 MID-SIDE LABELS.  `elevate_to_p2` sets every mid-side label to the
+                # mean of its two corners, which makes the field piecewise-linear along each
+                # half-edge BY CONSTRUCTION -- and `dsrx`, the gate branch that decides
+                # deployment, is a second derivative of it.  Measured on this box
+                # (`scripts/exp_comsol_element_order.py --p2-nodes`), asking COMSOL for the
+                # mid-side values instead carries **2.2-4.4x** the wall `dsrx` spread.
+                #
+                # It only works at `order_fluid=2`: with linear velocity elements COMSOL's
+                # interpolant at an edge midpoint IS the corner mean (measured ratio 1.00,
+                # |du|max 0.001).  Both halves or neither -- see PILOT_COHORT_RUNBOOK.md §7.3.
+                mid_arrays = {}
+                if int(self.phys_cfg.comsol_order_fluid) >= 2:
+                    try:
+                        from src.data_gen.lib.mesh_triangle6_edges import (
+                            mesh_undirected_edge_pairs,
+                        )
+
+                        pairs = mesh_undirected_edge_pairs(mesh)
+                        mid_xy = 0.5 * (target_nodes[pairs[:, 0]] + target_nodes[pairs[:, 1]])
+                        mu_, mv_, mp_, mmu_ = self._evaluate_at_coords(mid_xy)
+                        flat = lambda z: np.asarray(z, dtype=float).reshape(-1)
+                        mid_arrays = dict(
+                            mid_x=mid_xy[:, 0], mid_y=mid_xy[:, 1],
+                            mid_u=flat(mu_), mid_v=flat(mv_),
+                            mid_p=flat(mp_), mid_mu=flat(mmu_),
+                        )
+                        if any(a.shape[0] != pairs.shape[0] for a in mid_arrays.values()):
+                            logger.warning("[%s] mid-side evaluation returned the wrong count; "
+                                           "falling back to interpolated labels.", i)
+                            mid_arrays = {}
+                    except Exception as exc:
+                        logger.warning("[%s] mid-side evaluation failed (%s: %s); falling back "
+                                       "to interpolated labels.", i, type(exc).__name__, exc)
+                        mid_arrays = {}
+
                 np.savez(
                     out_file,
                     x=target_nodes[:, 0],
@@ -582,6 +617,7 @@ class AnchorGenerator:
                     v=v,
                     p=p,
                     mu=mu,
+                    **mid_arrays,
                     d_bar=d_bar_si,
                     mesh_unit=mesh_unit,
                     config_id=i,

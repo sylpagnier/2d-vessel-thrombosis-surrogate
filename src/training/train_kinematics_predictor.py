@@ -215,7 +215,7 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
         step = max(1, len(ordered) // cap)
         subset = ordered[::step][:cap]
     gain = _selection_gain_mode()
-    corr, jac, frac, ceil, per_vessel = [], [], [], [], {}
+    corr, jac, frac, ceil, rl2, dsc, per_vessel = [], [], [], [], [], [], {}
     model.eval()
     # Selection runs straight after a training epoch, so the allocator is fragmented and a
     # 14.8k-node deploy pack OOMs at 4 GB even under `no_grad`.  Release before starting, and
@@ -235,7 +235,16 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
                 with clamped_width_priors(gg) as gc:
                     out = model(gc, solver="anderson")
                 pred = out[0] if isinstance(out, tuple) else out
-                m = wall_shear_selection_metrics(pred[:, :2].detach().cpu(), g, gain=gain)
+                pcpu = pred[:, :2].detach().cpu()
+                m = wall_shear_selection_metrics(pcpu, g, gain=gain)
+                # DEPLOY rel-L2 -- the leading indicator, and not the same number as the
+                # synthetic val rel-L2 printed beside it.  Measured by overfitting one deploy
+                # vessel, `gateJ%` is a near-THRESHOLD function of it: 10.7% at rel-L2 0.136,
+                # 45.5% at 0.099, 97.8% at 0.051.  Every arm so far has sat at 0.36-0.50, i.e.
+                # on the flat side, where the gate cannot respond to anything.
+                _y = g.y[0] if g.y.dim() == 3 else g.y
+                _yv = _y[:, :2].double()
+                m["rel_l2"] = float((pcpu.double() - _yv).norm() / _yv.norm().clamp(min=1e-30))
             except torch.cuda.OutOfMemoryError:
                 torch.cuda.empty_cache()
                 print(f"[kin] WARN selection OOM on {getattr(g, 'graph_stem', '?')}; skipped")
@@ -252,6 +261,10 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
                 ceil.append(m["gate_jaccard_ceiling"])
             if math.isfinite(m.get("gate_jaccard_frac", float("nan"))):
                 frac.append(m["gate_jaccard_frac"])
+            if math.isfinite(m.get("rel_l2", float("nan"))):
+                rl2.append(m["rel_l2"])
+            if math.isfinite(m.get("dsrx_scale", float("nan"))):
+                dsc.append(m["dsrx_scale"])
             per_vessel[str(getattr(g, "graph_stem", "?"))] = m
             del gg, pred, out
             if torch.cuda.is_available():
@@ -263,6 +276,10 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
         "gate_jaccard": mean(jac),
         "gate_jaccard_ceiling": mean(ceil),
         "gate_jaccard_frac": mean(frac),
+        "deploy_rel_l2": mean(rl2),
+        # THE quantity that separates the prior from a useful model.  Structure (dsrxR) the
+        # prior already has; amplitude it does not: prior 0.07, overfit-on-one-vessel 0.955.
+        "dsrx_scale": mean(dsc),
         "n": len(jac),
         "n_attempted": len(subset),
         "per_vessel": per_vessel,
@@ -1786,6 +1803,14 @@ def train_kinematics(
                 last_val_rel_l2, last_val_continuity, last_val_composite = (
                     rel_l2, continuity, val_comp,
                 )
+            # TRAIN rel-L2 on a fixed handful of TRAINING graphs.  Without it, `relL2` (val) and
+            # `depL2` (deploy) cannot be told apart from underfitting: if the model cannot fit
+            # the data it was trained on, corpus quality is irrelevant and the problem is
+            # optimisation.  Fixed subset, so the number is comparable across epochs.
+            train_rel = float("nan")
+            if train_data:
+                _fixed = sorted(train_data, key=lambda d: str(getattr(d, "graph_stem", "")))[:4]
+                train_rel, _ = _mean_rel_l2_on_graphs(model, _fixed, kernels, device)
             level_bits = []
             for lvl in (0, 1, 2):
                 key = f"rel_l2_level_{lvl}"
@@ -1817,6 +1842,8 @@ def train_kinematics(
                 sel = _selection_metrics_on_graphs(model, val_data, device)
                 sel_where = "synth-val"
             sel_corr = sel["dsrx_corr"]
+            sel_rl2 = sel.get("deploy_rel_l2", float("nan"))
+            sel_dsc = sel.get("dsrx_scale", float("nan"))
             sel_jac = sel["gate_jaccard"]
             sel_ceil = sel["gate_jaccard_ceiling"]
             sel_frac = sel["gate_jaccard_frac"]
@@ -1863,10 +1890,11 @@ def train_kinematics(
                 # `gateJ%` is the headline: gate Jaccard as a fraction of the per-vessel
                 # ceiling a PERFECT flow field would read under the same stencils.
                 sel_txt = (f"gateJ%={100.0 * sel_frac:5.1f} gateJ={sel_jac:.3f} "
-                           f"dsrxR={sel_corr:+.3f}"
-                           if sel_n > 0 else "gateJ%=---- gateJ=--- dsrxR=---")
+                           f"dsrxR={sel_corr:+.3f} dsrxS={sel_dsc:.3f} depL2={sel_rl2:.3f}"
+                           if sel_n > 0 else "gateJ%=---- gateJ=--- dsrxR=--- depL2=---")
                 print(
-                    f"[kin] ep{epoch:<4d} SELECT {sel_txt} | relL2={rel_l2:.4f} "
+                    f"[kin] ep{epoch:<4d} SELECT {sel_txt} | trainL2={train_rel:.3f} "
+                    f"relL2={rel_l2:.4f} "
                     f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{patient_msg}{shear_msg}"
                 )
             else:

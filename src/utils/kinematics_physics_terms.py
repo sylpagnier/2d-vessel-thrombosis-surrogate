@@ -242,6 +242,15 @@ def _corner_hops(hops: int) -> int:
     return max(1, int(round(hops / 2.0)))
 
 
+def _band_dsrx_absolute() -> bool:
+    """``KINEMATICS_BAND_DSRX_ABS`` -- off by default.  See the note in `wall_band_shear_losses`."""
+    import os
+
+    return os.environ.get("KINEMATICS_BAND_DSRX_ABS", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
 def _band_on_corners() -> bool:
     """``KINEMATICS_BAND_ON_CORNERS`` -- OFF by default.  See :func:`corner_view`.
 
@@ -334,7 +343,30 @@ def wall_band_shear_losses(
     dsr_pr = kernels._compute_derivatives(sr_pr.unsqueeze(1), props)[:, 0, 0]
     dsr_gt = kernels._compute_derivatives(sr_gt.unsqueeze(1), props)[:, 0, 0]
     sd = dsr_gt[band].std().clamp(min=1e-8)
-    l_dsrx = F.mse_loss(dsr_pr[band] / sd, dsr_gt[band] / sd)
+    if _band_dsrx_absolute():
+        # ABSOLUTE, in units of the gate threshold the consumer actually compares against.
+        #
+        # The spread-normalised form is invariant to exactly the thing that is wrong.  Wall
+        # `dsrx` AMPLITUDE is what separates a useful model from the analytic prior --
+        # prior 0.07, overfit-on-one-vessel 0.955, every trained arm 0.067-0.149 -- and a loss
+        # divided by the ground truth's own spread cannot see it: a prediction at 0.13x the
+        # right amplitude scores the same as one at 1.0x if the shapes match.  `sgt` is a fixed
+        # physical constant, so dividing by it keeps every vessel on one scale AND leaves the
+        # loss sensitive to scale.
+        #
+        # Expect this to drive the model to the CORPUS's amplitude, which is 0.13x deployment's
+        # (§16.5) -- that is the point: it separates "the objective cannot see amplitude" from
+        # "the labels do not have it".
+        from src.clot_ml.features import M_TO_CM
+        from src.config import BiochemConfig
+
+        _sgt = abs(float(BiochemConfig(phase="biochem").sgt) / M_TO_CM)
+        u_ref = float(data.u_ref.reshape(-1)[0]) if hasattr(data, "u_ref") else 1.0
+        d_bar = float(data.d_bar.reshape(-1)[0]) if hasattr(data, "d_bar") else 1.0
+        k_dx = (u_ref / max(d_bar, 1e-12)) / (max(d_bar, 1e-12) * M_TO_CM)
+        l_dsrx = F.mse_loss(dsr_pr[band] * k_dx / _sgt, dsr_gt[band] * k_dx / _sgt)
+    else:
+        l_dsrx = F.mse_loss(dsr_pr[band] / sd, dsr_gt[band] / sd)
     l_gate = _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s, sd)
     l_floor = _band_shear_floor(data, kernels, props, band, sr_pr, sr_gt, dsr_pr, dsr_gt, s, sd)
     return l_sr, l_dsrx, l_gate, l_floor

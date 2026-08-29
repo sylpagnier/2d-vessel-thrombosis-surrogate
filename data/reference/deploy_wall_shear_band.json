@@ -1,0 +1,251 @@
+{
+  "split": "FIT",
+  "note": "FIT only -- DEV and SEALED are held out so they stay independent evidence. Consumer convention: MLS hops=3 on GT, wall nodes.",
+  "n": 24,
+  "skipped": [],
+  "summary": {
+    "wall_sr_med": {
+      "p10": 63.70942744900416,
+      "p50": 91.79625812871731,
+      "p90": 192.21242217931896
+    },
+    "wall_dsrx_sd": {
+      "p10": 350.47556538869804,
+      "p50": 717.70099794578,
+      "p90": 2227.8651506072933
+    },
+    "wall_fire": {
+      "p10": 0.06208687140895917,
+      "p50": 0.16418835192069392,
+      "p90": 0.35759776946217625
+    },
+    "wall_sep": {
+      "p10": 0.0,
+      "p50": 0.09206747548612265,
+      "p90": 0.34296620670825195
+    },
+    "wall_sep_only": {
+      "p10": 0.0,
+      "p50": 0.9146341463414634,
+      "p90": 1.0
+    }
+  },
+  "rows": [
+    {
+      "wall_sr_med": 217.8656325005014,
+      "wall_dsrx_sd": 2534.226654786865,
+      "wall_fire": 0.35992578849721707,
+      "wall_sep": 0.35992578849721707,
+      "wall_sep_only": 1.0,
+      "n_wall": 539,
+      "stem": "patient001"
+    },
+    {
+      "wall_sr_med": 91.32384662257623,
+      "wall_dsrx_sd": 398.49003002796786,
+      "wall_fire": 0.13080895008605853,
+      "wall_sep": 0.0,
+      "wall_sep_only": 0.0,
+      "n_wall": 581,
+      "stem": "patient003"
+    },
+    {
+      "wall_sr_med": 73.23675633486013,
+      "wall_dsrx_sd": 907.3480861694844,
+      "wall_fire": 0.34186471663619744,
+      "wall_sep": 0.09140767824497258,
+      "wall_sep_only": 0.26737967914438504,
+      "n_wall": 547,
+      "stem": "patient004"
+    },
+    {
+      "wall_sr_med": 193.12886672414007,
+      "wall_dsrx_sd": 765.2284392576337,
+      "wall_fire": 0.11818181818181818,
+      "wall_sep": 0.09272727272727273,
+      "wall_sep_only": 0.7846153846153846,
+      "n_wall": 550,
+      "stem": "patient005"
+    },
+    {
+      "wall_sr_med": 101.25213312175259,
+      "wall_dsrx_sd": 404.79175329164224,
+      "wall_fire": 0.0631768953068592,
+      "wall_sep": 0.009025270758122744,
+      "wall_sep_only": 0.14285714285714285,
+      "n_wall": 554,
+      "stem": "patient006"
+    },
+    {
+      "wall_sr_med": 36.79329864291837,
+      "wall_dsrx_sd": 592.3986803625454,
+      "wall_fire": 0.42857142857142855,
+      "wall_sep": 0.05380333951762523,
+      "wall_sep_only": 0.12554112554112554,
+      "n_wall": 539,
+      "stem": "patient008"
+    },
+    {
+      "wall_sr_med": 96.59064001659056,
+      "wall_dsrx_sd": 732.2287774802722,
+      "wall_fire": 0.25508317929759705,
+      "wall_sep": 0.19038817005545286,
+      "wall_sep_only": 0.7463768115942029,
+      "n_wall": 541,
+      "stem": "patient009"
+    },
+    {
+      "wall_sr_med": 76.590658863046,
+      "wall_dsrx_sd": 123.32154959905671,
+      "wall_fire": 0.05925925925925926,
+      "wall_sep": 0.0,
+      "wall_sep_only": 0.0,
+      "n_wall": 540,
+      "stem": "patient010"
+    },
+    {
+      "wall_sr_med": 190.07405157473636,
+      "wall_dsrx_sd": 2292.336471469681,
+      "wall_fire": 0.38202247191011235,
+      "wall_sep": 0.38202247191011235,
+      "wall_sep_only": 1.0,
+      "n_wall": 534,
+      "stem": "patient011"
+    },
+    {
+      "wall_sr_med": 118.3462233258821,
+      "wall_dsrx_sd": 2783.6584707600355,
+      "wall_fire": 0.07308377896613191,
+      "wall_sep": 0.0659536541889483,
+      "wall_sep_only": 0.9024390243902439,
+      "n_wall": 561,
+      "stem": "patient012"
+    },
+    {
+      "wall_sr_med": 236.80685339767328,
+      "wall_dsrx_sd": 2077.4320685950556,
+      "wall_fire": 0.34386617100371747,
+      "wall_sep": 0.34386617100371747,
+      "wall_sep_only": 1.0,
+      "n_wall": 538,
+      "stem": "patient014"
+    },
+    {
+      "wall_sr_med": 133.02789852873565,
+      "wall_dsrx_sd": 1562.260336983008,
+      "wall_fire": 0.352165725047081,
+      "wall_sep": 0.3408662900188324,
+      "wall_sep_only": 0.9679144385026738,
+      "n_wall": 531,
+      "stem": "patient015"
+    },
+    {
+      "wall_sr_med": 70.0407961247451,
+      "wall_dsrx_sd": 493.46972030494214,
+      "wall_fire": 0.16789667896678967,
+      "wall_sep": 0.04797047970479705,
+      "wall_sep_only": 0.2857142857142857,
+      "n_wall": 542,
+      "stem": "patient016"
+    },
+    {
+      "wall_sr_med": 86.98877231168709,
+      "wall_dsrx_sd": 535.8825003876824,
+      "wall_fire": 0.08550185873605948,
+      "wall_sep": 0.08550185873605948,
+      "wall_sep_only": 1.0,
+      "n_wall": 538,
+      "stem": "patient019"
+    },
+    {
+      "wall_sr_med": 47.3741902332482,
+      "wall_dsrx_sd": 101.44463812651681,
+      "wall_fire": 0.10110294117647059,
+      "wall_sep": 0.0,
+      "wall_sep_only": 0.0,
+      "n_wall": 544,
+      "stem": "patient020"
+    },
+    {
+      "wall_sr_med": 66.7355755606111,
+      "wall_dsrx_sd": 329.8979376861538,
+      "wall_fire": 0.061619718309859156,
+      "wall_sep": 0.0,
+      "wall_sep_only": 0.0,
+      "n_wall": 568,
+      "stem": "patient021"
+    },
+    {
+      "wall_sr_med": 129.76295383695916,
+      "wall_dsrx_sd": 1373.402440714933,
+      "wall_fire": 0.2785977859778598,
+      "wall_sep": 0.2785977859778598,
+      "wall_sep_only": 1.0,
+      "n_wall": 542,
+      "stem": "patient024"
+    },
+    {
+      "wall_sr_med": 92.26866963485841,
+      "wall_dsrx_sd": 756.8904634477844,
+      "wall_fire": 0.16171003717472118,
+      "wall_sep": 0.16171003717472118,
+      "wall_sep_only": 1.0,
+      "n_wall": 538,
+      "stem": "patient025"
+    },
+    {
+      "wall_sr_med": 73.16624342760653,
+      "wall_dsrx_sd": 515.1711529806689,
+      "wall_fire": 0.05185185185185185,
+      "wall_sep": 0.05185185185185185,
+      "wall_sep_only": 1.0,
+      "n_wall": 540,
+      "stem": "patient028"
+    },
+    {
+      "wall_sr_med": 88.43489061683385,
+      "wall_dsrx_sd": 703.173218411288,
+      "wall_fire": 0.16666666666666666,
+      "wall_sep": 0.16666666666666666,
+      "wall_sep_only": 1.0,
+      "n_wall": 540,
+      "stem": "patient029"
+    },
+    {
+      "wall_sr_med": 132.3934201902481,
+      "wall_dsrx_sd": 1343.8376877942715,
+      "wall_fire": 0.32222222222222224,
+      "wall_sep": 0.32222222222222224,
+      "wall_sep_only": 1.0,
+      "n_wall": 540,
+      "stem": "patient032"
+    },
+    {
+      "wall_sr_med": 62.75432354596568,
+      "wall_dsrx_sd": 533.8498209825875,
+      "wall_fire": 0.13221601489757914,
+      "wall_sep": 0.0782122905027933,
+      "wall_sep_only": 0.5915492957746479,
+      "n_wall": 537,
+      "stem": "patient035"
+    },
+    {
+      "wall_sr_med": 148.00574099205855,
+      "wall_dsrx_sd": 919.5706172912716,
+      "wall_fire": 0.27052238805970147,
+      "wall_sep": 0.27052238805970147,
+      "wall_sep_only": 1.0,
+      "n_wall": 536,
+      "stem": "patient036"
+    },
+    {
+      "wall_sr_med": 65.93800322276061,
+      "wall_dsrx_sd": 635.4630733614307,
+      "wall_fire": 0.15355805243445692,
+      "wall_sep": 0.14232209737827714,
+      "wall_sep_only": 0.926829268292683,
+      "n_wall": 534,
+      "stem": "patient037"
+    }
+  ]
+}

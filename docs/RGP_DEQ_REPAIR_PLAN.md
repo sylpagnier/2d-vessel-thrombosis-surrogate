@@ -1888,3 +1888,98 @@ epochs of backward passes, and it had no OOM guard: the run died on `torch.stack
 inside the solver.  Hard mining is a sampling *heuristic* -- a graph it cannot score keeps weight
 1.0 -- so it now skips and counts.  The validation rel-L2 pass and the mass-flow diagnostic had
 the same exposure and the same fix.  **A diagnostic must never be the thing that ends a run.**
+
+### 16.10 The binding constraint is the LABELS' wall-`dsrx` amplitude — five lines of evidence
+
+The quantity that separates a useful Stage-A model from the closed-form prior is not structure
+and not velocity accuracy.  It is **`dsrxScale`** -- the amplitude of wall `dsrx` relative to
+what the consumer's GT stencil reads:
+
+```
+analytic prior                    0.07     structure already fine (dsrxR 0.56-0.62)
+every trained arm            0.067-0.149   training adds essentially none
+overfit on ONE deploy vessel      0.955    and gateJ% 96.4 of a 100 ceiling
+```
+
+**Capacity is not the limit** (`scratch/tune/probe_capacity.py`, patient020, 400 steps):
+
+```
+step     0    25    50   100   150   200   275   400
+gateJ% 10.7  10.7  58.2  45.5  59.4  67.1  97.8  96.4
+dsrxS  0.057 0.068 0.171 0.351 0.632 0.759 0.839 0.955
+relL2  0.333 0.136 0.113 0.099 0.075 0.068 0.051 0.044
+```
+
+The architecture, the hard BC `u = uv_prior + sdf * uvp`, and the DEQ's one-step implicit
+gradient can all express and learn exactly what the gate needs.
+
+**The objective is not the limit either.**  `l_band_dsrx` was raised from 0.6% to **38% of the
+loss value** (48x the effective weight; arm B's 2.4x was far too timid) *and* switched to an
+absolute form measured in units of `sgt` -- because the spread-normalised form divides by the
+ground truth's own spread and is therefore **mathematically blind to amplitude**: a prediction
+at 0.13x scores identically to one at 1.0x if the shapes match.  Result:
+
+```
+        dsrxS   dsrxR   depL2   trainL2
+ep0     0.120   0.579   0.179    0.335
+ep12    0.120   0.454   0.219    0.677
+```
+
+Not one part in a thousand, while everything else degraded.
+
+**And the per-term descent directions confirm it locally** (`probe_gradient_alignment.py`, one
+normalised step downhill on each term alone, three deploy packs).  The band terms are not
+misdirected -- on 021 and 035 every one of them raises `gateJ%` -- they move `dsrxScale` by
+**+0.0016 at most**, against a required journey of 0.07 -> 0.95.
+
+**Which leaves the labels**, and they are 0.13x deployment's wall `dsrx` spread (§16.5).  A model
+trained on them is converging *correctly* to the amplitude it was shown.
+
+**What this settles.**  Objective work on Stage-A is finished until the corpus is regenerated:
+weights, term forms, band masks and training length have all been measured and none of them can
+reach this.  The corpus changes in PILOT_COHORT_RUNBOOK.md §7.3-7.4 are the whole route --
+`order_fluid=2` **with** mid-side evaluation (2.2-4.4x, measured on the generation box), and a
+wall-variation sampler tuned against preflight's new regime check until `wall_dsrx_sd` and
+`sep-only` land inside the deploy band.
+
+It also disposes of `PRED_DSRX_GAIN` cleanly: the overfit model reads `dsrxScale` **0.955** with
+no gain at all.  That constant exists solely to compensate a model trained on flattened labels;
+fix the labels and it should be deleted rather than refitted (§5 of the design note).
+
+### 16.11 Final arm table, and what was NOT achieved
+
+All arms: 120-vessel stratified subsample, stage 3 throughout, selection on the strided 8 deploy
+packs.  `gateJ%` on 8; the last column is the full 25-pack read.
+
+```
+arm                            dsrxS   dsrxR   gateJ%(8)   note
+analytic prior                  0.07   0.559     32.5      THE BAR
+A2  calibrated weights         ~0.12   0.591     32.6
+B   band terms x2.4            ~0.12   0.549     31.8
+M1  band 38% + absolute         0.120  0.454    ~32        amplitude test: ZERO movement
+C2  corners + absolute          0.147  0.699     36.5      best synthetic-corpus recipe
+N1  deploy-amplitude labels     0.385  0.758     13.1      causal test, DIAGNOSTIC ONLY
+```
+
+**C2 on all 25 deploy packs, against the prior on the same set:**
+
+```
+arm      gateJ%   gateJ(median)   dsrxR   dsrxScale   relL2
+prior     16.6        0.113       0.622     0.092      0.147
+C2        18.6        0.109       0.722     0.124      0.145
+```
+
+**This is a wash and must be reported as one.**  The mean-of-fractions says +2.0, the raw median
+says -0.004, and they disagree in sign; +2 is inside the +-4 band every arm oscillates through.
+**No model trained in this session beats the analytic prior on the deploy metric.**
+
+What is consistent is the diagnostic direction: corner-subgraph supervision moves `dsrxR`
+0.622 -> 0.722 and `dsrxScale` 0.092 -> 0.124, and posts the best `trainL2` of any arm.  That is
+the interpolated-mid-side-label defect being partially removed, exactly where the label
+measurement said it would show.  It is real and it is too small to matter on its own.
+
+**One earlier claim corrected.**  `KINEMATICS_BAND_ON_CORNERS` was described as "recovering
+roughly a factor of two".  That 2x is in the LABELS (P1 corner wall `dsrx_sd` 300 against the
+elevated corpus's 152).  It does **not** propagate to the model's output amplitude at deployment:
+C2 reads `dsrxScale` 0.147 against A2's ~0.12, not 0.24.  Structure transfers; amplitude does
+not, and only labels that actually carry deployment's amplitude moved it (N1: 0.385).

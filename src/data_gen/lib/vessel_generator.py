@@ -629,13 +629,16 @@ def _sample_params(
     def get_wall_noise():
         if forced_max or hit_configured_max:
             return [0.0] * n
+        # Config-driven since 2026-08-28: this is the knob the deploy gate keys on and it had
+        # never been tuned against deployment.  See `VesselConfig.wall_noise_*`.
         if pro_thrombotic:
-            # Higher frequency and amplitude to create local micro-cavities (sr < 25)
-            f_h1, f_h2 = rng.uniform(2.0, 4.0), rng.uniform(4.0, 6.0)
-            max_noise = 0.08 * width
+            f_h1 = rng.uniform(cfg.wall_noise_freq_lo_pro, cfg.wall_noise_freq_hi_pro)
+            f_h2 = rng.uniform(cfg.wall_noise_freq2_lo_pro, cfg.wall_noise_freq2_hi_pro)
+            max_noise = cfg.wall_noise_amp_frac_pro * width
         else:
-            f_h1, f_h2 = rng.uniform(1.0, 2.5), rng.uniform(2.5, 4.0)
-            max_noise = 0.05 * width
+            f_h1 = rng.uniform(cfg.wall_noise_freq_lo, cfg.wall_noise_freq_hi)
+            f_h2 = rng.uniform(cfg.wall_noise_freq2_lo, cfg.wall_noise_freq2_hi)
+            max_noise = cfg.wall_noise_amp_frac * width
 
         noise = np.sin(2 * np.pi * f_h1 * t + rng.uniform(0, 2 * np.pi)) + \
                 0.5 * np.sin(2 * np.pi * f_h2 * t + rng.uniform(0, 2 * np.pi))
