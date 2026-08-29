@@ -126,6 +126,13 @@ def assemble_kinematics_graph_data(
     )
 
 
+def _scalar_or_array(v):
+    """A 0-d numpy value as a plain Python scalar, keeping strings as strings."""
+    if np.ndim(v) != 0:
+        return v
+    return v.item() if hasattr(v, "item") else v
+
+
 class _LabelMeshMismatch(RuntimeError):
     """A CFD label file that was solved on a different mesh than the one being converted."""
 
@@ -463,8 +470,11 @@ class MeshToGraph(MeshToGraphComplete):
                 wss_mag = _clip_wss_magnitude_quantile(wss_mag, mask_solid, q=0.995)
                 y_labels = torch.stack([u_nd, v_nd, p_nd, mu_nd, wss_mag], dim=1)
                 is_anchor = True
+                # `fluid_study` and `comsol_template` are strings, so coerce on DTYPE rather
+                # than on rank -- `float()` on a 0-d 'std2' threw, and because this is the last
+                # statement in the try it silently dropped the provenance from every graph.
                 cfd_meta = {
-                    k: (float(cfd[k]) if np.ndim(cfd[k]) == 0 else cfd[k])
+                    k: (_scalar_or_array(cfd[k]))
                     for k in (
                         "fluid_study", "fluid_t_end", "order_fluid", "comsol_template",
                         "gmsh_n_nodes", "comsol_n_vertices",
