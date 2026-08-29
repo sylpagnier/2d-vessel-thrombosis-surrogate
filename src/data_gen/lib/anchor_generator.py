@@ -338,6 +338,40 @@ class AnchorGenerator:
             # Newtonian fallback
             var_node.set('mu_final', 'mu_ref')
 
+    def _evaluate_exprs(self, exprs, coords: np.ndarray):
+        """Evaluate arbitrary COMSOL expressions at arbitrary coordinates.
+
+        ``_evaluate_at_coords`` is hardcoded to ``u, v, p, mu_final``; this exists so the solve
+        can also be asked for the quantities the clot stack actually consumes.  Audited on the
+        generation box: `spf.sr`, `d(spf.sr,x/y)`, `ux/uy/vx/vy`, `spf.U`, `spf.cellRe` and
+        `spf.mu` all evaluate; `spf.divU` does not.
+        """
+        results = []
+        model_j = self.model.java
+        tag = "py_expr_interp"
+        try:
+            try:
+                model_j.result().numerical().remove(tag)
+            except Exception:
+                pass
+            model_j.result().numerical().create(tag, "Interp")
+            it = model_j.result().numerical(tag)
+            it.set("data", "dset1")
+            it.set("expr", list(exprs))
+            it.setInterpolationCoordinates(coords.T.tolist())
+            data = it.getData()
+            for k in range(len(exprs)):
+                results.append(np.asarray(data[k], dtype=float).reshape(-1))
+        finally:
+            try:
+                model_j.result().numerical().remove(tag)
+            except Exception:
+                pass
+        for arr in results:
+            if arr.shape[0] != coords.shape[0]:
+                raise ValueError(f"expected {coords.shape[0]} values, got {arr.shape[0]}")
+        return results
+
     def _evaluate_at_coords(self, coords: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         High-performance evaluation using COMSOL Java API Interp feature.
@@ -584,6 +618,25 @@ class AnchorGenerator:
                 # It only works at `order_fluid=2`: with linear velocity elements COMSOL's
                 # interpolant at an edge midpoint IS the corner mean (measured ratio 1.00,
                 # |du|max 0.001).  Both halves or neither -- see PILOT_COHORT_RUNBOOK.md §7.3.
+                # COMSOL's OWN shear rate and its along-flow derivative.  Every `sr` / `dsrx`
+                # in this project is otherwise reconstructed by finite-differencing sampled
+                # velocity -- twice for `dsrx` -- and measured on the generation box that costs
+                # ~18% of the amplitude (`ours/its` 0.82-0.84 at order 2, corr 0.94-0.99).
+                #
+                # At order_fluid=1 `d(spf.sr,x)` is IDENTICALLY ZERO: with linear velocity
+                # elements the strain rate is elementwise constant, so its spatial derivative
+                # does not exist.  The P1 solve cannot represent the gate's dominant argument
+                # at all, which is the strongest reason order 2 is mandatory.
+                shear_arrays = {}
+                try:
+                    sr_t, dsrx_t, dsry_t, _ = self._evaluate_exprs(
+                        ["spf.sr", "d(spf.sr,x)", "d(spf.sr,y)", "spf.U"], target_nodes)
+                    shear_arrays = dict(sr_comsol=sr_t, dsrx_comsol=dsrx_t, dsry_comsol=dsry_t)
+                except Exception as exc:
+                    logger.warning("[%s] COMSOL shear export unavailable (%s: %s); the packs "
+                                   "fall back to reconstructing it from u,v.",
+                                   i, type(exc).__name__, exc)
+
                 mid_arrays = {}
                 if int(self.phys_cfg.comsol_order_fluid) >= 2:
                     try:
@@ -613,6 +666,7 @@ class AnchorGenerator:
                     out_file,
                     x=target_nodes[:, 0],
                     y=target_nodes[:, 1],
+                    **shear_arrays,
                     u=u,
                     v=v,
                     p=p,
