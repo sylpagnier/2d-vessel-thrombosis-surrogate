@@ -240,6 +240,32 @@ the vessels.  A model that learns everything this corpus can teach caps at **27%
 achievable deploy gate agreement** (`scratch/tune/diag_branch_ceiling.py`); the shipped
 checkpoint is already at 18%.
 
+**Template A/B (2026-08-29)** compared *Stationary* phase1 vs phase2 pack t=0.  Pack ``y[0]`` is
+**not** a stationary solve: phase2 ``std2`` is ``Study 2 (only fluid)``, transient
+``range(0,0.1,15)``, spf on / tds off, and ``std1`` (biochem) initializes from ``sol2``.
+Kinematics generation now configures that study on ``phase1_template.mph`` via
+``src/data_gen/lib/comsol_t0_fluid.py`` (P2, built-in Carreau gel=1, run ``std2``).  Re-A/B
+with ``exp_template_ab.py export`` after this change.  Original Stationary template:
+``comsol_models/phase1_template_stationary.mph``.
+
+**SI corpus, same mesh method as biochem (2026-08-29).**  Biochem anchor vessels are Gmsh
+``VesselGeneratorPhase3`` meshes imported into phase2 with **no COMSOL remeshing** (``unit=cm``).
+The kinematics corpus uses the **same geometry sampler** with ``unit=m`` (SI coordinates in the
+``.nas`` / ``.msh``).  ``AnchorGenerator`` now **rejects ``unit=cm`` sidecars**, validates that
+COMSOL vertex positions match the Gmsh grid after import, and records ``fluid_study=std2`` in
+each ``.npz``.  **Never scale geometry inside COMSOL** when building the A/B or corpus meshes --
+that remeshes and was the sole source of the residual ~6% template gap on patient041.
+
+Before the first post-fix cohort, persist the template on the COMSOL box:
+
+```bash
+python -m src.data_gen.lib.comsol_t0_fluid
+```
+
+The 10.7x corpus ``dsrx`` gap vs biochem-anchor *meshes* is still sampler/P2-labels
+(same synthetic generator, different wall_noise / interpolated midsides) -- not "clinical
+patients".
+
 Two causes, both in the pipeline rather than the vessel designs, and **both are generation-side
 fixes**:
 

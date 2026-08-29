@@ -2,6 +2,10 @@
 Interactive Kinematics/2 data pipeline: vessel meshes, optional COMSOL anchors, PyG graphs.
 
 Runs the same logical steps as ``vessel_generator``, ``anchor_generator``, and ``mesh_to_graph``.
+Meshes are generated in **SI** (``unit=m``) via the same ``VesselGenerator`` geometry sampler
+biochem anchors use (they use ``unit=cm`` for phase2 CGS).  COMSOL import is Gmsh NAS only --
+no geometry scaling or remeshing in the template.
+
 **Interactive mode asks every question first** (per phase), then runs Gmsh / COMSOL / mesh-to-graph
 with **no further prompts** so you can leave the machine unattended after the planning phase.
 """

@@ -1738,12 +1738,15 @@ comsol_models/phase2_nowound_040.mph     order_fluid = P2+P1   <- every deployme
 ```
 
 With linear velocity elements the profile inside the first cell off the wall is linear by
-construction, so the wall shear rate is an element average.  The size of that effect is **not
-measured yet** — it needs a COMSOL server, and this machine has a client-only install.
-`scripts/exp_comsol_element_order.py` solves the same vessel both ways on the same mesh and
-prints the `dsrx_sd` ratio; `PhysicsConfig.comsol_order_fluid` (default 1, unchanged) switches
-the generator, and `AnchorGenerator._set_element_order` applies it.  **Run it on the generation
-box before committing to more vessels.**
+construction, so the wall shear rate is an element average.  `PhysicsConfig.comsol_order_fluid`
+is **2** (since 2026-08-28); the `.mph` files still store P1 until the live session overrides it.
+`scripts/exp_comsol_element_order.py` measures P1 vs P2 on one mesh (generation box).
+
+**Template A/B on patient041** (`scripts/exp_template_ab.py`, 2026-08-29): phase1 on the phase2
+mesh is **not** the 10.7× `dsrx` hole.  Wall `sr` medians match; reconstructed wall `dsrx` spread
+is 0.88–0.97× the pack.  Interior `u` bulk flux matches; `rms(v)` is ~0.59× and velocity rel-L2
+is ~0.37 — secondary flow is the residual template gap.  Use dump-coords + `--coords-npz` so
+evaluation is at pack nodes; compare interpolates linearly when the export is vertices.
 
 ### 16.6 Smaller defects fixed in passing
 
