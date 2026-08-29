@@ -232,6 +232,7 @@ class AnchorGenerator:
         self.client = mph.start()
         self.model = self.client.load(str(self.template_path))
         self._set_global_physics_parameters()
+        self._sync_t0_fluid_study()
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._final_target_output_dir().mkdir(parents=True, exist_ok=True)
@@ -271,6 +272,7 @@ class AnchorGenerator:
         self.client = mph.start(cores=1)
         self.model = self.client.load(str(self.template_path))
         self._set_global_physics_parameters()
+        self._sync_t0_fluid_study()
         return self._ensure_mesh_handles()
 
     @staticmethod
@@ -338,10 +340,37 @@ class AnchorGenerator:
             # Newtonian fallback
             var_node.set('mu_final', 'mu_ref')
 
+        if str(getattr(self.phys_cfg, "comsol_fluid_study", "") or "").strip():
+            from src.data_gen.lib.comsol_t0_fluid import apply_t0_fluid_physics
+            apply_t0_fluid_physics(self.model, self.phys_cfg)
+
+    def _sync_t0_fluid_study(self) -> None:
+        tag = str(getattr(self.phys_cfg, "comsol_fluid_study", "") or "").strip()
+        if not tag:
+            return
+        from src.data_gen.lib.comsol_t0_fluid import ensure_fluid_only_study
+        tlist = str(getattr(self.phys_cfg, "comsol_fluid_tlist", "") or "") or None
+        ensure_fluid_only_study(self.model, tlist=tlist)
+
+    def _run_comsol_solve(self) -> None:
+        tag = str(getattr(self.phys_cfg, "comsol_fluid_study", "") or "").strip()
+        if tag:
+            from src.data_gen.lib.comsol_t0_fluid import solve_fluid_only
+            solve_fluid_only(self.model, tag)
+            return
+        self.model.solve()
+
+    def _interp_data_tag(self) -> str:
+        tag = str(getattr(self.phys_cfg, "comsol_fluid_study", "") or "").strip()
+        if not tag:
+            return "dset1"
+        from src.data_gen.lib.comsol_t0_fluid import interpolation_dataset_tag
+        return interpolation_dataset_tag(self.model.java)
+
     def _evaluate_exprs(self, exprs, coords: np.ndarray):
         """Evaluate arbitrary COMSOL expressions at arbitrary coordinates.
 
-        ``_evaluate_at_coords`` is hardcoded to ``u, v, p, mu_final``; this exists so the solve
+        ``_evaluate_at_coords`` asks for ``u, v, p, spf.mu`` (phase2 fluid-only Carreau).
         can also be asked for the quantities the clot stack actually consumes.  Audited on the
         generation box: `spf.sr`, `d(spf.sr,x/y)`, `ux/uy/vx/vy`, `spf.U`, `spf.cellRe` and
         `spf.mu` all evaluate; `spf.divU` does not.
@@ -356,20 +385,20 @@ class AnchorGenerator:
                 pass
             model_j.result().numerical().create(tag, "Interp")
             it = model_j.result().numerical(tag)
-            it.set("data", "dset1")
+            it.set("data", self._interp_data_tag())
             it.set("expr", list(exprs))
             it.setInterpolationCoordinates(coords.T.tolist())
+            from src.data_gen.lib.comsol_t0_fluid import last_time_slice, pin_interp_last_time
+            pin_interp_last_time(it)
             data = it.getData()
+            n = coords.shape[0]
             for k in range(len(exprs)):
-                results.append(np.asarray(data[k], dtype=float).reshape(-1))
+                results.append(last_time_slice(data[k], n))
         finally:
             try:
                 model_j.result().numerical().remove(tag)
             except Exception:
                 pass
-        for arr in results:
-            if arr.shape[0] != coords.shape[0]:
-                raise ValueError(f"expected {coords.shape[0]} values, got {arr.shape[0]}")
         return results
 
     def _evaluate_at_coords(self, coords: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -385,19 +414,21 @@ class AnchorGenerator:
             interp_tag = results.numerical().create(interp_name, "Interp").tag()
             interp = results.numerical(interp_tag)
 
-            interp.set("data", "dset1")
-            interp.set("expr", ["u", "v", "p", "mu_final"])
+            interp.set("data", self._interp_data_tag())
+            interp.set("expr", ["u", "v", "p", "spf.mu"])
             interp.setInterpolationCoordinates(coords_T.tolist())
+            from src.data_gen.lib.comsol_t0_fluid import last_time_slice, pin_interp_last_time
+            pin_interp_last_time(interp)
             data = interp.getData()
 
-            # Robust unpacking: check if data has all 4 fields
             if len(data) < 4:
                 raise ValueError(f"COMSOL returned incomplete data. Shape: {len(data)}")
 
-            u = np.array(data[0])
-            v = np.array(data[1])
-            p = np.array(data[2])
-            mu = np.array(data[3])
+            n = coords.shape[0]
+            u = last_time_slice(data[0], n)
+            v = last_time_slice(data[1], n)
+            p = last_time_slice(data[2], n)
+            mu = last_time_slice(data[3], n)
 
             return u, v, p, mu
 
@@ -442,33 +473,53 @@ class AnchorGenerator:
             d_bar_si, mesh_unit = d_bar_si_from_sidecar(
                 meta, stem=file_stem, builder="AnchorGenerator"
             )
-            if mesh_unit == MESH_UNIT_CM:
-                logger.warning(
-                    f"[{i}] Sidecar unit=cm: D_eff and U_inlet use SI (d_bar={d_bar_si:.6f} m); "
-                    "mesh/NAS coordinates stay in cm. Prefer kinematics meshes (unit=m) for "
-                    "this automated COMSOL step, or use PatientDataExtractor on biochem anchors."
+            if mesh_unit == MESH_UNIT_CM and self.vessel_config.phase == "kinematics":
+                raise ValueError(
+                    f"[{i}] kinematics corpus requires SI meshes (sidecar unit=m). "
+                    f"Biochem anchor meshes use unit=cm and PatientDataExtractor, not AnchorGenerator."
                 )
 
-            self.model.parameter("D_eff", f"{d_bar_si:.8f} [m]")
+            from src.data_gen.lib.comsol_t0_fluid import (
+                FLUID_ONLY_STUDY,
+                FLUID_ONLY_T_END,
+                apply_phase2_inlet_parameters,
+                import_gmsh_nas_mesh,
+                mesh_vertex_xy_metres,
+                validate_mesh_import,
+            )
             u_ref = self.phys_cfg.get_u_ref(d_bar_si)
-            self.model.parameter("U_inlet", f"{u_ref:.8f} [m/s]")
+            apply_phase2_inlet_parameters(self.model, d_bar_si, u_ref, self.phys_cfg)
 
-            feat = mesh_j.feature(import_tag)
-            safe_nas_path = str(nas_file).replace("\\", "/")
-            feat.set("filename", safe_nas_path)
-
-            mesh_j.run()
-            try:
-                n_verts = mesh_j.getNumVertex()
-                logger.info(f"Sample {i}: Loaded Mesh with {n_verts} vertices.")
-                if n_verts < 10:
-                    raise RuntimeError(f"Mesh {i} is empty/corrupt (Vertices: {n_verts})")
-            except Exception as e:
-                logger.warning(f"Could not verify mesh stats for {i}: {e}")
+            n_verts = import_gmsh_nas_mesh(mesh_j, import_tag, nas_file)
+            logger.info(f"Sample {i}: imported mesh with {n_verts} COMSOL vertices.")
+            if n_verts < 10:
+                raise RuntimeError(f"Mesh {i} is empty/corrupt (Vertices: {n_verts})")
 
             mesh = meshio.read(msh_file)
             target_nodes = mesh.points[:, :2]
             n_nodes = target_nodes.shape[0]
+            if n_nodes != n_verts:
+                logger.warning(
+                    "[%s] Gmsh node count (%d) != COMSOL vertex count (%d); "
+                    "continuing with Gmsh evaluation grid.",
+                    i, n_nodes, n_verts,
+                )
+            try:
+                if self.phys_cfg.comsol_mesh_import_validate:
+                    import_stats = validate_mesh_import(
+                        target_nodes, mesh_vertex_xy_metres(self.model.java)
+                    )
+                    logger.info(
+                        "[%s] mesh import OK: nn_p90=%.2e m exact=%d/%d",
+                        i,
+                        import_stats["nn_p90_m"],
+                        int(import_stats["exact_matches"]),
+                        n_nodes,
+                    )
+            except ValueError as exc:
+                self._last_fail_reason = str(exc)
+                logger.error("[%s] %s", i, exc)
+                return False
 
             # Build boundary masks once per mesh so NaN repair can preserve boundary classes.
             wall_tags = {self.vessel_config.TAGS["Walls"]}
@@ -519,9 +570,10 @@ class AnchorGenerator:
                     continue
 
                 _safe_log("info", "[%s] Solving for n_index = %s...", i, n_val)
-                self.model.parameter('n_index', str(n_val))
+                from src.data_gen.lib.comsol_t0_fluid import set_carreau_n
+                set_carreau_n(self.model, n_val)
                 try:
-                    self.model.solve()
+                    self._run_comsol_solve()
                 except Exception as solve_exc:
                     _safe_log(
                         "warning",
@@ -675,7 +727,14 @@ class AnchorGenerator:
                     d_bar=d_bar_si,
                     mesh_unit=mesh_unit,
                     config_id=i,
-                    carreau_n=n_val  # Crucial for your dataloader later
+                    carreau_n=n_val,
+                    fluid_study=FLUID_ONLY_STUDY,
+                    fluid_t_end=FLUID_ONLY_T_END,
+                    order_fluid=int(self.phys_cfg.comsol_order_fluid),
+                    comsol_template=self.template_path.name,
+                    gmsh_n_nodes=int(n_nodes),
+                    comsol_n_vertices=int(n_verts),
+                    u_ref=float(u_ref),
                 )
             return True
 

@@ -387,6 +387,12 @@ class PhysicsConfig:
     #: `AnchorGenerator._process_single_anchor` mean something: at order 1 COMSOL's interpolant at
     #: an edge midpoint IS the corner mean.  Together they are worth 2.2-4.4x of wall `dsrx`.
     comsol_order_fluid: int = 2
+    #: Phase2 ``Study 2 (only fluid)`` -- biochem ``y[0]`` is initialized from this solve.
+    #: Empty string keeps ``model.solve()`` (legacy Stationary).
+    comsol_fluid_study: str = "std2"
+    comsol_fluid_tlist: str = "range(0,0.1,15)"
+    #: Reject COMSOL mesh imports whose vertices drift from the Gmsh NAS (metres).
+    comsol_mesh_import_validate: bool = True
 
     # Carreau momentum residual: if True, ∂μ/∂x does not backprop into predicted μ (PINN-style stability).
     detach_mu_for_ns_gradient: bool = True

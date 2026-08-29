@@ -373,6 +373,8 @@ class MeshToGraph(MeshToGraphComplete):
         y_labels = torch.zeros((len(nodes), 5), dtype=torch.float32)
         is_anchor = False
         p2_probe_xy = p2_probe_y = None
+        cfd_meta = None
+        sr_comsol_t = dsrx_comsol_t = None
 
         if label_npz is not None and label_npz.exists():
             try:
@@ -425,6 +427,13 @@ class MeshToGraph(MeshToGraphComplete):
                 mu_nd = torch.tensor(cfd['mu'].flatten()[idx] / ref_mu,
                                      dtype=torch.float32) if 'mu' in cfd else torch.ones_like(u_nd)
 
+                sr_comsol_t = None
+                dsrx_comsol_t = None
+                if "sr_comsol" in cfd.files:
+                    sr_comsol_t = torch.tensor(cfd["sr_comsol"].flatten()[idx], dtype=torch.float32)
+                if "dsrx_comsol" in cfd.files:
+                    dsrx_comsol_t = torch.tensor(cfd["dsrx_comsol"].flatten()[idx], dtype=torch.float32)
+
                 # WLS Gradients for WSS
                 df_u, df_v = u_nd[col] - u_nd[row], v_nd[col] - v_nd[row]
                 sum_W_V_du = torch.zeros((len(nodes), 5)).scatter_add_(0, row.unsqueeze(1).expand(-1, 5),
@@ -454,6 +463,14 @@ class MeshToGraph(MeshToGraphComplete):
                 wss_mag = _clip_wss_magnitude_quantile(wss_mag, mask_solid, q=0.995)
                 y_labels = torch.stack([u_nd, v_nd, p_nd, mu_nd, wss_mag], dim=1)
                 is_anchor = True
+                cfd_meta = {
+                    k: (float(cfd[k]) if np.ndim(cfd[k]) == 0 else cfd[k])
+                    for k in (
+                        "fluid_study", "fluid_t_end", "order_fluid", "comsol_template",
+                        "gmsh_n_nodes", "comsol_n_vertices",
+                    )
+                    if k in cfd.files
+                }
             except Exception as e:
                 print(f"Error mapping labels: {e}")
 
@@ -628,6 +645,12 @@ class MeshToGraph(MeshToGraphComplete):
         if p2_probe_xy is not None and p2_probe_y is not None:
             data.p2_probe_xy_nd = p2_probe_xy / float(d_bar)
             data.p2_probe_y = p2_probe_y
+        if sr_comsol_t is not None:
+            data.sr_comsol = sr_comsol_t
+        if dsrx_comsol_t is not None:
+            data.dsrx_comsol = dsrx_comsol_t
+        if cfd_meta:
+            data.cfd_meta = cfd_meta
         if meta is not None and meta.get("level") is not None:
             data.geometry_level = torch.tensor([int(meta["level"])], dtype=torch.int8)
         else:
