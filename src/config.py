@@ -256,18 +256,24 @@ class VesselConfig:
 
     # Pathology Constraints (Gaussian depth scales vs nominal ``width``; not a lumen floor)
     # Stenosis factor = |peak wall offset| / width; both walls -> diameter occlusion ~= 2 * factor.
-    stenosis_factor_min: float = 0.15
-    stenosis_factor_max: float = 0.4  # both walls -> up to max_stenosis_diameter_occlusion
+    # 2026-08-29: relaxed from 0.15 to match the DEPLOY cohort's realised lumen.  A symmetric
+    # 0.15 draw is a 1.43x max/min lumen ratio by itself, so the old floor made every vessel
+    # with a pathology more diseased than deployment's 90th percentile (deploy axial max/min
+    # p50 1.21, p75 1.30, p90 1.41; corpus L2 had a FLOOR of 1.42 and 0% under 1.15).
+    stenosis_factor_min: float = 0.03
+    stenosis_factor_max: float = 0.28  # 2026-08-29: was 0.4; fitted to deploy's realised lumen
     # Hard floor on local lumen width vs nominal ``width`` (mesh guard; must sit below max-stenosis lumen)
     min_lumen_width_fraction: float = 0.15
     # Aneurysm factor = peak wall offset / width; both walls -> local width = (1 + 2*factor) * inlet.
-    aneurysm_factor_min: float = 0.25
-    aneurysm_factor_max: float = 1.0  # both walls -> up to max_aneurysm_width_scale
+    aneurysm_factor_min: float = 0.05   # 2026-08-29: was 0.25; see `stenosis_factor_min`
+    aneurysm_factor_max: float = 0.30  # 2026-08-29: was 1.0; fitted to deploy's realised lumen
     # Max pathology targets (``pathology_mode=max_stenosis`` / ``max_aneurysm`` / ``straight_max``)
     max_stenosis_diameter_occlusion: float = 0.80  # symmetric both-wall peak (~80% diameter reduction)
     max_aneurysm_factor: float = 1.0  # both walls -> local width = 3x inlet (see max_aneurysm_width_scale)
     # Chance that random stenosis/aneurysm sampling snaps to the configured max (both walls).
-    pathology_max_hit_prob: float = 0.25
+    # 2026-08-29: was 0.25.  One of 25 FIT deploy vessels reaches the extreme, so a quarter of
+    # the corpus doing so is a different cohort, not a richer one.
+    pathology_max_hit_prob: float = 0.04
     # Severe pathology sits in straight vessels, not bendy ones.  Clinically that is where
     # severe stenoses and aneurysms are actually found, and it is what the deploy cohort looks
     # like; sampling severity independently of curvature produced shapes that do not occur and
@@ -279,8 +285,22 @@ class VesselConfig:
     severe_curve_weights: Dict[str, float] = field(
         default_factory=lambda: {"straight": 0.55, "arc": 0.35, "s_curve": 0.10, "hook": 0.00}
     )
-    stenosis_pro_thrombotic_mult: float = 1.2  # L2 random-sampling stenosis boost (capped at max)
-    aneurysm_pro_thrombotic_mult: float = 1.5  # L2 random-sampling aneurysm boost (capped at max)
+    # L2 random-sampling boosts, 2026-08-29 both set to 1.0.  Every biochem deploy patient is
+    # level 2, so L2 IS the deployment class -- boosting it past deployment is the misalignment
+    # these were meant to fix.  Kept as knobs rather than deleted.
+    stenosis_pro_thrombotic_mult: float = 1.0
+    aneurysm_pro_thrombotic_mult: float = 1.0
+    #: Curve-type weights for level 2, the deployment class.  L2 used to be hardcoded to
+    #: ``{straight 0.00, arc 0.20, s_curve 0.40, hook 0.40}`` -- "favour sharp turns and hooks" --
+    #: which put its median centreline excursion at 3.8 diameters against deployment's 2.7.  L1's
+    #: own weights measured 2.51 on the same statistic, so the deploy patients are level 2 by
+    #: label and L1-shaped in fact; these are L1's, with the straight share kept.
+    pro_thrombotic_curve_weights: Dict[str, float] = field(
+        default_factory=lambda: {"straight": 0.15, "arc": 0.45, "s_curve": 0.20, "hook": 0.20}
+    )
+    #: Share of level-2 vessels drawn with NO pathology.  L2 used to guarantee one, which is why
+    #: 0% of corpus L2 sat under a 1.15 lumen ratio against 28% of deployment.
+    pro_thrombotic_straight_prob: float = 0.80
     num_ctrl_pts: int = 50
 
     @property

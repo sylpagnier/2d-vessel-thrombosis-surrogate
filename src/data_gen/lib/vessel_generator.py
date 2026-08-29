@@ -176,13 +176,18 @@ def resolve_bend_sign_mode(explicit: Optional[str] = None) -> str:
 
 
 def default_level_mix(n: int) -> Dict[int, int]:
-    """Default kinematics cohort: mostly L0/L1, ~20% high-thrombus (L2)."""
+    """Default kinematics cohort: all level 2, because that is the whole deployment domain.
+
+    Every biochem patient pack carries ``level: 2`` (40 of 40 that record one).  The old
+    default put 40% of the corpus in L0, whose vessels are effectively straight -- measured
+    centreline excursion 0.16 diameters against deployment's 2.69 -- and whose `dsrx` gate
+    branch decides 1.3% of firing wall nodes against deployment's 93%.  That is a vessel class
+    the consumer never sees, spending solve budget to teach the wrong regime.
+
+    Pass ``--level-mix`` to override when a run deliberately wants the easier classes.
+    """
     n = max(1, int(n))
-    n2 = max(1, round(n * 0.2))
-    rem = n - n2
-    n0 = rem // 2
-    n1 = rem - n0
-    return {0: n0, 1: n1, 2: n2}
+    return {0: 0, 1: 0, 2: n}
 
 
 def parse_level_mix(spec: str, n: int) -> Dict[int, int]:
@@ -497,8 +502,8 @@ def _sample_params(
         magnitude_mode = "max_stenosis" if v_type == "stenosis" else "max_aneurysm"
     else:
         if pro_thrombotic:
-            # Eliminate straight vessels; favor sharp turns and hooks
-            active = {"straight": 0.0, "arc": 0.20, "s_curve": 0.40, "hook": 0.40}
+            # Match the deploy cohort's centreline shape (`pro_thrombotic_curve_weights`).
+            active = dict(cfg.pro_thrombotic_curve_weights)
         else:
             weights_map = _CURVE_WEIGHTS.get(min(level, 1), _CURVE_WEIGHTS)
             active = {k: v for k, v in weights_map.items() if v > 0}
@@ -521,8 +526,16 @@ def _sample_params(
             v_type = "aneurysm"
             magnitude_mode = "max_aneurysm"
         elif pro_thrombotic:
-            # Guarantee a pathology. Aneurysms (stagnation) and Stenosis (downstream deceleration)
-            v_type = str(rng.choice(["stenosis", "aneurysm"], p=[0.3, 0.7]))
+            # L2 IS the deployment class -- every biochem patient pack is level 2 -- so it is
+            # drawn like one.  This used to guarantee a pathology, which put a hard floor of
+            # 1.42 under the L2 lumen max/min ratio while 28% of deploy vessels sit below 1.15,
+            # and left corpus L2 with 7.3x deployment's share of stagnant wall nodes (`sr < lss`
+            # fired on 8.2% of wall against deploy's 1.1%).  Aneurysms still dominate the
+            # non-straight draw: stagnation is the thrombotic mechanism L2 exists to supply.
+            p_straight = float(cfg.pro_thrombotic_straight_prob)
+            rest = max(0.0, 1.0 - p_straight)
+            v_type = str(rng.choice(["straight", "stenosis", "aneurysm"],
+                                    p=[p_straight, 0.3 * rest, 0.7 * rest]))
             magnitude_mode = None
         else:
             v_type = str(rng.choice(["straight", "stenosis", "aneurysm"]))

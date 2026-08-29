@@ -1794,8 +1794,13 @@ def test_elevation_prefers_true_midside_labels_when_the_pack_carries_them():
     from src.data_gen.lib.p2_elevation import elevate_to_p2, undirected_edges
 
     d = _load_first_kine_pack()
+    # Strip any probe set the pack already carries -- the rebuilt corpus ships one on every
+    # vessel -- so the fallback branch is exercised from a known-empty baseline.
+    for attr in ("p2_probe_xy_nd", "p2_probe_y"):
+        if hasattr(d, attr):
+            delattr(d, attr)
     base = elevate_to_p2(d, keep_wls=False)
-    assert int(getattr(base, "p2_midside_true", 0)) == 0, "a legacy pack has no probe set"
+    assert int(getattr(base, "p2_midside_true", 0)) == 0, "no probe set -> no true mid-side labels"
 
     # Manufacture a probe set at the true midpoints with a value the corner mean cannot produce.
     n = int(d.num_nodes)

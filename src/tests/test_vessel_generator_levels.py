@@ -32,13 +32,28 @@ def test_cohort_levels_mixed_shuffle():
     assert levels != [0, 0, 1, 1, 2, 2]
 
 
-def test_sample_params_level2_avoids_straight_centerline():
+def test_sample_params_level2_matches_the_deploy_shape_mix():
+    """L2 is the deployment class -- every biochem patient pack is level 2 -- so it is drawn
+    like one rather than as a guaranteed-pathology extreme.  Both shares are configurable and
+    both are checked, because the old contract (never straight, always diseased) put a hard
+    floor of 1.42 under the L2 lumen ratio while 28% of deploy vessels sit below 1.15."""
     cfg = VesselConfig(phase="kinematics")
     rng = np.random.default_rng(42)
-    for i in range(50):
-        p = _sample_params(i, 2, cfg, rng)
-        assert p["curve_type"] != "straight"
-        assert p["v_type"] in ("stenosis", "aneurysm")
+    ps = [_sample_params(i, 2, cfg, rng) for i in range(400)]
+
+    straight = sum(p["v_type"] == "straight" for p in ps) / len(ps)
+    assert abs(straight - cfg.pro_thrombotic_straight_prob) < 0.08, straight
+    assert all(p["v_type"] in ("straight", "stenosis", "aneurysm") for p in ps)
+
+    # aneurysms still dominate the diseased draw: stagnation is L2's thrombotic mechanism
+    diseased = [p["v_type"] for p in ps if p["v_type"] != "straight"]
+    assert diseased.count("aneurysm") > diseased.count("stenosis")
+
+    # curve mix follows the configured weights, straight centrelines included
+    curves = {p["curve_type"] for p in ps}
+    assert curves <= set(cfg.pro_thrombotic_curve_weights)
+    want_straight = cfg.pro_thrombotic_curve_weights.get("straight", 0.0) > 0
+    assert ("straight" in curves) == want_straight
 
 
 def test_sample_params_level1_arc_has_both_bend_signs():
@@ -171,7 +186,12 @@ def test_max_aneurysm_factor_targets_triple_inlet_width():
     cfg = VesselConfig(phase="biochem")
     assert cfg.max_aneurysm_factor == pytest.approx(1.0)
     assert cfg.max_aneurysm_width_scale == pytest.approx(3.0)
-    assert cfg.aneurysm_factor_max == pytest.approx(cfg.max_aneurysm_factor)
+    # The RANDOM draw's ceiling is deliberately below the forced-max class: `aneurysm_factor_max`
+    # is fitted to the deploy cohort's realised lumen, while `max_aneurysm_factor` is the extreme
+    # `--pathology-mode max_aneurysm` still has to reach.  They were equal until 2026-08-29,
+    # which is why every randomly drawn L2 aneurysm was more severe than any deploy vessel.
+    assert cfg.aneurysm_factor_max < cfg.max_aneurysm_factor
+    assert cfg.aneurysm_factor_min < cfg.aneurysm_factor_max
 
 
 def test_stenosis_wall_offset_for_occlusion_math():
