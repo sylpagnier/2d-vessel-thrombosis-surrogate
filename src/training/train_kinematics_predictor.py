@@ -731,8 +731,20 @@ def _elevate_dataset_to_p2(dataset):
     keep_wls = _os.environ.get("KINEMATICS_ELEVATE_KEEP_WLS", "").strip().lower() in (
         "1", "true", "yes", "on"
     )
+    # Elevation is memory-bound in its TRANSIENT, not its result: all 250 elevated graphs are
+    # 0.88 GB, but building them while the caller still holds every P1 original -- plus the
+    # intermediates of the graph in flight -- was enough to have the process killed outright
+    # partway through a 250-graph cohort.  Consume the input list as we go so each original is
+    # freed the moment its P2 form exists, and collect periodically so the peak is one graph's
+    # worth of garbage rather than the whole cohort's.
+    import gc as _gc
+
+    n_total = len(dataset)
+    src = list(dataset)
+    src.reverse()                       # pop() from the end == original order
     out, n_up = [], 0
-    for d in dataset:
+    while src:
+        d = src.pop()
         try:
             already, _ = identify_midside_nodes(d)
             if bool(already.any()):     # clinical anchors are native P2
@@ -744,7 +756,12 @@ def _elevate_dataset_to_p2(dataset):
             print(f"[kin] WARN P2 elevation failed on "
                   f"{getattr(d, 'graph_stem', '?')}: {type(exc).__name__}: {exc}")
             out.append(d)
-    print(f"[kin] Elevated {n_up}/{len(dataset)} graphs to the P2 deployment topology.")
+        finally:
+            del d
+            if len(out) % 25 == 0:
+                _gc.collect()
+    _gc.collect()
+    print(f"[kin] Elevated {n_up}/{n_total} graphs to the P2 deployment topology.")
     return out
 
 
