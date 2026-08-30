@@ -232,22 +232,25 @@ class VesselConfig:
     #: vessel got a coarse graph, a large one cost 6x the compute for nothing.  The median landed
     #: on deployment (0.94x) while only **57%** of vessels sat inside deployment's p10-p90 band.
     #:
-    #: 0.0245 IS deployment's median spacing (53 biochem anchor packs; FIT-25 median 0.0233),
-    #: so a corpus meshed here needs no elevation -- every node carries COMSOL's own label
-    #: rather than a position-matched mid-side probe, and `KINEMATICS_ELEVATE_P2` stays off.
+    #: 0.0490 = 2 x 0.0245, deployment's median spacing over 53 biochem anchor packs.  The 2x
+    #: is P2 elevation: it inserts a mid-side node per edge and halves every edge exactly
+    #: (verified at 0.500), landing the corpus on 0.0244 against deployment's 0.0245.
     #:
-    #: It was 0.0490 = 2 x 0.0245 because the corpus was generated P1 and elevated at load,
-    #: elevation halving every edge exactly (verified at 0.500).  That worked -- measured on
-    #: all 250 vessels, elevation is what makes the gate's `dsrx` branch fire at all:
+    #: Meshing at 0.0245 directly and skipping elevation was TRIED (25 vessels, 2026-08-30) and
+    #: is NOT worth it: it costs ~3x the COMSOL solve time and buys nothing measurable.  Every
+    #: regime metric of that batch sits inside the range a random 25-vessel draw of the
+    #: elevated cohort already produces:
     #:
-    #:                        sr_med  dsrx_sd   fire    sep   sep_only    h_nd
-    #:     corpus P1 corners    86.1    357.8  0.108  0.000    0.000    0.0488
-    #:     corpus P2 elevated  108.3    885.6  0.174  0.109    0.760    0.0244
-    #:     deploy FIT           91.3    703.2  0.162  0.091    0.927    0.0233
+    #:                    finer 25   elevated pool (n=100)   25-draw 5-95%      deploy
+    #:     sep_only          0.618          0.704            [0.531, 0.954]      0.927
+    #:     dsrx_sd           718.8          794.3            [512,   1686]       703.2
+    #:     sr_med             79.5          101.7            [80.1,   141.5]      91.3
     #:
-    #: but the quantity that matters is NODE SPACING, not element order: the deploy packs are
-    #: themselves P1 corner graphs at 0.0233.  Meshing here reaches the same spacing directly.
-    mesh_h_nd_target: float = 0.0245
+    #: Elevation is free and reaches the same place.  Detecting a real difference would need
+    #: ~100 finer vessels; both already sit inside deployment's band, so that is not where the
+    #: solve budget goes.  The 25-vessel batch is kept as an independent control that elevation
+    #: is not fabricating the regime -- it confirms it is not.
+    mesh_h_nd_target: float = 0.0490
 
     # Lumen-aware sizing.  `mesh_lc` alone is a uniform element size, and a severe stenosis
     # closes the lumen to ~1.6 mm (`width_min` 8 mm, `stenosis_factor_max` 0.4 on both walls),
