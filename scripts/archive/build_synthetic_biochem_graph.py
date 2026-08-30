@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 from src.config import BiochemConfig
-from src.data_gen.lib.mesh_to_graph import MeshToGraphComplete
+from src.data_gen.lib.mesh_to_graph import MeshToGraph
 from src.data_gen.lib.mesh_to_graph_biochem import MeshToGraphPhase3
 from src.data_gen.lib.vessel_generator import VesselGeneratorPhase3
 from src.utils.paths import get_project_root
@@ -46,7 +46,7 @@ def build_synthetic_biochem_graph(
     if not pts:
         vg = VesselGeneratorPhase3(output_dir=raw_dir)
         vg.run_pipeline(n=1, level=int(level), num_workers=1, seed=int(seed))
-        MeshToGraphComplete(
+        MeshToGraph(
             phase="kinematics",
             raw_dir=raw_dir,
             label_dir=raw_dir,

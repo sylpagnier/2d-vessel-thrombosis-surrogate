@@ -49,7 +49,7 @@ if __name__ == "__main__":
         sys.path.insert(0, _ps)
 
 from src.config import VesselConfig
-from src.utils.paths import get_project_root, migrate_legacy_vessel_meshes
+from src.utils.paths import get_project_root
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -1376,8 +1376,6 @@ class VesselGenerator:
         self.project_root = get_project_root()
         self.output_dir   = Path(output_dir) if output_dir else self.project_root / self.cfg.mesh_input_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        if output_dir is None:
-            migrate_legacy_vessel_meshes(self.output_dir)
 
     def _sample_one(
         self,

@@ -18,7 +18,7 @@ from src.utils.paths import (
 )
 
 project_root = get_project_root()
-from src.data_gen import AnchorGenerator, MeshToGraphComplete, VesselGenerator
+from src.data_gen import AnchorGenerator, MeshToGraph, VesselGenerator
 from src.evaluation.lib.validate_model import ModelValidator
 from src.config import PredChannels
 
@@ -214,7 +214,7 @@ def run_pipeline_for_level(phase, level_idx, level_name, num_samples=10, visuali
             print("   ↳ Falling back to AI-only benchmark mode (no COMSOL labels).")
 
         print(f"\n[3/4] 🕸️ Converting to Graphs...")
-        m_gen = MeshToGraphComplete(
+        m_gen = MeshToGraph(
             phase=phase,
             raw_dir=str(raw_mesh_dir),
             label_dir=str(label_dir),

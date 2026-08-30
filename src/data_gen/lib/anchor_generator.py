@@ -11,8 +11,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from src.config import VesselConfig, PhysicsConfig
 from src.utils.paths import (
     get_project_root,
-    migrate_legacy_final_n_subdir,
-    migrate_legacy_vessel_meshes,
 )
 from src.utils.units import MESH_UNIT_CM, d_bar_si_from_sidecar
 from scipy.interpolate import NearestNDInterpolator
@@ -200,7 +198,6 @@ class AnchorGenerator:
             self.mesh_dir = Path(mesh_dir)
         else:
             self.mesh_dir = self.vessel_config.mesh_input_dir
-            migrate_legacy_vessel_meshes(self.mesh_dir)
 
         self.client: Optional[mph.Client] = None
         self.model: Optional[mph.Model] = None
@@ -209,8 +206,6 @@ class AnchorGenerator:
             raise FileNotFoundError(f"COMSOL template not found at: {self.template_path}")
         if not self.mesh_dir.exists():
             logger.warning(f"Mesh input directory does not exist: {self.mesh_dir}")
-        if self.vessel_config.phase == "kinematics":
-            migrate_legacy_final_n_subdir(self.output_dir, n_value=self.phys_cfg.n, ext="npz")
 
     def _final_target_output_dir(self) -> Path:
         """Directory for the final target n outputs.

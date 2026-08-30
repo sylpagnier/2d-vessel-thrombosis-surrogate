@@ -16,7 +16,7 @@ from typing import Dict
 
 from src.data_gen.lib.vessel_generator import VesselGenerator
 from src.data_gen.lib.anchor_generator import AnchorGenerator
-from src.data_gen.lib.mesh_to_graph import MeshToGraphComplete
+from src.data_gen.lib.mesh_to_graph import MeshToGraph
 
 def generate_resolution_sweep(n_vessels: int = 100):
     resolutions = {
@@ -41,7 +41,7 @@ def generate_resolution_sweep(n_vessels: int = 100):
                 ag.run_batch(max_new=n_vessels)
                 
             # 3. Convert to PyG Graphs
-            MeshToGraphComplete(phase=phase_name).run()
+            MeshToGraph(phase=phase_name).run()
             
         finally:
             # Cleanup env to prevent bleeding between iterations

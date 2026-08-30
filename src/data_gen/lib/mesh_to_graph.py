@@ -37,8 +37,6 @@ from src.data_gen.lib.graph_velocity_priors import (
 )
 from src.utils.paths import (
     get_project_root,
-    migrate_legacy_final_n_subdir,
-    migrate_legacy_vessel_meshes,
 )
 from src.utils.channel_schema import (
     KINE_X_SCHEMA,
@@ -137,7 +135,7 @@ class _LabelMeshMismatch(RuntimeError):
     """A CFD label file that was solved on a different mesh than the one being converted."""
 
 
-class MeshToGraphComplete:
+class _MeshToGraphBase:
     def __init__(
         self,
         phase="kinematics",
@@ -161,7 +159,6 @@ class MeshToGraphComplete:
             self.raw_dir = Path(raw_dir)
         else:
             self.raw_dir = self.root / self.vessel_cfg.mesh_input_dir
-            migrate_legacy_vessel_meshes(self.raw_dir)
 
         # Resolve Label Dir
         if label_dir:
@@ -184,14 +181,10 @@ class MeshToGraphComplete:
         if n_subdir and not use_kin_rheo_dir:
             self.proc_dir = self.proc_dir / n_subdir
 
-        if phase == "kinematics":
-            migrate_legacy_final_n_subdir(self.label_dir, n_value=self.phys_cfg.n, ext="npz")
-            migrate_legacy_final_n_subdir(self.proc_dir, n_value=self.phys_cfg.n, ext="pt")
-
         self.proc_dir.mkdir(parents=True, exist_ok=True)
 
 
-class MeshToGraph(MeshToGraphComplete):
+class MeshToGraph(_MeshToGraphBase):
     """
     Kinematics & Kinematics specific graph conversion logic.
     Computes kinematics and packages variables.
@@ -729,9 +722,6 @@ class MeshToGraph(MeshToGraphComplete):
         for f in tqdm(files):
             self.process_file(f)
 
-
-class MeshToGraphComplete(MeshToGraph):
-    """Backward-compatible alias for callers still importing MeshToGraphComplete."""
 
 
 def build_mesh_converter(
