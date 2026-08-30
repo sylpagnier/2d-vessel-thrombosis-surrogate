@@ -34,6 +34,31 @@ from scipy.spatial import cKDTree
 DEFAULT_ATTENUATION = 0.16
 
 
+#: MLS stencil width per flow source.  GT is differentiated at the consumer's own hops=3;
+#: any RECONSTRUCTED field needs a wider stencil to keep its second derivative from being its
+#: own sign flip.  `fem` is a solved field like `pred`, not ground truth, so it takes the same
+#: treatment -- and it must appear here or a `fem` run dies on a KeyError deep in the rollout.
+_FLOW_HOPS = {"gt": 3, "pred": 4, "fem": 4}
+
+
+def _flow_hops(flow: str) -> int:
+    """`CLOT_PRED_HOPS` overrides the stencil used for a RECONSTRUCTED field.
+
+    The wide stencil exists to stop a noisy surrogate's second derivative flipping sign; it is
+    not obviously right for an accurate field, and it differs from the hops=3 the LABELS were
+    differentiated at.  Overridable so the two can be measured apart.
+    """
+    import os
+
+    raw = os.environ.get("CLOT_PRED_HOPS", "").strip()
+    if raw and flow != "gt":
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return _FLOW_HOPS[flow]
+
+
 def _first_crossing(traj: np.ndarray, thresh: float) -> np.ndarray:
     hot = traj >= thresh
     return np.where(hot.any(axis=0), hot.argmax(axis=0), -1)
@@ -89,7 +114,7 @@ def ode_trajectory(data, bio_cfg, *, flow: str = "gt", ap_closure: bool = True,
     )
 
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    f = t0_flow_fields(data, bio_cfg, hops={"gt": 3, "pred": 4}[flow], flow_source=flow)
+    f = t0_flow_fields(data, bio_cfg, hops=_flow_hops(flow), flow_source=flow)
     hook = make_rollout_hook(SHIPPED, bio_cfg, f.sr) if ap_closure else None
     gate = deposition_gate(data, f, wall=wall, wound_source=wound_source)
     blk = None
@@ -164,7 +189,7 @@ def union_ungated_stall_series(data, bio_cfg, series: dict, times, *, flow: str 
     from src.core_physics.physics_wall_model import t0_flow_fields
 
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    f = t0_flow_fields(data, bio_cfg, hops={"gt": 3, "pred": 4}[flow], flow_source=flow)
+    f = t0_flow_fields(data, bio_cfg, hops=_flow_hops(flow), flow_source=flow)
     ung = wall & (np.asarray(f.gate) * wall <= 0)
     if not ung.any():
         return series

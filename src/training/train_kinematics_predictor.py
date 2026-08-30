@@ -1097,6 +1097,11 @@ def compute_step_loss(
     w_gate = float(os.environ.get("KINEMATICS_GATE_WEIGHT", "") or
                    (_rel["l_band_gate"] * _s))
     l_band_gate = terms.get("l_band_gate", torch.tensor(0.0, device=device))
+    # The measured root cause of the deploy-flow collapse: the surrogate compresses the wall
+    # shear distribution and never reaches the gate's cut, so on 7 of 30 deploy packs the wall
+    # gate is EMPTY and thirteen physics channels go to zero.  Off unless weighted.
+    w_tail = float(os.environ.get("KINEMATICS_TAIL_WEIGHT", "") or 0.0)
+    l_band_tail = terms.get("l_band_tail", torch.tensor(0.0, device=device))
     # T6: make the analytic prior a performance FLOOR.  Zero wherever the model beats the
     # prior it was handed, positive only where it is worse -- which today is 45 of 52 packs.
     w_floor = float(os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "") or
@@ -1120,6 +1125,7 @@ def compute_step_loss(
         + ((_rel['l_shear_grad'] * _s) * l_shear_grad)
         + (w_band * (l_band_sr + l_band_dsrx))
         + (w_gate * l_band_gate)
+        + (w_tail * l_band_tail)
         + (w_floor * l_prior_floor)
         + (w_bfloor * l_band_floor)
         + (w_shear * l_shear)
@@ -1135,6 +1141,7 @@ def compute_step_loss(
     weighted_shear_grad = (_rel['l_shear_grad'] * _s) * l_shear_grad
     weighted_band = w_band * (l_band_sr + l_band_dsrx)
     weighted_gate = w_gate * l_band_gate
+    weighted_tail = w_tail * l_band_tail
     weighted_floor = w_floor * l_prior_floor + w_bfloor * l_band_floor
     weighted_shear = w_shear * l_shear
     weighted_jac = 0.1 * jac_loss
@@ -1144,6 +1151,8 @@ def compute_step_loss(
         "L_band_sr": float(l_band_sr.item()),
         "L_band_dsrx": float(l_band_dsrx.item()),
         "L_band_gate": float(l_band_gate.item()),
+        "L_band_tail": float(l_band_tail.item()),
+        "C_tail": float(weighted_tail.item()) if torch.is_tensor(weighted_tail) else float(weighted_tail),
         "L_band_floor": float(l_band_floor.item()),
         "L_prior_floor": float(l_prior_floor.item()),
         "C_band_shear": float(weighted_band.item()) if torch.is_tensor(weighted_band) else float(weighted_band),
@@ -1913,6 +1922,23 @@ def train_kinematics(
                     f"relL2={rel_l2:.4f} "
                     f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{patient_msg}{shear_msg}"
                 )
+                # The REAL metric, not a proxy.  Measured against 33 vessels of actual deploy
+                # F1, every Stage-A diagnostic is weak or unrelated (gate Jaccard +0.613 is the
+                # best; rel-L2 is -0.030), so a run can improve everything it prints and still
+                # lose what it exists for.  ~33 s per vessel; off unless the interval is set.
+                _dp_every = int(os.environ.get("KINEMATICS_DEPLOY_PROBE_EVERY", "") or 0)
+                if _dp_every > 0 and epoch % _dp_every == 0:
+                    from src.utils.kinematics_deploy_probe import deploy_f1_probe
+
+                    _dp = deploy_f1_probe(model, device)
+                    if _dp:
+                        _per = " ".join(f"{k[-3:]}={v:.3f}" for k, v in _dp.items()
+                                        if k.startswith("patient") and not k.endswith("/off"))
+                        print(f"[kin] ep{epoch:<4d} DEPLOY-F1 "
+                              f"wall={_dp.get('mean_wall', float('nan')):.3f}"
+                              f"({_dp.get('wall_drop', float('nan')):+.3f}) "
+                              f"off={_dp.get('mean_off', float('nan')):.3f}"
+                              f"({_dp.get('off_drop', float('nan')):+.3f}) | {_per}")
             else:
                 print(
                     f"[kin] [Validation] non-finite metrics "

@@ -165,4 +165,56 @@ def selection_score(dsrx_corr: float, gate_jaccard: float, rel_l2: float) -> flo
     return 2.0 * (1.0 - j) + 0.3 * (1.0 - c) + 0.05 * r
 
 
-__all__ = ["GAIN_STENCIL", "selection_score", "wall_shear_selection_metrics"]
+__all__ = [
+    "wall_gate_health","GAIN_STENCIL", "selection_score", "wall_shear_selection_metrics"]
+
+def wall_gate_health(pred_uv, data, *, hops_pred: int = 3, hops_gt: int = 3, bio_cfg=None) -> dict:
+    """Does the WALL gate survive this prediction, and does the low shear tail reach the cut?
+
+    The deploy collapse does not run through gate Jaccard.  `clot_ml`'s `physics_mask` seeds
+    from ``(gate > 0) & wall``; when the surrogate's wall shear never drops below ``lss`` that
+    seed is EMPTY, the mask empties, and thirteen physics/advection channels go identically
+    zero -- measured on 7 of 30 deploy packs, and worth -0.97 wall F1 on patient010.  So the
+    quantity to watch during training is not agreement, it is whether the gate fires at all.
+
+    Returns ``fire_gt`` / ``fire_pred`` (share of wall nodes firing), ``empty`` (the pred gate
+    is empty where GT's is not -- the failure), and ``p05_ratio`` (predicted 5th-percentile
+    wall shear over the truth's; >1 means the tail is compressed upward, the root cause).
+    """
+    import numpy as np
+
+    from src.clot_ml.features import M_TO_CM
+    from src.config import BiochemConfig
+    from src.core_physics.mls_gradient import shear_rate_2d
+
+    bio = bio_cfg or BiochemConfig(phase="biochem")
+    lss, sgt = float(bio.lss), float(bio.sgt) / M_TO_CM
+    y = data.y[0] if data.y.dim() == 3 else data.y
+    wall = data.mask_wall.reshape(-1).bool().detach().cpu().numpy()
+    if wall.sum() < 5:
+        return {}
+    u_ref = float(data.u_ref.reshape(-1)[0]); d_bar = float(data.d_bar.reshape(-1)[0])
+    from src.core_physics.mls_gradient import node_positions
+
+    pos = node_positions(data)
+    ei = data.edge_index.detach().cpu().numpy()
+    Dx_g, Dy_g = _mls_ops(data, pos, ei, hops_gt)
+    Dx_p, Dy_p = _mls_ops(data, pos, ei, hops_pred)
+
+    def fields(u, v, Dx, Dy):
+        sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
+        return sr, (Dx @ sr) / (d_bar * M_TO_CM)
+
+    ug = y[:, 0].double().detach().cpu().numpy(); vg = y[:, 1].double().detach().cpu().numpy()
+    up = pred_uv[:, 0].double().detach().cpu().numpy(); vp = pred_uv[:, 1].double().detach().cpu().numpy()
+    sg, dg = fields(ug, vg, Dx_g, Dy_g)
+    sp, dp = fields(up, vp, Dx_p, Dy_p)
+    gg = ((sg < lss) | (dg < sgt))[wall]
+    gp = ((sp < lss) | (dp < sgt))[wall]
+    p05g = float(np.percentile(sg[wall], 5)); p05p = float(np.percentile(sp[wall], 5))
+    return {
+        "fire_gt": float(gg.mean()), "fire_pred": float(gp.mean()),
+        "empty": float(bool(gg.any() and not gp.any())),
+        "p05_ratio": p05p / max(p05g, 1e-9),
+        "sr_min_ratio": float(sp[wall].min()) / max(float(sg[wall].min()), 1e-9),
+    }

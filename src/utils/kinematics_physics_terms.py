@@ -264,6 +264,64 @@ def _band_on_corners() -> bool:
     )
 
 
+def _boundary_data_weight(default: float) -> float:
+    """``KINEMATICS_BAND_DATA_WEIGHT`` -- how much the DATA term favours the wall band.
+
+    Deployment reads `u`,`v` only in the wall band, differentiates them twice there and
+    thresholds; nothing else the model emits is read.  A near-uniform data term therefore
+    spends most of its gradient where the readout never looks, and the measured symptom is a
+    model with healthy bulk rel-L2 (0.12) and wall `sr` correlation of only 0.413.  The
+    shipped 2.0 is the historical value.
+    """
+    import os
+
+    raw = os.environ.get("KINEMATICS_BAND_DATA_WEIGHT", "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return float(default)
+
+
+def _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s_scale):
+    """Penalise the surrogate's inability to reach the LOW TAIL of wall shear rate.
+
+    Root cause of the deploy-flow collapse, measured over 30 deploy packs: the surrogate gets
+    the median wall `sr` right (87.3 against 89.9) and compresses the distribution
+    (IQR ratio 0.62), so its MINIMUM wall shear is 31.5 where the truth reaches 9.3 -- and the
+    deposition gate cuts at 25.  On 7 of 30 vessels no wall node crosses the cut, the wall
+    gate is empty, `physics_mask` seeds from it and empties, and THIRTEEN downstream feature
+    channels go identically zero.  That is the -0.97 on patient010, not accumulated field error.
+
+    An L2 loss on velocity is exactly what produces that compression, and nothing in the
+    objective looked at the tail.  This is a one-sided penalty on OVER-predicting shear where
+    the truth is low: zero wherever the model is at or below the label, quadratic above it,
+    restricted to the band where the gate is actually decided.  Normalised by the label spread
+    so it sits on the other band terms' scale.  Off unless `KINEMATICS_TAIL_WEIGHT` is set.
+    """
+    import os as _os
+
+    from src.config import BiochemConfig
+
+    lss = float(BiochemConfig(phase="biochem").lss)
+    u_ref = float(data.u_ref.reshape(-1)[0]) if hasattr(data, "u_ref") else 1.0
+    d_bar = float(data.d_bar.reshape(-1)[0]) if hasattr(data, "d_bar") else 1.0
+    k = u_ref / max(d_bar, 1e-12)                      # nd shear -> 1/s
+
+    g = sr_gt[band] * k
+    q = sr_pr[band] * k
+    lo = g < (lss * float(_os.environ.get("KINEMATICS_TAIL_BAND_MULT", "2.0") or 2.0))
+    if int(lo.sum()) < 2:
+        return sr_pr.sum() * 0.0
+    # SYMMETRIC, deliberately.  A one-sided penalty was the first instinct -- the surrogate
+    # looked like it could not reach low shear -- but per-vessel the tail is wrong in BOTH
+    # directions: measured, patient005's predicted minimum wall shear is 14.5x the truth's and
+    # patient010's is 0.018x.  The cohort median hid that.  What matters is that the tail is
+    # WRONG, not which way.
+    return ((q[lo] - g[lo]) ** 2).mean() / (s_scale * k).clamp(min=1e-6) ** 2
+
+
 def wall_band_shear_losses(
     pred, data, kernels: PhysicsKernels, *, props=None, hops: int = WALL_BAND_HOPS,
     node_is_anchor: Optional[torch.Tensor] = None,
@@ -296,7 +354,7 @@ def wall_band_shear_losses(
     """
     zero = pred.sum() * 0.0
     if (not hasattr(data, "y")) or (data.y is None) or (data.y.shape[1] <= PredChannels.V):
-        return zero, zero, zero, zero
+        return zero, zero, zero, zero, zero
 
     # Evaluate on the CORNER subgraph of an elevated graph: its labels are COMSOL's own, where
     # the elevated graph's mid-side labels are an interpolation whose second derivative is an
@@ -318,7 +376,7 @@ def wall_band_shear_losses(
     if node_is_anchor is not None:
         band = band & node_is_anchor.view(-1).bool()
     if int(band.sum()) < 2:
-        return zero, zero, zero, zero
+        return zero, zero, zero, zero, zero
     if props is None:
         props = kernels._get_geometric_props(data)
 
@@ -369,7 +427,8 @@ def wall_band_shear_losses(
         l_dsrx = F.mse_loss(dsr_pr[band] / sd, dsr_gt[band] / sd)
     l_gate = _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s, sd)
     l_floor = _band_shear_floor(data, kernels, props, band, sr_pr, sr_gt, dsr_pr, dsr_gt, s, sd)
-    return l_sr, l_dsrx, l_gate, l_floor
+    l_tail = _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s)
+    return l_sr, l_dsrx, l_gate, l_floor, l_tail
 
 
 def _band_shear_floor(data, kernels, props, band, sr_pr, sr_gt, dsr_pr, dsr_gt, s, sd):
@@ -648,7 +707,7 @@ def compute_kinematics_physics_terms(
     kernels: PhysicsKernels,
     *,
     phase: str = "kinematics",
-    boundary_data_weight: float = 2.0,
+    boundary_data_weight: float = 2.0,   # see `_boundary_data_weight`, env-overridable
     carreau_n: Optional[float] = None,
     distillation: bool = False,
     kine_p_weight: float = 1.0,
@@ -684,7 +743,7 @@ def compute_kinematics_physics_terms(
             data.y,
             node_is_anchor,
             wall_mask=wall_mask,
-            wall_weight=boundary_data_weight,
+            wall_weight=_boundary_data_weight(boundary_data_weight),
             p_weight=kine_p_weight,
             anchor_importance=anchor_kine_importance,
             relative=relative_data_loss,
@@ -706,6 +765,7 @@ def compute_kinematics_physics_terms(
         l_band_dsrx = z
         l_band_gate = z
         l_band_floor = z
+        l_band_tail = z
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
     else:
         # One-sided hinge against the labels' own PDE residual when a floor is attached
@@ -721,7 +781,7 @@ def compute_kinematics_physics_terms(
         l_cont = kernels.continuity_loss(du_ij, data=data, floor=floor_cont)
         l_rheo = kernels.rheology_loss(pred, data, props=props, carreau_n=carreau_n)
         l_shear_grad = kernels.wall_shear_gradient_loss(pred, data, props=props)
-        l_band_sr, l_band_dsrx, l_band_gate, l_band_floor = wall_band_shear_losses(
+        l_band_sr, l_band_dsrx, l_band_gate, l_band_floor, l_band_tail = wall_band_shear_losses(
             pred, data, kernels, props=props, hops=wall_band_hops,
             node_is_anchor=node_is_anchor,
         )
@@ -733,6 +793,7 @@ def compute_kinematics_physics_terms(
         "l_band_dsrx": l_band_dsrx,
         "l_band_gate": l_band_gate,
         "l_band_floor": l_band_floor,
+        "l_band_tail": l_band_tail,
         "l_prior_floor": prior_floor_loss(pred, data, node_is_anchor=node_is_anchor),
         "l_data_kine": l_data_kine,
         "l_data_mu": l_data_mu,

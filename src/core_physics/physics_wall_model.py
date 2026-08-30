@@ -187,9 +187,15 @@ def t0_flow_fields(
     u_ref = float(data.u_ref.reshape(-1)[0])           # m/s
     d_bar = float(data.d_bar.reshape(-1)[0])           # m
     Dx, Dy = build_mls_gradient(pos, ei, hops=hops)
-    if flow_source == "pred":
+    # `fem` reads the same slot: the local solver writes its field into `u0_pred` and the
+    # rest of the pipeline treats it as a reconstructed field, which is what it is.  An
+    # UNRECOGNISED source raises -- it used to fall through to the ground-truth branch, so a
+    # `flow="fem"` run silently scored GT and looked like a perfect solver.
+    if flow_source not in ("gt", "pred", "fem"):
+        raise ValueError(f"unknown flow_source {flow_source!r}; expected gt, pred or fem")
+    if flow_source in ("pred", "fem"):
         if getattr(data, "u0_pred", None) is None:
-            raise ValueError("pack has no u0_pred (deployable flow unavailable)")
+            raise ValueError(f"pack has no u0_pred (flow_source={flow_source!r})")
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         # MLS on predicted velocity, not the kinematics shear head.  On patient005 the
@@ -202,8 +208,14 @@ def t0_flow_fields(
         v = data.y[time_index, :, 1].detach().cpu().numpy().astype(np.float64)
         sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)                                   # 1/(s*cm)
-    if flow_source == "pred":
-        dsrx = dsrx * PRED_DSRX_GAIN
+    if flow_source in ("pred", "fem"):
+        # `CLOT_PRED_DSRX_GAIN` overrides the shipped constant.  That constant was least-squares
+        # fitted to the OLD surrogate's under-resolution, so it is not obviously right for any
+        # other reconstructed field -- a converged FEM solve least of all.
+        import os as _os
+
+        _g = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
+        dsrx = dsrx * (float(_g) if _g else PRED_DSRX_GAIN)
 
     sgt_cgs = float(bio_cfg.sgt) / M_TO_CM             # 1/(s*m) -> 1/(s*cm)
     return T0Fields(

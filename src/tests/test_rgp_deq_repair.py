@@ -1676,7 +1676,7 @@ def test_band_shear_terms_are_zero_at_the_labels_in_both_band_modes(monkeypatch)
 
     for mode in ("0", "1"):
         monkeypatch.setenv("KINEMATICS_BAND_ON_CORNERS", mode)
-        l_sr, l_dsrx, l_gate, _l_floor = wall_band_shear_losses(
+        l_sr, l_dsrx, l_gate, _l_floor, _l_tail = wall_band_shear_losses(
             pred, e, kern, hops=3, node_is_anchor=nia
         )
         assert float(l_sr) < 1e-8, f"mode={mode} l_band_sr={float(l_sr)}"

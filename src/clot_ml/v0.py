@@ -42,6 +42,13 @@ REPLACE_SCOPE_WOUND_REGION = "wound_region"
 REPLACE_SCOPES = (REPLACE_SCOPE_ALL_LUMEN, REPLACE_SCOPE_WOUND_REGION)
 
 
+#: MLS stencil width per flow source.  GT is differentiated at the consumer's own hops=3;
+#: any RECONSTRUCTED field needs a wider stencil to keep its second derivative from being its
+#: own sign flip.  `fem` is a solved field like `pred`, not ground truth, so it takes the same
+#: treatment -- and it must appear here or a `fem` run dies on a KeyError deep in the rollout.
+from src.clot_ml.temporal import _flow_hops as _flow_hops  # single source of truth
+
+
 @dataclass
 class ClotMlV0Config:
     """Typed knobs for the unified stack.  No env toggles."""
@@ -173,7 +180,7 @@ def chemistry_mat_trajectory(
 
     bio = bio or BiochemConfig(phase="biochem")
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    f = t0_flow_fields(data, bio, hops={"gt": 3, "pred": 4}[flow], flow_source=flow)
+    f = t0_flow_fields(data, bio, hops=_flow_hops(flow), flow_source=flow)
     gate = deposition_gate(data, f, wall=wall, wound_source=True)
     blk = None
     if wound_rate is not None:
@@ -246,6 +253,64 @@ def _series_from_masks(masks: dict[int, np.ndarray], grid) -> tuple[dict, np.nda
     return masks, masks[last], onset
 
 
+def _resolve_anchor_mesh(data) -> str:
+    """Locate the `.nas`/`.msh` a pack was meshed from, for the local FEM solve.
+
+    Deploy packs carry no `mesh_path`, and the old rewrite mapped
+    `data/processed/graphs_biochem_anchors/x.pt` to `data/processed/meshes/x.nas`, which does
+    not exist -- every `flow="fem"` run died on the `data.mesh_path` fallback.  The meshes live
+    beside the raw anchors.  Raises with the stem named, because a silent wrong mesh would be
+    solved happily and score as if it were the vessel.
+    """
+    import os
+
+    explicit = getattr(data, "mesh_path", None)
+    if explicit and os.path.exists(str(explicit)):
+        return str(explicit)
+
+    stem = str(getattr(data, "graph_stem", "") or "")
+    if not stem:
+        pt = str(getattr(data, "path", "") or "")
+        stem = os.path.splitext(os.path.basename(pt))[0] if pt else ""
+    if not stem:
+        raise FileNotFoundError("flow='fem': pack carries neither mesh_path nor a stem")
+
+    from src.utils.paths import get_project_root
+
+    root = get_project_root()
+    tried = []
+    for sub in ("data/raw/biochem_anchors", "data/raw/biochem", "data/raw/kinematics/meshes"):
+        for ext in (".nas", ".msh"):
+            cand = root / sub / f"{stem}{ext}"
+            tried.append(str(cand))
+            if cand.is_file():
+                return str(cand)
+    raise FileNotFoundError(
+        "flow='fem': no mesh for " + repr(stem) + "; tried: " + ", ".join(tried))
+
+
+def solve_fem_into_pack(data) -> None:
+    """Solve the local Carreau FEM at t=0 and write it into the pack's `u0_pred`/`v0_pred`.
+
+    Separate from `predict_clot_ml_v0` because callers build the feature SAMPLE before they
+    call it -- doing the solve inside meant the sample, and the baseline scored beside it,
+    were still ground truth while the run was labelled `fem`.
+    """
+    from src.config import PhysicsConfig
+    from src.core_physics.local_fem_solver import solve_local_t0_flow
+
+    nas_path = _resolve_anchor_mesh(data)
+    u_gt_nd = data.y[0, :, 0:2].numpy() if getattr(data, "y", None) is not None else None
+    u_dim = solve_local_t0_flow(nas_path, data, PhysicsConfig(), max_iters=50, tol=1e-5,
+                                u_gt_inlet_nd=u_gt_nd)
+    if isinstance(u_dim, torch.Tensor):
+        u_dim = u_dim.numpy()
+    u_ref = float(data.u_ref.reshape(-1)[0])
+    nd = u_dim / u_ref
+    data.u0_pred = torch.tensor(nd[:, 0], dtype=torch.float32)
+    data.v0_pred = torch.tensor(nd[:, 1], dtype=torch.float32)
+
+
 def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) -> dict:
     """Unified inference.  No-wound packs are bit-identical to the base GNN.
 
@@ -265,30 +330,7 @@ def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) ->
     bio = BiochemConfig(phase="biochem")
     
     if flow == "fem":
-        import os
-        from src.core_physics.local_fem_solver import solve_local_t0_flow
-        from src.config import PhysicsConfig
-        phys_cfg = PhysicsConfig()
-        
-        # Determine paths
-        pt_path = getattr(data, 'path', '')
-        if pt_path:
-            nas_path = pt_path.replace("graphs_biochem_anchors", "meshes").replace(".pt", ".nas")
-            nas_path = nas_path.replace("graphs_biochem_anchor", "meshes")
-            if not os.path.exists(nas_path):
-                nas_path = data.mesh_path if hasattr(data, 'mesh_path') else pt_path.replace(".pt", ".nas")
-        else:
-            nas_path = data.mesh_path
-            
-        u_gt_nd = data.y[0, :, 0:2].numpy() if hasattr(data, 'y') and data.y is not None else None
-        u_pred_dim = solve_local_t0_flow(nas_path, data, phys_cfg, max_iters=50, tol=1e-5, u_gt_inlet_nd=u_gt_nd)
-        if isinstance(u_pred_dim, torch.Tensor):
-            u_pred_dim = u_pred_dim.numpy()
-            
-        u_ref = float(data.u_ref.item()) if hasattr(data.u_ref, 'item') else float(data.u_ref)
-        u_pred_nd = u_pred_dim / u_ref
-        data.u0_pred = torch.tensor(u_pred_nd[:, 0], dtype=torch.float32)
-        data.v0_pred = torch.tensor(u_pred_nd[:, 1], dtype=torch.float32)
+        solve_fem_into_pack(data)
         flow = "pred"
 
     S = sample if sample is not None else build_sample(data, bio, flow=flow, variant="v4")

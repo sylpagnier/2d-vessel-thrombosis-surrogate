@@ -75,8 +75,21 @@ def _score_nowound(pred, gt, ei, S) -> dict:
 
 def _score_one(bundle_base, bundle_v0, stem: str, every: int, flow: str) -> dict:
     data = torch.load(PACKS / f"{stem}.pt", map_location="cpu", weights_only=False)
+    # Deploy packs carry neither `graph_stem` nor `path`, so nothing on the object says which
+    # vessel it is.  `flow="fem"` has to find the mesh the pack was built from; without this it
+    # cannot, and dies inside the rollout.
+    if getattr(data, "graph_stem", None) is None:
+        data.graph_stem = stem
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     times = _times(data, every)
+    if flow == "fem":
+        # `predict_clot_ml_v0` solves FEM internally, but the SAMPLE and the baseline are
+        # built out here first -- so doing it there left both on ground truth and the run
+        # scored GT under a FEM label.  Solve up front, then use the validated `pred` path.
+        from src.clot_ml.v0 import solve_fem_into_pack
+
+        solve_fem_into_pack(data)
+        flow = "pred"
     S = build_sample(data, bio, flow=flow, variant="v4")
     ei = torch.tensor(np.asarray(S["edge_index"]))
     gts = gt_series(data, phys, times)
