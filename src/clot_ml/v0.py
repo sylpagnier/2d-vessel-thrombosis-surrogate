@@ -263,6 +263,34 @@ def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) ->
 
     cfg: ClotMlV0Config = bundle["cfg"]
     bio = BiochemConfig(phase="biochem")
+    
+    if flow == "fem":
+        import os
+        from src.core_physics.local_fem_solver import solve_local_t0_flow
+        from src.config import PhysicsConfig
+        phys_cfg = PhysicsConfig()
+        
+        # Determine paths
+        pt_path = getattr(data, 'path', '')
+        if pt_path:
+            nas_path = pt_path.replace("graphs_biochem_anchors", "meshes").replace(".pt", ".nas")
+            nas_path = nas_path.replace("graphs_biochem_anchor", "meshes")
+            if not os.path.exists(nas_path):
+                nas_path = data.mesh_path if hasattr(data, 'mesh_path') else pt_path.replace(".pt", ".nas")
+        else:
+            nas_path = data.mesh_path
+            
+        u_gt_nd = data.y[0, :, 0:2].numpy() if hasattr(data, 'y') and data.y is not None else None
+        u_pred_dim = solve_local_t0_flow(nas_path, data, phys_cfg, max_iters=50, tol=1e-5, u_gt_inlet_nd=u_gt_nd)
+        if isinstance(u_pred_dim, torch.Tensor):
+            u_pred_dim = u_pred_dim.numpy()
+            
+        u_ref = float(data.u_ref.item()) if hasattr(data.u_ref, 'item') else float(data.u_ref)
+        u_pred_nd = u_pred_dim / u_ref
+        data.u0_pred = torch.tensor(u_pred_nd[:, 0], dtype=torch.float32)
+        data.v0_pred = torch.tensor(u_pred_nd[:, 1], dtype=torch.float32)
+        flow = "pred"
+
     S = sample if sample is not None else build_sample(data, bio, flow=flow, variant="v4")
     base = predict_temporal_v4_wound(bundle["base"], data, times, flow=flow, sample=S)
     if not has_wound(data):

@@ -7,7 +7,7 @@ import torch
 from src.config import PhysicsConfig
 from src.core_physics.inlet_profile import get_inlet_profile
 
-def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, tol=1e-5):
+def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, tol=1e-5, u_gt_inlet_nd: np.ndarray | None = None):
     """
     Solves steady-state Carreau Navier-Stokes on the .nas/.msh mesh.
     """
@@ -60,11 +60,18 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, 
         eps_prev = sym_grad(u_prev)
         
         gamma_dot = np.sqrt(2.0 * (eps_prev[0][0]**2 + eps_prev[1][1]**2 + 2*eps_prev[0][1]**2) + 1e-12)
-        mu = mu_inf + (mu_0 - mu_inf) * (1.0 + (lam * gamma_dot)**a)**((n_car - 1) / a)
+        mu_car = mu_inf + (mu_0 - mu_inf) * (1.0 + (lam * gamma_dot)**a)**((n_car - 1) / a)
+        
+        # Simple isotropic artificial viscosity (approximate SUPG/Crosswind)
+        u_mag = np.sqrt(u_prev[0]**2 + u_prev[1]**2 + 1e-12)
+        
+        h = 0.0005
+        mu_art = 0.5 * rho * u_mag * h
+        mu = mu_car + mu_art
         
         gu = grad(u)
         gv = grad(v)
-        convective = 0.0 # rho * (v[0] * (u_prev[0] * gu[0][0] + u_prev[1] * gu[0][1]) + v[1] * (u_prev[0] * gu[1][0] + u_prev[1] * gu[1][1]))
+        convective = rho * (v[0] * (u_prev[0] * gu[0][0] + u_prev[1] * gu[0][1]) + v[1] * (u_prev[0] * gu[1][0] + u_prev[1] * gu[1][1]))
         viscous = 2.0 * mu * (eps_u[0][0]*eps_v[0][0] + eps_u[1][1]*eps_v[1][1] + 2*eps_u[0][1]*eps_v[0][1])
         pressure = -p * (gv[0][0] + gv[1][1])
         continuity = -q * (gu[0][0] + gu[1][1])
@@ -131,20 +138,34 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, 
     # Let's simply set the inlet velocity to 0 for now in this test.
     # To properly set it, I will define a function and interpolate it over basis_v
     
+    kd_exact = KDTree(pos_target_nd * d_bar)
+
     def u_in_func(x_pts):
-        # x_pts is (2, N_pts)
+        # If we have exact GT inlet, map points directly to GT inlet nodes
+        if u_gt_inlet_nd is not None:
+            _, nearest = kd_exact.query(x_pts.T)
+            return np.stack([u_gt_inlet_nd[nearest, 0] * u_ref, u_gt_inlet_nd[nearest, 1] * u_ref])
+            
         y = x_pts[0]*tangent[0] + x_pts[1]*tangent[1] - (inlet_center[0]*tangent[0] + inlet_center[1]*tangent[1])
         u_mag = get_inlet_profile(U_inlet, H_inlet, y, phys_cfg)
         return np.stack([u_mag * flow_dir[0], u_mag * flow_dir[1]])
         
     x_bc = np.zeros(basis.N)
-    x_bc[basis.nodal_dofs[0, :]] = u_in_func(mesh.p[:, :basis.nodal_dofs.shape[1]])[0]
-    x_bc[basis.nodal_dofs[1, :]] = u_in_func(mesh.p[:, :basis.nodal_dofs.shape[1]])[1]
     
-    # Evaluate at facet midpoints
-    facet_midpoints = 0.5 * (mesh.p[:, mesh.facets[0]] + mesh.p[:, mesh.facets[1]])
-    x_bc[basis.facet_dofs[0, :]] = u_in_func(facet_midpoints)[0]
-    x_bc[basis.facet_dofs[1, :]] = u_in_func(facet_midpoints)[1]
+    if u_gt_inlet_nd is not None:
+        _, nearest_corners = kd_exact.query(mesh.p[:, :basis.nodal_dofs.shape[1]].T)
+        x_bc[basis.nodal_dofs[0, :]] = u_gt_inlet_nd[nearest_corners, 0] * u_ref
+        x_bc[basis.nodal_dofs[1, :]] = u_gt_inlet_nd[nearest_corners, 1] * u_ref
+        
+        _, nearest_facets = kd_exact.query(mesh.p[:, basis.nodal_dofs.shape[1]:].T)
+        x_bc[basis.facet_dofs[0, :]] = u_gt_inlet_nd[nearest_facets, 0] * u_ref
+        x_bc[basis.facet_dofs[1, :]] = u_gt_inlet_nd[nearest_facets, 1] * u_ref
+    else:
+        x_bc[basis.nodal_dofs[0, :]] = u_in_func(mesh.p[:, :basis.nodal_dofs.shape[1]])[0]
+        x_bc[basis.nodal_dofs[1, :]] = u_in_func(mesh.p[:, :basis.nodal_dofs.shape[1]])[1]
+        facet_pts = mesh.p[:, basis.nodal_dofs.shape[1]:]
+        x_bc[basis.facet_dofs[0, :]] = u_in_func(facet_pts)[0]
+        x_bc[basis.facet_dofs[1, :]] = u_in_func(facet_pts)[1]
     D_inlet = basis.get_dofs("inlet").drop('u^2')
     D_wall = basis.get_dofs("wall").drop('u^2')
     D_all = np.concatenate([D_inlet.all(), D_wall.all()]) if len(D_inlet.all()) > 0 else D_wall.all()
@@ -170,6 +191,8 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, 
             x_new = fem.solve(A_enc, b_enc)
         else:
             x_new = fem.solve(A, b)
+            
+        x_new = 0.5 * x_new + 0.5 * x
             
         diff = np.linalg.norm(x_new - x)
         print(f"Iter {it}: diff={diff:.6e}")
