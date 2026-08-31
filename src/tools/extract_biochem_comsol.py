@@ -583,7 +583,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--full-transfer",
         action="store_true",
-        help="With --pack-transfer: include domain txt, .nas, and kine.pt (not needed for graph work).",
+        help="With --pack-transfer: include domain txt and kine.pt (not needed for graph work).",
+    )
+    parser.add_argument(
+        "--mesh-only",
+        action="store_true",
+        help="With --pack-transfer: pack only anchor meshes (.nas/.msh + sidecar, no graph.pt).",
     )
     parser.add_argument(
         "--zip-transfer",
@@ -623,6 +628,7 @@ def main(argv: list[str] | None = None) -> None:
         install_incoming_extract_transfer,
         select_bundle_names_for_zip,
         stage_extract_transfer_bundle,
+        stems_from_raw_meshes,
         zip_extract_transfer_dir,
     )
 
@@ -645,7 +651,8 @@ def main(argv: list[str] | None = None) -> None:
             )
         print(f"[i] installing from {incoming.label}")
         for name, written in results:
-            if written.get("graph.pt", "").startswith("skip"):
+            skip_vals = [v for v in written.values() if str(v).startswith("skip")]
+            if skip_vals:
                 print(f"[skip] {name}: already installed (use --force to overwrite)")
                 continue
             print(f"[OK] installed {name}")
@@ -663,6 +670,8 @@ def main(argv: list[str] | None = None) -> None:
                 ref = parse_biochem_extract_stem(token)
                 resolved.append(ref.stem if ref is not None else token)
             pack_stems = resolved
+        elif args.mesh_only:
+            pack_stems = stems_from_raw_meshes(raw_dir)
         else:
             pack_stems = sorted(p.stem for p in extractor.proc_dir.glob("*.pt") if p.is_file())
         if not pack_stems:
@@ -673,6 +682,8 @@ def main(argv: list[str] | None = None) -> None:
             proc_dir=extractor.proc_dir,
             transfer_dir=transfer_base,
             only_new=args.only_new,
+            mesh_only=args.mesh_only,
+            raw_dir=raw_dir,
         )
         if args.only_new:
             for stem in requested_stems:
@@ -704,10 +715,14 @@ def main(argv: list[str] | None = None) -> None:
                 label_dir=label_dir,
                 proc_dir=extractor.proc_dir,
                 kine_dir=extractor.kine_anchor_dir,
-                lite=not args.full_transfer,
+                lite=not args.full_transfer and not args.mesh_only,
+                mesh_only=args.mesh_only,
             )
             if bundle is None:
-                print(f"[WARN] {stem}: no graph.pt, skip pack")
+                if args.mesh_only:
+                    print(f"[WARN] {stem}: no .nas/.msh, skip pack")
+                else:
+                    print(f"[WARN] {stem}: no graph.pt, skip pack")
                 continue
             print(f"[save] {bundle}")
             packed.append(stem)

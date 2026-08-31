@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from src.data_gen.lib.biochem_extract_transfer import (
@@ -109,7 +110,7 @@ def test_install_all_filters_by_stem(tmp_path):
     assert not (dest / "data/processed/graphs_biochem_anchors/wound_patient002.pt").is_file()
 
 
-def test_lite_pack_skips_txt_nas_and_kine(tmp_path):
+def test_lite_pack_includes_nas_when_present(tmp_path):
     stem = "wound_patient003"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
@@ -136,8 +137,8 @@ def test_lite_pack_skips_txt_nas_and_kine(tmp_path):
     assert bundle is not None
     assert (bundle / "graph.pt").is_file()
     assert (bundle / "mesh.msh").is_file()
+    assert (bundle / "mesh.nas").is_file()
     assert (bundle / "mesh.json").is_file()
-    assert not (bundle / "mesh.nas").exists()
     assert (bundle / "wound.txt").is_file()
     assert not (bundle / "kine.pt").exists()
     dest = tmp_path / "laptop"
@@ -145,6 +146,33 @@ def test_lite_pack_skips_txt_nas_and_kine(tmp_path):
     assert "graph.pt" in written
     assert "wound.txt" in written
     assert (dest / "data/processed/cfd_results_biochem" / f"{stem}_wound.txt").is_file()
+
+
+def test_mesh_only_pack_roundtrip(tmp_path):
+    stem = "patient041"
+    raw = tmp_path / "raw"
+    label = tmp_path / "label"
+    proc = tmp_path / "proc"
+    _touch(raw / f"{stem}.nas", "nas")
+    _touch(raw / f"{stem}.msh", "mesh")
+    _touch(raw / f"{stem}.json", '{"unit":"cm"}')
+    bundle = stage_extract_transfer_bundle(
+        stem,
+        raw_dir=raw,
+        label_dir=label,
+        proc_dir=proc,
+        root=tmp_path,
+        mesh_only=True,
+    )
+    assert bundle is not None
+    assert (bundle / "mesh.nas").is_file()
+    assert not (bundle / "graph.pt").exists()
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mesh_only"] is True
+    dest = tmp_path / "laptop"
+    written = install_extract_transfer_bundle(bundle, root=dest, force=True)
+    assert "mesh.nas" in written
+    assert (dest / "data/raw/biochem_anchors" / f"{stem}.nas").read_text(encoding="utf-8") == "nas"
 
 
 def test_lite_repack_drops_full_pack_leftovers(tmp_path):

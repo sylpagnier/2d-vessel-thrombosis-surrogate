@@ -4,12 +4,15 @@ Canonical training paths stay split (``raw/biochem_anchors``, ``cfd_results_bioc
 ``graphs_biochem_anchors``). After a successful extract we also mirror the artifacts
 into ``data/extract_transfer/<stem>/``.
 
-Default pack is *lite* (graph + mesh sidecar + wound.txt). Do not copy ``.mph`` files for
+Default pack is *lite* (graph + mesh + ``.nas`` + wound.txt). Do not copy ``.mph`` files for
 graph work — they dominate Drive time and are unused on the analysis laptop.
 
 On the COMSOL PC::
 
     python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --only-new
+    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --mesh-only --stem patient009,patient041
+
+``--mesh-only`` builds a small FEM mesh drop (``.nas``/``.msh`` + sidecar, no ``graph.pt``).
 
 Upload ``data/extract_transfer.zip`` (or the ``extract_transfer`` folder). On this
 laptop leave the Drive download in ``Downloads``, then::
@@ -36,10 +39,18 @@ from src.data_gen.lib.biochem_comsol_auto_export import parse_biochem_extract_st
 from src.utils.paths import data_root, get_project_root
 
 MANIFEST_NAME = "manifest.json"
-# Drive/laptop copies: graph + small mesh + wound identity. Skip .mph, .nas, domain txt, kine.
+# Drive/laptop copies: graph + mesh sidecar + .nas + wound identity. Skip .mph / domain txt / kine.
 _LITE_NAMES = frozenset(
-    {"graph.pt", "graph_metadata.json", "mesh.msh", "mesh.json", "wound.txt"}
+    {
+        "graph.pt",
+        "graph_metadata.json",
+        "mesh.msh",
+        "mesh.nas",
+        "mesh.json",
+        "wound.txt",
+    }
 )
+_MESH_ONLY_NAMES = frozenset({"mesh.msh", "mesh.nas", "mesh.json"})
 
 _BUNDLE_KEYS: tuple[tuple[str, str, bool], ...] = (
     # (bundle filename, dest relative to repo root with {stem}, required)
@@ -83,16 +94,50 @@ def stem_needs_pack(
     return _mtime(graph_src) > _mtime(bundle_graph)
 
 
+def stem_needs_mesh_pack(
+    stem: str,
+    *,
+    raw_dir: Path,
+    transfer_dir: Path,
+) -> bool:
+    """True when a mesh bundle is missing or older than the anchor ``.nas``/``.msh``."""
+    raw_dir = Path(raw_dir)
+    nas = raw_dir / f"{stem}.nas"
+    msh = raw_dir / f"{stem}.msh"
+    if not nas.is_file() and not msh.is_file():
+        return False
+    bundle = Path(transfer_dir) / stem
+    bundle_nas = bundle / "mesh.nas"
+    bundle_msh = bundle / "mesh.msh"
+    if nas.is_file():
+        if not bundle_nas.is_file():
+            return True
+        return _mtime(nas) > _mtime(bundle_nas)
+    if not bundle_msh.is_file():
+        return True
+    return _mtime(msh) > _mtime(bundle_msh)
+
+
 def filter_stems_for_pack(
     stems: Iterable[str],
     *,
     proc_dir: Path,
     transfer_dir: Path,
     only_new: bool,
+    mesh_only: bool = False,
+    raw_dir: Path | None = None,
 ) -> list[str]:
     ordered = list(stems)
     if not only_new:
         return ordered
+    if mesh_only:
+        if raw_dir is None:
+            raise ValueError("raw_dir is required for mesh-only --only-new filtering")
+        return [
+            s
+            for s in ordered
+            if stem_needs_mesh_pack(s, raw_dir=raw_dir, transfer_dir=transfer_dir)
+        ]
     return [s for s in ordered if stem_needs_pack(s, proc_dir=proc_dir, transfer_dir=transfer_dir)]
 
 
@@ -111,6 +156,22 @@ def bundle_needs_install(
         return True
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     stem = str(manifest.get("stem") or bundle_dir.name)
+    if bool(manifest.get("mesh_only")):
+        local_mesh = (Path(root) if root is not None else get_project_root()) / (
+            f"data/raw/biochem_anchors/{stem}.nas"
+        )
+        incoming_mesh = bundle_dir / "mesh.nas"
+        if not incoming_mesh.is_file():
+            incoming_mesh = bundle_dir / "mesh.msh"
+        if not local_mesh.is_file():
+            local_mesh = (Path(root) if root is not None else get_project_root()) / (
+                f"data/raw/biochem_anchors/{stem}.msh"
+            )
+        if not local_mesh.is_file():
+            return True
+        if not incoming_mesh.is_file():
+            return False
+        return _mtime(incoming_mesh) > _mtime(local_mesh)
     local_graph = canonical_graph_dest(stem, root=root)
     incoming_graph = bundle_dir / "graph.pt"
     if not local_graph.is_file():
@@ -314,16 +375,24 @@ def stage_extract_transfer_bundle(
     kine_dir: Path | None = None,
     root: Path | None = None,
     lite: bool = True,
+    mesh_only: bool = False,
 ) -> Path | None:
     """Mirror one extracted stem into ``data/extract_transfer/<stem>/``. Returns bundle dir or None.
 
-    ``lite=True`` (default) is the Drive pack: graph + mesh sidecar + wound.txt,
-    no ``.mph`` / ``.nas`` / domain txt.
+    ``lite=True`` (default) is the Drive pack: graph + mesh sidecar + ``.nas`` + wound.txt,
+    no ``.mph`` / domain txt / kine.
+
+    ``mesh_only=True`` packs only anchor meshes (``.nas``/``.msh`` + sidecar) for FEM eval.
     """
     ref = parse_biochem_extract_stem(stem)
     canonical = ref.stem if ref is not None else stem
     graph_src = Path(proc_dir) / f"{canonical}.pt"
-    if not graph_src.is_file():
+    nas_src = Path(raw_dir) / f"{canonical}.nas"
+    msh_src = Path(raw_dir) / f"{canonical}.msh"
+    if mesh_only:
+        if not nas_src.is_file() and not msh_src.is_file():
+            return None
+    elif not graph_src.is_file():
         return None
 
     bundle = bundle_dir_for_stem(canonical, root=root)
@@ -332,8 +401,8 @@ def stage_extract_transfer_bundle(
     sources = {
         "graph.pt": graph_src,
         "graph_metadata.json": Path(proc_dir) / f"{canonical}_metadata.json",
-        "mesh.msh": Path(raw_dir) / f"{canonical}.msh",
-        "mesh.nas": Path(raw_dir) / f"{canonical}.nas",
+        "mesh.msh": msh_src,
+        "mesh.nas": nas_src,
         "mesh.json": Path(raw_dir) / f"{canonical}.json",
         "domain.txt": Path(label_dir) / f"{canonical}.txt",
         "inlet.txt": Path(label_dir) / f"{canonical}_inlet.txt",
@@ -342,12 +411,12 @@ def stage_extract_transfer_bundle(
         "wound.txt": Path(label_dir) / f"{canonical}_wound.txt",
         "kine.pt": (Path(kine_dir) / f"{canonical}.pt") if kine_dir is not None else None,
     }
-    want = set(sources)
-    if lite:
+    if mesh_only:
+        want = set(_MESH_ONLY_NAMES)
+    elif lite:
         want = set(_LITE_NAMES)
-        msh = sources["mesh.msh"]
-        if msh is None or not Path(msh).is_file():
-            want.add("mesh.nas")
+    else:
+        want = set(sources)
     packed: list[str] = []
     for name, src in sources.items():
         if src is None or name not in want:
@@ -368,11 +437,26 @@ def stage_extract_transfer_bundle(
     manifest = {
         "stem": canonical,
         "variant": ref.variant if ref is not None else "unknown",
-        "lite": lite,
+        "lite": lite and not mesh_only,
+        "mesh_only": mesh_only,
         "files": files,
     }
     (bundle / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return bundle
+
+
+def stems_from_raw_meshes(raw_dir: Path) -> list[str]:
+    """Anchor stems with a ``.nas`` or ``.msh`` under ``raw_dir``."""
+    raw_dir = Path(raw_dir)
+    if not raw_dir.is_dir():
+        return []
+    stems: set[str] = set()
+    for path in raw_dir.iterdir():
+        if not path.is_file():
+            continue
+        if path.suffix.lower() in {".nas", ".msh"}:
+            stems.add(path.stem)
+    return sorted(stems)
 
 
 def list_transfer_bundles(*, root: Path | None = None, transfer_dir: Path | None = None) -> list[Path]:
@@ -399,6 +483,7 @@ def install_extract_transfer_bundle(
         raise FileNotFoundError(f"No {MANIFEST_NAME} in {bundle_dir}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     stem = str(manifest.get("stem") or bundle_dir.name)
+    mesh_only = bool(manifest.get("mesh_only"))
     repo = Path(root) if root is not None else get_project_root()
     written: dict[str, str] = {}
     files = manifest.get("files") or {}
@@ -407,7 +492,7 @@ def install_extract_transfer_bundle(
         dest_rel = files.get(name) or rel.format(stem=stem)
         dest = repo / dest_rel
         if not src.is_file():
-            if required:
+            if required and not (mesh_only and name == "graph.pt"):
                 raise FileNotFoundError(f"{bundle_dir.name}: missing required {name}")
             continue
         if dest.is_file() and not force:
@@ -439,7 +524,12 @@ def install_all_extract_transfer_bundles(
         if want is not None and bundle.name not in want:
             continue
         if not bundle_needs_install(bundle, root=root, force=force, only_new=only_new):
-            results.append((bundle.name, {"graph.pt": "skip already installed"}))
+            manifest_path = bundle / MANIFEST_NAME
+            mesh_only = False
+            if manifest_path.is_file():
+                mesh_only = bool(json.loads(manifest_path.read_text(encoding="utf-8")).get("mesh_only"))
+            skip_key = "mesh.nas" if mesh_only else "graph.pt"
+            results.append((bundle.name, {skip_key: "skip already installed"}))
             continue
         results.append(
             (
