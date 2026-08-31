@@ -656,11 +656,10 @@ class PatchFactoryComsolGenerator:
         reconnects = 0
         consecutive_fails = 0
 
-        try:
-            from tqdm import tqdm
-            iterator = tqdm(samples, desc="Patches", unit="patch")
-        except Exception:
-            iterator = samples
+        from src.utils.console_progress import progress, quiet_pipeline_logs
+
+        quiet_pipeline_logs()
+        iterator = progress(samples, desc="Patches", unit="patch")
 
         for s in iterator:
             if not overwrite and self._npz_path(s).exists():

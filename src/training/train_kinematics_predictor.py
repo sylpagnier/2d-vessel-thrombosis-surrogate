@@ -1102,6 +1102,10 @@ def compute_step_loss(
     # gate is EMPTY and thirteen physics channels go to zero.  Off unless weighted.
     w_tail = float(os.environ.get("KINEMATICS_TAIL_WEIGHT", "") or 0.0)
     l_band_tail = terms.get("l_band_tail", torch.tensor(0.0, device=device))
+    # The first interior ring sets `du/dn`, i.e. wall shear, on its own -- the wall nodes
+    # themselves are pinned by the hard BC and cost nothing.  Its weight IS the term's scale.
+    w_ring = float(os.environ.get("KINEMATICS_RING_WEIGHT", "") or 0.0)
+    l_ring = terms.get("l_ring", torch.tensor(0.0, device=device))
     # T6: make the analytic prior a performance FLOOR.  Zero wherever the model beats the
     # prior it was handed, positive only where it is worse -- which today is 45 of 52 packs.
     w_floor = float(os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "") or
@@ -1126,6 +1130,7 @@ def compute_step_loss(
         + (w_band * (l_band_sr + l_band_dsrx))
         + (w_gate * l_band_gate)
         + (w_tail * l_band_tail)
+        + (w_ring * l_ring)
         + (w_floor * l_prior_floor)
         + (w_bfloor * l_band_floor)
         + (w_shear * l_shear)
@@ -1152,6 +1157,7 @@ def compute_step_loss(
         "L_band_dsrx": float(l_band_dsrx.item()),
         "L_band_gate": float(l_band_gate.item()),
         "L_band_tail": float(l_band_tail.item()),
+        "L_ring": float(l_ring.item()),
         "C_tail": float(weighted_tail.item()) if torch.is_tensor(weighted_tail) else float(weighted_tail),
         "L_band_floor": float(l_band_floor.item()),
         "L_prior_floor": float(l_prior_floor.item()),

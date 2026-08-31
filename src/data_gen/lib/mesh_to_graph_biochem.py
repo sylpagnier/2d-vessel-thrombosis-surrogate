@@ -17,7 +17,7 @@ import meshio
 from pathlib import Path
 from scipy.spatial import KDTree, cKDTree
 from torch_geometric.data import Data
-from tqdm import tqdm
+from src.utils.console_progress import progress
 from src.config import NodeFeat, VesselConfig, PhysicsConfig, BiochemConfig
 from src.data_gen.lib.node_feature_assembly import (
     build_biochem_bc_x_tensor,
@@ -673,7 +673,7 @@ class MeshToGraphPhase3:
         files = sorted(self.raw_dir.glob("*.msh"))
         if max_files is not None:
             files = files[:max_files]
-        for f in tqdm(files):
+        for f in progress(files, desc="Graphs", unit="mesh"):
             self.process_file(f.name)
 
 

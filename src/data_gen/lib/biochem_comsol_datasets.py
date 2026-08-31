@@ -88,6 +88,20 @@ def _label_is_domain_candidate(label: str) -> bool:
     return not any(part in ll for part in _SKIP_DOMAIN_LABEL_PARTS)
 
 
+# Dataset resolution is re-run for every field of every vessel; announce each
+# distinct answer once instead of three times per sample.
+_ANNOUNCED_DATASETS: set[tuple[str, str, str]] = set()
+
+
+def _announce_dataset(tag: str, label: str, how: str) -> None:
+    key = (str(tag), str(label), str(how))
+    if key in _ANNOUNCED_DATASETS:
+        logger.debug("[i] Domain dataset '%s' (%s) <- %s", tag, label, how)
+        return
+    _ANNOUNCED_DATASETS.add(key)
+    logger.info("[i] Domain dataset '%s' (%s) <- %s", tag, label, how)
+
+
 def resolve_solution_dataset(
     model_java,
     sol_tag: str,
@@ -110,12 +124,7 @@ def resolve_solution_dataset(
 
     for row in datasets:
         if row.get("solution") == sol_tag and _label_is_domain_candidate(str(row.get("label", ""))):
-            logger.info(
-                "[i] Domain dataset '%s' (%s) <- solution %s",
-                row["tag"],
-                row.get("label") or row["tag"],
-                sol_tag,
-            )
+            _announce_dataset(row["tag"], row.get("label") or row["tag"], f"solution {sol_tag}")
             return str(row["tag"])
 
     for row in datasets:
@@ -124,10 +133,10 @@ def resolve_solution_dataset(
         if not _label_is_domain_candidate(label):
             continue
         if "study 1" in ll and sol_tag.lower() in ll:
-            logger.info("[i] Domain dataset '%s' (%s) <- label match Study 1", row["tag"], label)
+            _announce_dataset(row["tag"], label, "label match Study 1")
             return str(row["tag"])
         if "biochem" in ll and "solution 1" in ll:
-            logger.info("[i] Domain dataset '%s' (%s) <- biochem Study 1", row["tag"], label)
+            _announce_dataset(row["tag"], label, "biochem Study 1")
             return str(row["tag"])
 
     non_boundary = [r for r in datasets if _label_is_boundary_dataset(str(r.get("label", "")), str(r["tag"])) is None]

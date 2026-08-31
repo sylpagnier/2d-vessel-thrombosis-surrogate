@@ -14,7 +14,7 @@ achieved via *processes*, not threads.  The strategy is:
   3. Every worker calls gmsh.initialize() once, iterates over its chunk, and
      calls gmsh.finalize() before exiting — keeping Gmsh init overhead at
      O(num_workers) rather than O(n).
-  4. ProcessPoolExecutor dispatches chunks; tqdm tracks completion.
+  4. ProcessPoolExecutor dispatches chunks; a progress counter tracks completion.
 
 The result is near-linear scaling up to the physical core count.
 """
@@ -36,7 +36,7 @@ import gmsh
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import PolyCollection
-from tqdm import tqdm
+from src.utils.console_progress import counter, quiet_pipeline_logs
 
 # Running ``python src/data_gen/lib/vessel_generator.py`` does not put the repo
 # root on sys.path, so ``from src.config`` fails unless we add it first.
@@ -1540,6 +1540,7 @@ class VesselGenerator:
         num_workers = max(1, phys_cores - 1) if num_workers is None else num_workers
         num_workers = min(num_workers, n)
 
+        quiet_pipeline_logs()
         if start_idx is None:
             start_idx = _next_vessel_index(self.output_dir)
 
@@ -1556,7 +1557,9 @@ class VesselGenerator:
                 f"[indices {start_idx}..{start_idx + n - 1}] "
                 f"[{num_workers} workers / {phys_cores} logical cores]"
             )
-        if pathology_mode:
+        is_mix = bool(pathology_mode) and ("," in str(pathology_mode) or ":" in str(pathology_mode))
+        if pathology_mode and not is_mix:
+            # A mix spec is echoed once, already expanded, a few lines down.
             logger.info("Pathology mode: %s", pathology_mode)
         if aneurysm_wall_mode != "one":
             logger.info("Aneurysm wall mode: %s", aneurysm_wall_mode)
@@ -1578,10 +1581,10 @@ class VesselGenerator:
         # `pathology_mode` may be a single mode (historical) or a mix spec -- see
         # `parse_pathology_mix`.  A mix lets one command cover the severe-stenosis tail that
         # random sampling under-represents, instead of a second run with a second seed.
-        if pathology_mode and ("," in str(pathology_mode) or ":" in str(pathology_mode)):
+        if is_mix:
             per_vessel_modes = parse_pathology_mix(pathology_mode, n, rng)
             from collections import Counter as _C
-            logger.info("Pathology mix: %s", dict(_C(per_vessel_modes)))
+            logger.info("Pathology mix: %s -> %s", pathology_mode, dict(_C(per_vessel_modes)))
         else:
             per_vessel_modes = [pathology_mode] * n
         all_params = [
@@ -1613,7 +1616,7 @@ class VesselGenerator:
             results = _worker_run_chunk(all_params, cfg_d, out_str)
 
             # FIX: Initialize the progress bar (pbar) for the single-worker loop
-            with tqdm(total=n, desc="Generating vessels", unit="vessel") as pbar:
+            with counter(desc="Vessels", total=n, unit="vessel") as pbar:
                 for idx, success, err in results:
                     pbar.update(1)
                     if success:
@@ -1632,7 +1635,7 @@ class VesselGenerator:
                     for chunk in chunks
                 ]
 
-                with tqdm(total=n, desc="Generating vessels", unit="vessel") as pbar:
+                with counter(desc="Vessels", total=n, unit="vessel") as pbar:
                     for async_result, chunk in async_results:
                         try:
                             # Force a hard timeout (e.g., 60 seconds per chunk)

@@ -7,7 +7,7 @@ import meshio
 from pathlib import Path
 from scipy.spatial import cKDTree, KDTree
 from torch_geometric.data import Data
-from tqdm import tqdm
+from src.utils.console_progress import progress
 import glob
 import re
 from src.config import NodeFeat, VesselConfig, PhysicsConfig, BiochemConfig, biochem_comsol_time_cap_s
@@ -1057,7 +1057,7 @@ class PatientDataExtractor:
 
         from src.data_gen.lib.biochem_comsol_auto_export import resolve_biochem_comsol_model_path
 
-        for stem in tqdm(stems, desc="Extracting Biochem anchor data"):
+        for stem in progress(stems, desc="Biochem extract", unit="vessel"):
             if from_comsol:
                 domain_txt = self.label_dir / f"{stem}.txt"
                 mph_path = resolve_biochem_comsol_model_path(stem)

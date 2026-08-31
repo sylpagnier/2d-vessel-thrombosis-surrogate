@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 from torch_geometric.data import Data
-from tqdm import tqdm
+from src.utils.console_progress import progress
 
 from src.config import PhysicsConfig, VesselConfig
 from src.utils.paths import get_project_root
@@ -335,5 +335,5 @@ class BaseMeshToGraph(ABC):
         files = sorted([f for f in os.listdir(self.raw_dir) if f.endswith(".msh")])
         if max_files is not None:
             files = files[: int(max_files)]
-        for f in tqdm(files):
+        for f in progress(files, desc="Graphs", unit="mesh"):
             self.process_file(f)

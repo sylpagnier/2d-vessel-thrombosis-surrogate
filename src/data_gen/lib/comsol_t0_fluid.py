@@ -56,7 +56,7 @@ def apply_t0_fluid_physics(model, phys: PhysicsConfig | None = None) -> None:
     for grp in ("ShapeProperty", "PhysicsShapeProperty"):
         try:
             spf.prop(grp).set("order_fluid", want)
-            logger.info("order_fluid=%s via %s", want, grp)
+            logger.debug("order_fluid=%s via %s", want, grp)
             break
         except Exception:
             continue
@@ -204,7 +204,7 @@ def set_carreau_n(model, n_val: float) -> None:
 
 def solve_fluid_only(model, study_tag: str | None = None) -> None:
     tag = study_tag or FLUID_ONLY_STUDY
-    logger.info("running COMSOL study %s (phase2 fluid-only equivalent)", tag)
+    logger.debug("running COMSOL study %s (phase2 fluid-only equivalent)", tag)
     model.java.study(tag).run()
 
 

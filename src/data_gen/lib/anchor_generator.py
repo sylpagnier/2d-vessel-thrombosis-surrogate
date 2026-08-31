@@ -1,16 +1,20 @@
 import logging
-import sys
+import time
 import json
 import random
 import numpy as np
 import mph
 import meshio
 from pathlib import Path
-from tqdm import tqdm
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from src.config import VesselConfig, PhysicsConfig
 from src.utils.paths import (
     get_project_root,
+)
+from src.utils.console_progress import (
+    logs_above_bar,
+    progress,
+    quiet_pipeline_logs,
 )
 from src.utils.units import MESH_UNIT_CM, d_bar_si_from_sidecar
 from scipy.interpolate import NearestNDInterpolator
@@ -33,14 +37,6 @@ def _safe_log(level: str, msg: str, *args, **kwargs) -> None:
         getattr(logger, level)(msg, *args, **kwargs)
     except OSError:
         pass
-
-
-def _tqdm_or_plain(iterable, *, desc: str):
-    try:
-        sys.stdout.flush()
-        return tqdm(iterable, desc=desc)
-    except OSError:
-        return iterable
 
 
 def list_anchor_candidate_json_paths(
@@ -223,6 +219,7 @@ class AnchorGenerator:
         return self._final_target_output_dir()
 
     def __enter__(self):
+        quiet_pipeline_logs()
         logger.info(f"Connecting to COMSOL... Loading: {self.template_path.name}")
         self.client = mph.start()
         self.model = self.client.load(str(self.template_path))
@@ -301,7 +298,7 @@ class AnchorGenerator:
         for grp in ("ShapeProperty", "PhysicsShapeProperty"):
             try:
                 ph.prop(grp).set("order_fluid", str(want))
-                logger.info(f"COMSOL discretization: order_fluid={want} (via {grp}).")
+                logger.debug("COMSOL discretization: order_fluid=%s (via %s).", want, grp)
                 return grp
             except Exception:
                 continue
@@ -312,8 +309,13 @@ class AnchorGenerator:
         return ""
 
     def _set_global_physics_parameters(self):
-        logger.info(f"Setting global physics in {self.phys_cfg.viscosity_model} mode.")
-        self._set_element_order()
+        grp = self._set_element_order()
+        logger.info(
+            "Global physics: %s, order_fluid=%d%s",
+            self.phys_cfg.viscosity_model,
+            int(self.phys_cfg.comsol_order_fluid),
+            f" (via {grp})" if grp else " (template default)",
+        )
 
         # Update Parameters (Global)
         self.model.parameter('rho_fluid', f'{self.phys_cfg.rho} [kg/m^3]')
@@ -486,13 +488,14 @@ class AnchorGenerator:
             apply_phase2_inlet_parameters(self.model, d_bar_si, u_ref, self.phys_cfg)
 
             n_verts = import_gmsh_nas_mesh(mesh_j, import_tag, nas_file)
-            logger.info(f"Sample {i}: imported mesh with {n_verts} COMSOL vertices.")
+            logger.debug("[%s] imported mesh with %d COMSOL vertices.", i, n_verts)
             if n_verts < 10:
                 raise RuntimeError(f"Mesh {i} is empty/corrupt (Vertices: {n_verts})")
 
             mesh = meshio.read(msh_file)
             target_nodes = mesh.points[:, :2]
             n_nodes = target_nodes.shape[0]
+            self._last_n_nodes = n_nodes
             if n_nodes != n_verts:
                 logger.warning(
                     "[%s] Gmsh node count (%d) != COMSOL vertex count (%d); "
@@ -504,7 +507,7 @@ class AnchorGenerator:
                     import_stats = validate_mesh_import(
                         target_nodes, mesh_vertex_xy_metres(self.model.java)
                     )
-                    logger.info(
+                    logger.debug(
                         "[%s] mesh import OK: nn_p90=%.2e m exact=%d/%d",
                         i,
                         import_stats["nn_p90_m"],
@@ -564,7 +567,7 @@ class AnchorGenerator:
                     logger.debug(f"[{i}] Skipping step n={n_val}, already exists.")
                     continue
 
-                _safe_log("info", "[%s] Solving for n_index = %s...", i, n_val)
+                _safe_log("debug", "[%s] solving n_index=%s", i, n_val)
                 from src.data_gen.lib.comsol_t0_fluid import set_carreau_n
                 set_carreau_n(self.model, n_val)
                 try:
@@ -860,50 +863,66 @@ class AnchorGenerator:
         # ships short with nothing saying so -- 39/250 on 2026-08-28, all stenosis geometries
         # (RGP_DEQ_REPAIR_PLAN.md B27).
         failures: List[Tuple[str, str]] = []
-        for json_file in _tqdm_or_plain(candidates, desc="Anchors"):
-            if new_written >= max_new:
-                break
-            attempted += 1
-            ok = False
-            self._last_fail_reason = ""
-            try:
-                ok = self._process_single_anchor(
-                    json_file,
-                    mesh_j,
-                    import_tag,
-                    allow_overwrite=allow_overwrite,
-                    continuation_steps=continuation_steps,
-                )
-            except Exception as exc:
-                consecutive_fast_fails += 1
-                if (
-                    reconnect_count < _MAX_COMSOL_RECONNECTS_PER_BATCH
-                    and consecutive_fast_fails >= _CONSECUTIVE_FAST_FAIL_THRESHOLD
-                    and (
-                        isinstance(exc, OSError)
-                        or self._is_comsol_solver_failure(exc)
-                    )
-                ):
-                    reason = (
-                        f"{consecutive_fast_fails} fast failures "
-                        f"(last: {type(exc).__name__}: {exc})"
-                    )
-                    mesh_j, import_tag = self._reconnect_comsol_session(reason)
-                    reconnect_count += 1
-                    consecutive_fast_fails = 0
-                    attempted -= 1
-                    continue
-                consecutive_fast_fails = 0
-                _safe_log("error", "Unhandled error on %s: %s", json_file.stem, exc)
-                self._last_fail_reason = f"{type(exc).__name__}: {exc}"
+        quiet_pipeline_logs()
+        bar = progress(candidates, desc="Anchors", unit="vessel", total=min(len(candidates), max_new))
+        with logs_above_bar():
+            for json_file in bar:
+                if new_written >= max_new:
+                    break
+                attempted += 1
                 ok = False
+                self._last_fail_reason = ""
+                self._last_n_nodes = 0
+                t_vessel = time.perf_counter()
+                try:
+                    ok = self._process_single_anchor(
+                        json_file,
+                        mesh_j,
+                        import_tag,
+                        allow_overwrite=allow_overwrite,
+                        continuation_steps=continuation_steps,
+                    )
+                except Exception as exc:
+                    consecutive_fast_fails += 1
+                    if (
+                        reconnect_count < _MAX_COMSOL_RECONNECTS_PER_BATCH
+                        and consecutive_fast_fails >= _CONSECUTIVE_FAST_FAIL_THRESHOLD
+                        and (
+                            isinstance(exc, OSError)
+                            or self._is_comsol_solver_failure(exc)
+                        )
+                    ):
+                        reason = (
+                            f"{consecutive_fast_fails} fast failures "
+                            f"(last: {type(exc).__name__}: {exc})"
+                        )
+                        mesh_j, import_tag = self._reconnect_comsol_session(reason)
+                        reconnect_count += 1
+                        consecutive_fast_fails = 0
+                        attempted -= 1
+                        continue
+                    consecutive_fast_fails = 0
+                    _safe_log("error", "Unhandled error on %s: %s", json_file.stem, exc)
+                    self._last_fail_reason = f"{type(exc).__name__}: {exc}"
+                    ok = False
 
-            if ok:
-                new_written += 1
-                consecutive_fast_fails = 0
-            else:
-                n_failed += 1
-                failures.append((json_file.stem, self._last_fail_reason or "unknown"))
+                if ok:
+                    new_written += 1
+                    consecutive_fast_fails = 0
+                else:
+                    n_failed += 1
+                    failures.append((json_file.stem, self._last_fail_reason or "unknown"))
+                dt = time.perf_counter() - t_vessel
+                nodes = int(getattr(self, "_last_n_nodes", 0) or 0)
+                if ok:
+                    logger.info("[%s] solved  %6d nodes  %5.0fs", json_file.stem.split("_")[-1], nodes, dt)
+                else:
+                    logger.warning(
+                        "[%s] FAILED  %6d nodes  %5.0fs  %s",
+                        json_file.stem.split("_")[-1], nodes, dt,
+                        (self._last_fail_reason or "unknown")[:80],
+                    )
+                bar.set_postfix_str(f"ok={new_written} fail={n_failed}")
 
         pool_exhausted = new_written < max_new and attempted >= len(candidates)
         if new_written < max_new:

@@ -284,6 +284,48 @@ def _boundary_data_weight(default: float) -> float:
         return float(default)
 
 
+def _first_ring_loss(data, pred, node_is_anchor):
+    """Supervise the FIRST INTERIOR RING -- the nodes that alone determine wall shear.
+
+    The hard BC ``u = uv_prior + sdf * uvp`` pins the prediction at the wall: measured over 30
+    deploy packs the velocity error ON the wall is 1e-5, against 7.8e-2 one hop in and 1.2e-1 in
+    the interior.  So the wall nodes are correct by construction and cost nothing, while
+    ``sr = du/dn`` is a difference between the wall and that first ring -- its numerator is
+    ENTIRELY the ring's error, with no cancellation.
+
+    That is why the surrogate is worse at `sr` (spatial corr 0.413) than at `dsrx` (0.703),
+    which differentiates ALONG the wall where errors are correlated and partly cancel.  And it
+    is why the gate fails: fixing `sr` alone lifts wall gate Jaccard 0.339 -> 0.617.
+
+    The ring is ~4% of nodes and carried ordinary interior weight.  Off unless
+    ``KINEMATICS_RING_WEIGHT`` is set.
+    """
+    import os
+
+    w = os.environ.get("KINEMATICS_RING_WEIGHT", "").strip()
+    if not w:
+        return pred.sum() * 0.0
+    try:
+        scale = float(w)
+    except ValueError:
+        return pred.sum() * 0.0
+    if scale <= 0:
+        return pred.sum() * 0.0
+
+    wall = getattr(data, "mask_wall", None)
+    if wall is None:
+        return pred.sum() * 0.0
+    wall = wall.reshape(-1).bool()
+    ring = wall_band_mask(data, 1).reshape(-1).bool() & ~wall
+    if node_is_anchor is not None:
+        ring = ring & node_is_anchor.reshape(-1).bool()
+    if int(ring.sum()) < 2:
+        return pred.sum() * 0.0
+    uv_p = pred[ring][:, PredChannels.U:PredChannels.V + 1]
+    uv_g = data.y[ring][:, PredChannels.U:PredChannels.V + 1]
+    return F.mse_loss(uv_p, uv_g)
+
+
 def _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s_scale):
     """Penalise the surrogate's inability to reach the LOW TAIL of wall shear rate.
 
@@ -794,6 +836,7 @@ def compute_kinematics_physics_terms(
         "l_band_gate": l_band_gate,
         "l_band_floor": l_band_floor,
         "l_band_tail": l_band_tail,
+        "l_ring": _first_ring_loss(data, pred, node_is_anchor),
         "l_prior_floor": prior_floor_loss(pred, data, node_is_anchor=node_is_anchor),
         "l_data_kine": l_data_kine,
         "l_data_mu": l_data_mu,

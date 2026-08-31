@@ -384,14 +384,12 @@ def _execute_phase_interactive_plan(
             _report_cohort_health(gen, pending)
 
     if plan.run_mesh:
-        _safe_print("\n--- Mesh to graph ---")
+        _safe_print(f"\n--- Mesh to graph: meshes -> target graphs ({rheology}) ---")
         try:
             from src.data_gen.lib.mesh_to_graph import MeshToGraph
 
             # Process target graphs only; no intermediate continuation sweeps.
             final_subdir = _final_subdir_for_rheology(rheology)
-            target_label = final_subdir
-            _safe_print(f"\nConverting Meshes -> Graphs for TARGET ({target_label})...")
             processor = MeshToGraph(phase="kinematics", n_subdir=final_subdir, rheology=rheology)
             processor.run()
         except OSError as exc:
@@ -796,14 +794,12 @@ def _run_batch_for_phase(
         _report_cohort_health(gen, pending)
 
     if not args.skip_mesh:
-        _safe_print(f"--- Mesh to graph (rheology={rheology}) ---")
+        _safe_print(f"--- Mesh to graph: meshes -> target graphs ({rheology}) ---")
         try:
             from src.data_gen.lib.mesh_to_graph import MeshToGraph
 
             # Process target graphs only; no intermediate continuation sweeps.
             final_subdir = _final_subdir_for_rheology(rheology)
-            target_label = final_subdir
-            _safe_print(f"\nConverting Meshes -> Graphs for TARGET ({target_label})...")
             processor = MeshToGraph(phase="kinematics", n_subdir=final_subdir, rheology=rheology)
             processor.run()
         except OSError as exc:

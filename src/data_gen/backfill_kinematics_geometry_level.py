@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from tqdm import tqdm
+from src.utils.console_progress import progress
 
 from src.config import VesselConfig
 from src.utils.kinematics_geometry import attach_geometry_metadata, vessel_index_from_stem
@@ -26,7 +26,7 @@ def backfill_graph_dir(
     updated = 0
     missing_json = 0
     already = 0
-    for pt_path in tqdm(paths, desc=str(graph_dir.name)):
+    for pt_path in progress(paths, desc=str(graph_dir.name), unit="pack"):
         stem = pt_path.stem
         data = torch.load(pt_path, weights_only=False)
         had_level = hasattr(data, "geometry_level") and int(data.geometry_level.view(-1)[0].item()) >= 0
