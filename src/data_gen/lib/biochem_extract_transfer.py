@@ -9,12 +9,16 @@ graph work — they dominate Drive time and are unused on the analysis laptop.
 
 On the COMSOL PC::
 
-    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --stem wound_patient001,wound_patient002
+    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --only-new
 
 Upload ``data/extract_transfer.zip`` (or the ``extract_transfer`` folder). On this
 laptop leave the Drive download in ``Downloads``, then::
 
-    python -m src.tools.extract_biochem_comsol --install-bundles
+    python -m src.tools.extract_biochem_comsol --install-bundles --only-new
+
+``--only-new`` on pack skips stems whose transfer bundle already matches the graph;
+on zip it includes only bundles newer than the last ``extract_transfer.zip``;
+on install it skips stems already present locally (use ``--force`` to overwrite).
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import json
 import os
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -50,6 +55,95 @@ _BUNDLE_KEYS: tuple[tuple[str, str, bool], ...] = (
     ("wound.txt", "data/processed/cfd_results_biochem/{stem}_wound.txt", False),
     ("kine.pt", "data/processed/graphs_kinematics_anchors/carreau/{stem}.pt", False),
 )
+
+
+def canonical_graph_dest(stem: str, *, root: Path | None = None) -> Path:
+    """Installed biochem graph path for ``stem``."""
+    repo = Path(root) if root is not None else get_project_root()
+    return repo / "data/processed/graphs_biochem_anchors" / f"{stem}.pt"
+
+
+def _mtime(path: Path) -> float:
+    return path.stat().st_mtime if path.is_file() else 0.0
+
+
+def stem_needs_pack(
+    stem: str,
+    *,
+    proc_dir: Path,
+    transfer_dir: Path,
+) -> bool:
+    """True when the canonical graph is missing a bundle or is newer than the bundle copy."""
+    graph_src = Path(proc_dir) / f"{stem}.pt"
+    if not graph_src.is_file():
+        return False
+    bundle_graph = Path(transfer_dir) / stem / "graph.pt"
+    if not bundle_graph.is_file():
+        return True
+    return _mtime(graph_src) > _mtime(bundle_graph)
+
+
+def filter_stems_for_pack(
+    stems: Iterable[str],
+    *,
+    proc_dir: Path,
+    transfer_dir: Path,
+    only_new: bool,
+) -> list[str]:
+    ordered = list(stems)
+    if not only_new:
+        return ordered
+    return [s for s in ordered if stem_needs_pack(s, proc_dir=proc_dir, transfer_dir=transfer_dir)]
+
+
+def bundle_needs_install(
+    bundle_dir: Path,
+    *,
+    root: Path | None = None,
+    force: bool = False,
+    only_new: bool = False,
+) -> bool:
+    """Whether an incoming bundle should be installed on this machine."""
+    if force or not only_new:
+        return True
+    manifest_path = bundle_dir / MANIFEST_NAME
+    if not manifest_path.is_file():
+        return True
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stem = str(manifest.get("stem") or bundle_dir.name)
+    local_graph = canonical_graph_dest(stem, root=root)
+    incoming_graph = bundle_dir / "graph.pt"
+    if not local_graph.is_file():
+        return True
+    if not incoming_graph.is_file():
+        return False
+    return _mtime(incoming_graph) > _mtime(local_graph)
+
+
+def select_bundle_names_for_zip(
+    *,
+    transfer_dir: Path,
+    dest_zip: Path | None = None,
+    only_new: bool = False,
+    stems: Iterable[str] | None = None,
+) -> list[str]:
+    """Bundle folder names to include in a Drive zip."""
+    base = Path(transfer_dir)
+    bundles = list_transfer_bundles(transfer_dir=base)
+    if stems is not None:
+        want = set(stems)
+        bundles = [b for b in bundles if b.name in want]
+    if not only_new:
+        return [b.name for b in bundles]
+    archive = Path(dest_zip) if dest_zip is not None else base.with_suffix(".zip")
+    if not archive.is_file():
+        return [b.name for b in bundles]
+    zip_mtime = _mtime(archive)
+    return [
+        b.name
+        for b in bundles
+        if (b / "graph.pt").is_file() and _mtime(b / "graph.pt") > zip_mtime
+    ]
 
 
 def extract_transfer_dir(*, root: Path | None = None) -> Path:
@@ -331,6 +425,7 @@ def install_all_extract_transfer_bundles(
     transfer_dir: Path | None = None,
     stems: Iterable[str] | None = None,
     force: bool = False,
+    only_new: bool = False,
 ) -> list[tuple[str, dict[str, str]]]:
     """Install every (or selected) bundle under the transfer folder."""
     want: set[str] | None = None
@@ -342,6 +437,9 @@ def install_all_extract_transfer_bundles(
     results: list[tuple[str, dict[str, str]]] = []
     for bundle in list_transfer_bundles(root=root, transfer_dir=transfer_dir):
         if want is not None and bundle.name not in want:
+            continue
+        if not bundle_needs_install(bundle, root=root, force=force, only_new=only_new):
+            results.append((bundle.name, {"graph.pt": "skip already installed"}))
             continue
         results.append(
             (
@@ -360,6 +458,7 @@ def install_incoming_extract_transfer(
     data_transfer_dir: Path | None = None,
     stems: Iterable[str] | None = None,
     force: bool = False,
+    only_new: bool = False,
 ) -> tuple[IncomingTransfer | None, list[tuple[str, dict[str, str]]]]:
     """Discover a Downloads folder/zip (or explicit path), then install stem bundles."""
     incoming = resolve_incoming_transfer(
@@ -377,6 +476,7 @@ def install_incoming_extract_transfer(
                 transfer_dir=bundle_root,
                 stems=stems,
                 force=force,
+                only_new=only_new,
             )
             return incoming, results
     results = install_all_extract_transfer_bundles(
@@ -384,6 +484,7 @@ def install_incoming_extract_transfer(
         transfer_dir=incoming.transfer_dir,
         stems=stems,
         force=force,
+        only_new=only_new,
     )
     return incoming, results
 
@@ -393,8 +494,9 @@ def zip_extract_transfer_dir(
     root: Path | None = None,
     transfer_dir: Path | None = None,
     dest_zip: Path | None = None,
+    bundle_names: Iterable[str] | None = None,
 ) -> Path:
-    """Write one zip of ``data/extract_transfer`` for a single Drive upload."""
+    """Write one zip of ``data/extract_transfer`` (or a subset) for a single Drive upload."""
     base = Path(transfer_dir) if transfer_dir is not None else extract_transfer_dir(root=root)
     if not base.is_dir():
         raise FileNotFoundError(f"No transfer folder at {base}")
@@ -404,13 +506,27 @@ def zip_extract_transfer_dir(
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
     if dest_zip.exists():
         dest_zip.unlink()
-    archive = shutil.make_archive(
-        str(dest_zip.with_suffix("")),
-        "zip",
-        root_dir=base.parent,
-        base_dir=base.name,
-    )
-    return Path(archive)
+    names = sorted(set(bundle_names)) if bundle_names is not None else None
+    if names is None:
+        archive = shutil.make_archive(
+            str(dest_zip.with_suffix("")),
+            "zip",
+            root_dir=base.parent,
+            base_dir=base.name,
+        )
+        return Path(archive)
+    if not names:
+        raise FileNotFoundError(f"No transfer bundles selected under {base}")
+    with zipfile.ZipFile(dest_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name in names:
+            bundle = base / name
+            if not bundle.is_dir():
+                raise FileNotFoundError(f"Missing transfer bundle folder {bundle}")
+            for path in bundle.rglob("*"):
+                if path.is_file():
+                    arcname = f"{base.name}/{path.relative_to(base).as_posix()}"
+                    zf.write(path, arcname)
+    return dest_zip
 
 
 def unpack_extract_transfer_zip(

@@ -5,12 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.data_gen.lib.biochem_extract_transfer import (
+    bundle_needs_install,
     extract_transfer_zip_path,
+    filter_stems_for_pack,
     install_all_extract_transfer_bundles,
     install_extract_transfer_bundle,
     install_incoming_extract_transfer,
     resolve_incoming_transfer,
+    select_bundle_names_for_zip,
     stage_extract_transfer_bundle,
+    stem_needs_pack,
     unpack_extract_transfer_zip,
     zip_extract_transfer_dir,
 )
@@ -285,3 +289,95 @@ def test_downloads_preferred_over_data_extract_transfer(tmp_path):
     )
     assert found is not None
     assert found.transfer_dir == downloads / "extract_transfer"
+
+
+def test_filter_stems_for_pack_only_new(tmp_path):
+    raw = tmp_path / "raw"
+    label = tmp_path / "label"
+    proc = tmp_path / "proc"
+    transfer = tmp_path / "data" / "extract_transfer"
+    _touch(proc / "wound_patient005.pt", "old")
+    _touch(proc / "wound_patient006.pt", "new")
+    stage_extract_transfer_bundle(
+        "wound_patient005",
+        raw_dir=raw,
+        label_dir=label,
+        proc_dir=proc,
+        root=tmp_path,
+        lite=True,
+    )
+    assert not stem_needs_pack(
+        "wound_patient005",
+        proc_dir=proc,
+        transfer_dir=transfer,
+    )
+    assert stem_needs_pack(
+        "wound_patient006",
+        proc_dir=proc,
+        transfer_dir=transfer,
+    )
+    packed = filter_stems_for_pack(
+        ["wound_patient005", "wound_patient006"],
+        proc_dir=proc,
+        transfer_dir=transfer,
+        only_new=True,
+    )
+    assert packed == ["wound_patient006"]
+
+
+def test_select_bundle_names_for_zip_only_new(tmp_path, monkeypatch):
+    import time
+
+    raw = tmp_path / "raw"
+    label = tmp_path / "label"
+    proc = tmp_path / "proc"
+    _touch(proc / "wound_patient005.pt", "old")
+    stage_extract_transfer_bundle(
+        "wound_patient005",
+        raw_dir=raw,
+        label_dir=label,
+        proc_dir=proc,
+        root=tmp_path,
+        lite=True,
+    )
+    archive = zip_extract_transfer_dir(root=tmp_path)
+    time.sleep(0.05)
+    _touch(proc / "wound_patient006.pt", "new")
+    stage_extract_transfer_bundle(
+        "wound_patient006",
+        raw_dir=raw,
+        label_dir=label,
+        proc_dir=proc,
+        root=tmp_path,
+        lite=True,
+    )
+    transfer = tmp_path / "data" / "extract_transfer"
+    names = select_bundle_names_for_zip(
+        transfer_dir=transfer,
+        dest_zip=archive,
+        only_new=True,
+    )
+    assert names == ["wound_patient006"]
+
+
+def test_install_only_new_skips_existing_graph(tmp_path):
+    stem = "wound_patient006"
+    raw = tmp_path / "raw"
+    label = tmp_path / "label"
+    proc = tmp_path / "proc"
+    _touch(proc / f"{stem}.pt", "incoming")
+    bundle = stage_extract_transfer_bundle(
+        stem, raw_dir=raw, label_dir=label, proc_dir=proc, root=tmp_path, lite=True
+    )
+    assert bundle is not None
+    dest = tmp_path / "laptop"
+    graph_dest = dest / "data/processed/graphs_biochem_anchors" / f"{stem}.pt"
+    _touch(graph_dest, "local")
+    assert not bundle_needs_install(bundle, root=dest, only_new=True)
+    results = install_all_extract_transfer_bundles(
+        root=dest,
+        transfer_dir=tmp_path / "data" / "extract_transfer",
+        only_new=True,
+    )
+    assert results[0][1]["graph.pt"].startswith("skip")
+    assert graph_dest.read_text(encoding="utf-8") == "local"

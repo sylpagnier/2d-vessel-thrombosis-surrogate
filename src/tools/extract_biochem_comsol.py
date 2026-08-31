@@ -35,8 +35,8 @@ CLI::
     python -m src.tools.extract_biochem_comsol --list-only
     python -m src.tools.extract_biochem_comsol --stem patient048 --force
     python -m src.tools.extract_biochem_comsol --verbose   # mph/JVM + per-file export logs
-    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer
-    python -m src.tools.extract_biochem_comsol --install-bundles
+    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --only-new
+    python -m src.tools.extract_biochem_comsol --install-bundles --only-new
     python -m src.data_gen.lib.extract_biochem_comsol_data --no-from-comsol
 """
 
@@ -596,6 +596,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Override the incoming folder or zip (default: Downloads/extract_transfer).",
     )
+    parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help="Pack/zip only stems newer than the last bundle or zip; install only stems "
+        "missing locally (use --force to overwrite).",
+    )
     args = parser.parse_args(argv)
     from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
 
@@ -613,10 +619,14 @@ def main(argv: list[str] | None = None) -> None:
     from src.data_gen.lib.biochem_extract_transfer import (
         default_downloads_dir,
         extract_transfer_dir,
+        filter_stems_for_pack,
         install_incoming_extract_transfer,
+        select_bundle_names_for_zip,
         stage_extract_transfer_bundle,
         zip_extract_transfer_dir,
     )
+
+    transfer_base = args.transfer_dir or extract_transfer_dir()
 
     if args.install_bundles:
         incoming, results = install_incoming_extract_transfer(
@@ -625,6 +635,7 @@ def main(argv: list[str] | None = None) -> None:
             data_transfer_dir=extract_transfer_dir(),
             stems=[s.strip() for s in args.stem.split(",") if s.strip()] or None,
             force=args.force,
+            only_new=args.only_new,
         )
         if incoming is None or not results:
             downloads = default_downloads_dir()
@@ -634,8 +645,13 @@ def main(argv: list[str] | None = None) -> None:
             )
         print(f"[i] installing from {incoming.label}")
         for name, written in results:
+            if written.get("graph.pt", "").startswith("skip"):
+                print(f"[skip] {name}: already installed (use --force to overwrite)")
+                continue
             print(f"[OK] installed {name}")
             for key, dest in written.items():
+                if dest.startswith("skip"):
+                    continue
                 print(f"      {key} -> {dest}")
         raise SystemExit(0)
 
@@ -651,7 +667,36 @@ def main(argv: list[str] | None = None) -> None:
             pack_stems = sorted(p.stem for p in extractor.proc_dir.glob("*.pt") if p.is_file())
         if not pack_stems:
             raise SystemExit("[ERR] No stems to pack.")
+        requested_stems = list(pack_stems)
+        pack_stems = filter_stems_for_pack(
+            pack_stems,
+            proc_dir=extractor.proc_dir,
+            transfer_dir=transfer_base,
+            only_new=args.only_new,
+        )
+        if args.only_new:
+            for stem in requested_stems:
+                if stem not in pack_stems:
+                    print(f"[skip] {stem}: transfer bundle up to date")
+        if not pack_stems:
+            print("[i] No new stems to pack.")
+            if args.zip_transfer:
+                zip_names = select_bundle_names_for_zip(
+                    transfer_dir=transfer_base,
+                    only_new=True,
+                    stems=[s.strip() for s in args.stem.split(",") if s.strip()] or None,
+                )
+                if not zip_names:
+                    raise SystemExit("[ERR] No new bundles to zip.")
+                print(f"[i] zipping {len(zip_names)} bundle(s): {', '.join(zip_names)}")
+                archive = zip_extract_transfer_dir(
+                    transfer_dir=transfer_base,
+                    bundle_names=zip_names,
+                )
+                print(f"[save] {archive}")
+            raise SystemExit(0)
         n = 0
+        packed: list[str] = []
         for stem in pack_stems:
             bundle = stage_extract_transfer_bundle(
                 stem,
@@ -665,14 +710,39 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"[WARN] {stem}: no graph.pt, skip pack")
                 continue
             print(f"[save] {bundle}")
+            packed.append(stem)
             n += 1
         if args.zip_transfer:
-            archive = zip_extract_transfer_dir(transfer_dir=args.transfer_dir)
+            zip_names = select_bundle_names_for_zip(
+                transfer_dir=transfer_base,
+                only_new=args.only_new,
+                stems=packed or None,
+            )
+            if args.only_new and not zip_names:
+                raise SystemExit("[ERR] No new bundles to zip.")
+            if args.only_new:
+                print(f"[i] zipping {len(zip_names)} bundle(s): {', '.join(zip_names)}")
+            archive = zip_extract_transfer_dir(
+                transfer_dir=transfer_base,
+                bundle_names=zip_names if args.only_new else None,
+            )
             print(f"[save] {archive}")
         raise SystemExit(0 if n else 1)
 
     if args.zip_transfer:
-        archive = zip_extract_transfer_dir(transfer_dir=args.transfer_dir)
+        zip_names = select_bundle_names_for_zip(
+            transfer_dir=transfer_base,
+            only_new=args.only_new,
+            stems=[s.strip() for s in args.stem.split(",") if s.strip()] or None,
+        )
+        if args.only_new:
+            if not zip_names:
+                raise SystemExit("[ERR] No new bundles to zip.")
+            print(f"[i] zipping {len(zip_names)} bundle(s): {', '.join(zip_names)}")
+        archive = zip_extract_transfer_dir(
+            transfer_dir=transfer_base,
+            bundle_names=zip_names if args.only_new else None,
+        )
         print(f"[save] {archive}")
         raise SystemExit(0)
 
