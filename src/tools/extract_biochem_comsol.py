@@ -525,6 +525,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Restrict listing/extraction to nowound (patientXXX) or wound (wound_patientXXX).",
     )
     parser.add_argument(
+        "--list-only",
+        action="store_true",
+        help="Print the anchor inventory table and exit (no extract).",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-pull domain txt / overwrite .pt. Keeps mesh and boundary txt unless "
