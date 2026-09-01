@@ -1,4 +1,12 @@
-# Local kinematic corrector (clot velocity diversion)
+# Local Kinematic Corrector
+
+> **STATUS: DELETED (2026-09-01)**
+>
+> The `CorrectorArm` and `predict_corrector` components were fully removed from `physics_wall_model.py`.
+> The models described below failed to capture the non-local (elliptic) nature of flow diversion around a clot.
+> See [The conclusion worth keeping](#the-conclusion-worth-keeping) below for details.
+> An `oracle_blockage` remains for benchmarking the upper bound of any future flow-coupling research.
+> This document is kept as the failure record only.
 
 Optional Stage-A companion: a local k-hop GNN predicts velocity diversion `[dU, dV]` as a
 **residual on frozen RGP-DEQ flow**. Instead of re-solving the global field when a clot
@@ -414,3 +422,372 @@ free the coupler's kine model before `prepare_species_gnn_rollout_static` loads 
 `_resolve_flow_uv` / `ClotAwareFlow.resolve_full`, and `PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128`
 (Windows-safe, set in `go_clot_flow_gate_ladder.ps1`). The standalone ladder then completed all
 seven rungs; the unified `go_clot_flow_gate_full.ps1` crashed only because it ran the pre-fix code.
+
+---
+
+## 2026-08-31 -- THE ORACLE GATE: the corrector's ceiling, measured
+
+Asked before rebuilding anything: **if the flow model reported the clot->flow blockage
+perfectly, would `clot_ml_v0` improve?**  The corrector's whole value is bounded by that
+answer, so it was measured first.
+
+### The instrument
+
+`physics_wall_model.oracle_blockage` -- a `blockage` callable that at rollout step `i` reads
+the **ground-truth** clot occupancy at pack time `i`, applies the measured gelation collapse
+`sr <- sr * 0.1226` there (`GELATION_SR_RATIO`, MODEL_REVIEW 9e.4), re-differentiates with the
+SAME MLS operator the consumer uses, and re-evaluates the gate.  Perfect clot localisation,
+correct shear response, no model error, no stencil mismatch.  NOT deploy-legal by construction.
+
+Wired into `clot_ml.features.build_features` behind `CLOT_ML_ORACLE_BLOCKAGE` (off by default,
+bit-identical when off).  It moves exactly 9 channels: `log_mat_phys`, `onset_phys`,
+`log_mat_owner`, `log_mat_adv`, `log_mat_adv_n`, `log_mat_off_est`, `log_src_reach`,
+`att_adv`, `att_reach` -- the physics backbone and everything downstream of it.
+
+### Result 1 -- the mechanism is REAL and the metric SEES it
+
+Physics backbone masks alone, final frame, GT flow, deploy metric of record (`guiding`):
+
+| vessel | gt_n | base_n | orc_n | baseF1 | orcF1 | baseDS | orcDS | dDS |
+|---|---|---|---|---|---|---|---|---|
+| wound_patient001 | 94 | 63 | 67 | 0.7134 | 0.7702 | 0.7642 | 0.7941 | +0.0299 |
+| wound_patient002 | 58 | 27 | 28 | 0.6353 | 0.6512 | 0.6891 | 0.7264 | +0.0373 |
+| wound_patient003 | 254 | 171 | 210 | 0.8047 | 0.9052 | 0.8127 | 0.9203 | +0.1076 |
+| patient012 | 96 | 41 | 87 | 0.5985 | 0.9508 | 0.7107 | 0.9618 | +0.2511 |
+| patient020 | 110 | 55 | 94 | 0.6667 | 0.9216 | 0.6904 | 0.9205 | +0.2301 |
+| patient032 | 193 | 174 | 191 | 0.9155 | 0.9688 | 0.9120 | 0.9751 | +0.0632 |
+| patient041 | 113 | 55 | 104 | 0.6548 | 0.9585 | 0.7408 | 0.9689 | +0.2281 |
+| patient044 | 163 | 61 | 145 | 0.5446 | 0.9416 | 0.6633 | 0.9538 | +0.2905 |
+| **MEAN** | | | | **0.6917** | **0.8835** | **0.7479** | **0.9026** | **+0.1547** |
+
+**+0.155 on the deploy metric, 8/8 positive**, eight times the +/-0.024 wall noise floor.  The
+node counts show the mechanism directly: `patient044` commits 61 nodes open-loop against a GT of
+163, and 145 with the loop closed.  The open loop under-recruits by ~60% and the shear collapse
+recovers almost exactly the missing nodes.  **This is C3' confirmed** -- one measured constant,
+no corrector, against the corrector's own -3.5%.
+
+### Result 2 -- and it buys `clot_ml_v0` NOTHING
+
+Same oracle, end to end through `scripts/eval_clot_ml_v0.py`:
+
+| vessel | v0 wall off | v0 wall on | v0 off off | v0 off on |
+|---|---|---|---|---|
+| patient012 | 0.9837 | 0.9713 | 0.9125 | 0.8984 |
+| patient020 | 0.9879 | 0.9818 | 0.4911 | 0.5281 |
+| patient032 | 0.9940 | 0.9920 | 0.8117 | 0.8168 |
+| patient041 | 0.9943 | 0.9871 | 0.9603 | 0.9415 |
+| patient044 | 0.9885 | 0.9840 | 0.9276 | 0.9299 |
+| **MEAN** | **0.9897** | **0.9832** | **0.8224** | **0.8230** |
+
+**-0.0065 wall / +0.0006 off-wall**, inside the noise floor.
+
+### The read, and it is NOT "the metric cannot see it"
+
+The ordering is the whole finding:
+
+```
+0.748   physics backbone, open loop
+0.903   physics backbone + ORACLE closed loop      (+0.155)
+0.990   clot_ml_v0, open loop                      (+0.087 ABOVE the oracle backbone)
+```
+
+`clot_ml_v0` already sits **0.087 above the oracle-corrected backbone**.  The network recovers
+the entire closed-loop gain on its own, from t=0 geometry and shear, and the oracle hands it
+information it already has -- while costing distribution shift, since v0 was trained on
+open-loop features.  The corrector's achievable contribution lies *below* where the learned
+model already is.
+
+**Scope of the conclusion.**  This bounds the corrector on the **non-wound cohort under GT t=0
+flow**, where v0 is saturated at 0.984-0.994 and the headroom to a perfect score is 0.010 --
+less than the noise floor.  On that population the question is unanswerable by any experiment,
+a retrain included.  Two regimes are NOT covered and remain open:
+* **The wound vessels**, the only ones with headroom left (v0 wall 0.71-0.90).  There the result
+  is mixed rather than null: `wound_patient003` +0.032 v0 wall / +0.019 `w_reg` (and the
+  `clot_gnn_v5w` baseline +0.037 on both), `wound_patient002` -0.013, `wound_patient001` flat.
+  n=3 -- a hint, not a result.  This is the population MODEL_REVIEW 2.4 nominated.
+* **Predicted flow**, where v0 collapses to wall 0.586 / off 0.350 and ~0.37 of headroom opens
+  up.  The oracle has never been run there.  Note the fix in that regime is surrogate `sr`/`dsrx`
+  accuracy (a converged FEM solve scores as GT does), not a diversion corrector.
+
+### What this retires
+
+The bugged `LocalKinematicCorrector` should not be repaired, retrained, or replaced **for
+`clot_ml_0` on this population**.  Measured on `patient001`, sweeping `delta_mu` over 100x
+(0.068 -> 6.8 Pa.s) moves wall `sr/sr0` only 0.979 -> 0.960, non-monotone, while injecting
+`max|du|_nd` of 0.13-0.32 -- a large velocity perturbation carrying no information about the
+occlusion driving it.  Root causes, all structural: it was selected on interior velocity relL2
+(which correlates -0.030 with the deploy F1 drop); its Patch Factory training BC prescribes a
+moving lid at `y=H` (`patch_factory_comsol.py:51`), so a patch physically **cannot stall**; and
+a 3-layer 5-hop GAT on a k-hop subgraph cannot represent flux redistribution, which is elliptic.
+`data/processed/cfd_results_patch_factory_v2` is also no longer on disk, so any retrain of that
+design is a COMSOL regeneration campaign.
+
+Reproduce: `CLOT_ML_ORACLE_BLOCKAGE=1 python scripts/eval_clot_ml_v0.py`.
+Artifacts: `outputs/diag_oracle_blockage_{off,on}.json`.
+
+---
+
+## 2026-08-31 -- TIER 0/1/1.5: retaining the module honestly
+
+The oracle gate above says the corrector does not pay for `clot_ml_0` today.  It is retained
+because **severe occlusion** is a regime nothing else in the stack covers.  That makes one
+thing indefensible: it was trained at 3-10% blockage and is claimed for the opposite end.
+Three pieces of work close that, none of which is a retrain.
+
+### Tier 0 -- the model card (`scripts/diag_corrector_characterization.py`)
+
+Panel A sweeps `delta_mu` over 4 decades on `patient001` (40 occluded wall nodes, base
+`sr` 83 1/s, `lss` 25):
+
+```
+ dmu[Pa.s]    learned      prior   max|du|_nd  gate(learn)  gate(prior)
+    0.0068     0.9834     0.9332       0.1976         shut         shut
+    0.0680     0.9794     0.5828       0.1790         shut         shut
+    0.3400     0.9891     0.2184       0.1573         shut        FIRES
+    0.6800     0.9944     0.1226       0.1352         shut        FIRES
+    3.4000     0.9831     0.0272       0.1820         shut        FIRES
+    6.8000     0.9596     0.0138       0.3227         shut        FIRES
+   68.0000     0.9752     0.0014       2.9593         shut        FIRES
+
+   learned: response span 0.0348 over 10000x of dmu, monotone=False   <- FAILS the claim
+   prior:   response span 0.9318, monotone=True
+```
+
+Panel B reads the training domain **out of the generator**, so the validity statement cannot
+drift from the code: `clot_mu` 0.1-10 Pa.s, `shear_rate` 50-5000 1/s, blockage 3-10% of channel
+height, and the prescribed-lid top BC that makes stalling impossible.  Panel C states what is
+and is not validated.  `outputs/diag_corrector_characterization.json`.
+
+### Tier 1 -- the Delta-mu response, imposed instead of learned
+
+`coupled_shear_gnn.shear_attenuation` / `composed_wall_shear`:
+
+```
+A(dmu) = 1 / (1 + dmu / DELTA_MU_HALF)        DELTA_MU_HALF = 0.0950 Pa.s
+```
+
+`A(0) = 1` exactly, `A -> 0` at solid occlusion, monotone throughout.  The constant is not
+tuned: it is the solution of `A(0.68) = 0.1226`, the measured gelation collapse, so the law
+reproduces the project's own anchor by construction.  The learned head becomes an OPTIONAL
+additive residual, off by default.  Ten property tests in
+`src/tests/test_local_corrector_properties.py` pin all of it, including the constant-vs-anchor
+identity, so an edit to either fails loudly.
+
+### Tier 1.5 -- validation in the claimed regime, with FEM as the oracle
+
+`solve_local_t0_flow` now accepts `delta_mu_nodal_si`, so a clot can be injected as a
+high-viscosity region -- the Patch Factory's own constitutive picture -- but on the real vessel
+geometry under its real fixed-flux inlet BC, at ANY occlusion fraction.
+`scripts/diag_corrector_severe_occlusion.py`, 5 vessels x 5 fractions, `clot_mu` 0.68 Pa.s,
+scored on `sr/sr0` (the gate's own quantity) against the FEM solve at the same occlusion:
+
+```
+MEAN |error| in sr/sr0, 25 cases
+   base (do nothing)   0.6297
+   learned corrector   0.6841      <- WORSE THAN DOING NOTHING
+   analytic prior      0.3270      <- ~2x better than either
+```
+
+**Three findings, and the third is the important one.**
+
+1. **The learned corrector is worse than the null arm** in the regime it is retained for.  It
+   is not merely uninformative there; applying it costs accuracy.  It must not ship as-is.
+2. **The prior roughly halves the error** and is best exactly where its anchor sits (frac
+   0.05-0.2: |err| 0.006-0.16), degrading away from it (frac 0.6: 0.18-0.96).  That is the
+   expected behaviour of a one-point anchor and should be reported as such, not as a fit.
+3. **THE CLOT->SHEAR MAP IS NOT MONOTONE IN OCCLUSION, and neither arm can express it.**  The
+   FEM ratio RISES with occlusion fraction in **5 of 5 vessels**:
+
+```
+   frac        0.05    0.20    0.40    0.60
+   patient001  0.252   0.237   0.439   0.467
+   patient005  0.074   0.076   0.244   0.300
+   patient008  0.053   0.702   1.565   1.084      <- exceeds 1.0: shear INCREASES
+   patient010  0.037   0.116   0.362   0.406
+   patient011  0.217   0.285   0.496   0.527
+```
+
+   At low occlusion viscous shielding dominates and wall shear collapses.  As the clot fills
+   the lumen, **flux redistribution accelerates the residual channel** and pushes the ratio
+   back up -- past 1.0 on `patient008`, i.e. a partial occlusion RAISES wall shear at the
+   throat.  This is the elliptic, global effect a k-hop local operator cannot represent, and
+   the analytic prior (a pure function of `dmu`) cannot represent it either.  **Any replacement
+   must take occlusion fraction / residual lumen width as an input.**  This is the concrete
+   design requirement Tier 2 would be built against.
+
+**Caveats, stated because they bound the numbers above.**  Gate agreement reads `prior 1.00 /
+learned 0.60` over 25 cases, but FEM fires in 25/25 and `patient008`/`patient010` sit at base
+`sr` 2.6/6.5 1/s -- already below `lss` with no clot at all -- so that statistic is partly
+trivial and should not be quoted alone.  Spatial correlation with the FEM field is weak and
+often negative for BOTH arms (-0.86 to +0.85): they get the magnitude, not the pattern.  The
+`frac` parameterisation saturates between 0.6 and 0.8 (identical rows), so the tested range is
+really 0.05-0.6.  Solve cost is 2-186 s per case, not the ~5 s of the clot-free solve --
+severe occlusion is a harder nonlinear problem.
+
+### Where this leaves the module
+
+Publishable as: *a local operator whose Delta-mu response is analytic and anchored on a
+measured constant, whose learned component is characterised and disabled, with a stated
+validity domain and one honest evaluation in the severe-occlusion regime showing what it still
+cannot do.*  That is a defensible retained module.  It is NOT "a working severe-occlusion
+corrector", and the tables above are what stop anyone claiming so.
+
+---
+
+## 2026-08-31 -- TIER 2 (physics-informed rebuild): NEGATIVE, and why
+
+Tier 1.5 gave a concrete design requirement: the operator must read occlusion geometry, not
+just `delta_mu`.  Tier 2 built exactly that and it does not work.  This section is the record of
+why, because the failure is more useful than the module would have been.
+
+### The corpus (no COMSOL)
+
+`scripts/build_corrector_pi_corpus.py` -> `outputs/pi_corpus`: **96 FEM cases across 12
+vessels, 0 failures, 53 minutes**, generated by injecting a clot as a high-viscosity region via
+the new `solve_local_t0_flow(delta_mu_nodal_si=...)`.  Occlusion swept to 75% and `mu` to
+3 Pa.s -- far past the Patch Factory's 3-10% cap.  Regenerable for free, which makes every
+number below reproducible.
+
+### The operator
+
+`src/core_physics/pi_wall_shear.py`:
+
+```
+sr_pred / sr0  =  A(dmu) * (h0/h_eff)^p * exp(eps_theta(x))
+```
+
+with `A` the Tier 1 anchored attenuation, `h_eff` the hydraulic lumen (below), `p` initialised
+at Poiseuille 2, and `eps` a `tanh`-bounded residual.  Untrained it IS the closed form, and OOD
+it degrades to physics rather than extrapolating -- both pinned by tests.
+
+**A real correction found on the way.**  A constant flux exponent is wrong: regressing
+`log(sr/sr0)` on `log(h)` inside `dmu` terciles gives slopes **-0.218 / -0.588 / -2.073**.
+Poiseuille is recovered only where the occlusion is stiff; a soft gel barely redirects flux.
+`hydraulic_h` fixes this by blocking only the SOLID fraction of the lumen
+(`B = 1 - A`, `h_eff = 1 - (1-h)*B`), adding no free parameter and keeping both limits exact.
+Recorded in `scripts/diag_pi_flux_interaction.py`.
+
+### The result: LOVO by vessel, 12 folds
+
+```
+      arm   MAE log  MAEratio/case  corr log   corr sr
+     null    1.4759         1.3345       nan     0.239
+    prior    1.3690         0.9848    -0.071     0.094
+phys_geom    1.3834         1.1502    -0.016     0.092
+ phys_hyd    1.3169         1.1175     0.012     0.117
+     full    1.0882         0.9903     0.021     0.142
+```
+
+`full` cuts log error 26% below null and 21% below the prior, on 10/12 folds.  **It is still a
+failure**, for three reasons that the log column hides:
+
+1. **`corr_log` is ~0 for every arm** (-0.071 to +0.021).  There is NO spatial skill.  The gain
+   is entirely per-case scale, not knowing which nodes shear more.
+2. **`corr_sr` is best for the null arm** (0.239).  Every model arm correlates with the true
+   wall-shear field *worse than doing nothing*.
+3. **On the case-level metric -- the only one comparable to Tier 1.5 -- the one-line Tier 1
+   prior wins** (0.985 vs `full` 0.990; both physics arms worse at 1.12-1.15).  All of Tier 2
+   does not beat `A(dmu)`.
+
+**Two diagnostics say the mechanism is misspecified**, by the criterion set before the run:
+* Learned physics parameters drifted off their physical values: `p` 2.0 -> 1.20,
+  `delta_mu_half` 0.095 -> 0.21 (2.2x).  The module docstring called that "a signal the
+  mechanism is wrong, not a free parameter to be quietly absorbed."
+* Closed-form fit gives `p ~ 3.1`; gradient descent gives `p ~ 1.20` on the same data.  A 2.6x
+  disagreement between two routes to one parameter is an identifiability failure, not a fit.
+
+**And the flux signal weakened as vessels were added**: `corr(log h, log ratio)` went
+-0.196 (n=4) -> -0.191 (n=6) -> **-0.124 (n=12)**, with 5 of 12 vessels the WRONG SIGN,
+including both wounds (+1.33, +2.70).  An early strong reading on 15 per-case medians at a
+single viscosity did not survive per-node scoring across the full sweep.  That early number
+should not be quoted.
+
+### It does not divert flow either -- the qualitative claim also fails
+
+The module's original claim was geometric, not quantitative: *flow reroutes over and around a
+clot*.  `scripts/diag_corrector_diversion_field.py` decomposes the diversion against FEM truth
+into direction and magnitude, on `patient001` at 50% occlusion:
+
+```
+   cos(du_corr, du_fem)   -0.142        (energy weighted; -0.147 median)
+   |du| ratio              0.000
+   max |du|  FEM           0.359 m/s
+   max |du|  corrector     0.020 m/s     18x too small at PEAK
+   median |du| at live nodes:  FEM 5.4e-2 m/s   corrector 7.3e-9 m/s
+```
+
+The corrector's perturbation is not merely small, it is **in the wrong places**: ~zero at the
+nodes where the real diversion lives, and anti-correlated in direction where it is nonzero.
+`outputs/reports/figures/kinematics/diversion_patient001_frac50.png` shows it -- the corrector
+panel is visually identical to the clot-free base while FEM forms a clear jet through the
+residual lumen.  **The corrector cannot be used even as a qualitative picture of rerouting.**
+
+*(Methodological note, kept because it would otherwise be repeated: the first version of that
+figure seeded the clot at `wall_i[len(wall_i)//2]`, an arbitrary node ordering, which on
+patient001 landed ON THE INLET.  A clot on a Dirichlet boundary is pinned by the BC and cannot
+reroute anything.  `pick_mid_vessel_seed` now chooses by geometry.  The `pi_corpus` above used
+random wall seeds and so contains an unknown fraction of such degenerate cases -- a caveat on
+every Tier 2 number here, and the first thing to fix if it is ever revisited.)*
+
+### The conclusion worth keeping
+
+Wall-shear redistribution around a clot is set by the GLOBAL flow solution -- it is elliptic.
+A model built from LOCAL per-node features cannot represent it, and that is now demonstrated for
+two unrelated architectures: the original k-hop GATv2 and a physics-structured readout with an
+anchored analytic backbone.  The flux mechanism is real but lives at CASE level (correlation
+-0.554 on case medians), i.e. it is close to one scalar per clot, which is not something a
+per-node operator recovers.
+
+**If anyone revisits this**, the only lead supported by evidence is predicting a per-case
+scalar (a burden-level shear multiplier) rather than a per-node field -- and fixing the
+inlet-seeded cases first.
+
+### What IS useful, and it is not the model
+
+The FEM oracle answers the question the corrector was built for, exactly.
+`scripts/viz_occlusion_flow_sweep.py` sweeps occlusion on a real vessel and shows the flow
+profile change directly: the jet forming through the residual lumen, shear collapsing under the
+clot (SHIELDING) while overshooting at its shoulders (ACCELERATION), and the non-monotone
+`sr/sr0` that no `delta_mu`-only law can express.  That is the figure this module was supposed
+to produce, and the solver produces it.
+
+### The occlusion sweep, as numbers (`scripts/viz_occlusion_flow_sweep.py`)
+
+`patient001`, clot `mu` 0.68 Pa.s, FEM, wall nodes under the clot vs the whole near-clot band:
+
+```
+  frac  n_clot  sr med clot    ratio  sr max band  vs clot-free
+  0.20     322         1.34    0.051        53.75         1.052
+  0.40     652         2.46    0.093        65.68         1.286
+  0.60     890         5.28    0.200        79.16         1.550
+  0.80     890         5.28    0.200        79.16         1.550
+```
+
+Read the two columns against each other -- they move in OPPOSITE directions and that is the
+whole point:
+
+* **Under the clot, shear collapses** to 1.3-5.3 1/s against a clot-free ~25 1/s, i.e. ratio
+  0.05-0.20, well below `lss` -- the low-shear gate fires, as the deposition law expects.
+* **At the shoulders, shear OVERSHOOTS.**  Peak band shear rises 1.05x -> 1.55x the clot-free
+  maximum, and the ratio profile peaks at **1.45 just upstream** of the clot at 80% occlusion
+  and **1.37 just downstream** at 20%.  Flux displaced by the occlusion has to go somewhere and
+  it accelerates past the shoulders.
+* **The collapse gets WEAKER as the clot deepens** (ratio 0.051 -> 0.200 from 20% to 60%),
+  because the acceleration term grows faster than the shielding term.  This is
+  [[clot-shear-map-is-non-monotone]] visible as a profile rather than a scalar, and it is
+  exactly what a `delta_mu`-only law -- including the shipped `GELATION_SR_RATIO` blockage --
+  cannot produce.
+
+Caveat: the 0.60 and 0.80 rows are identical because the clot mask saturates once it fills the
+local column, so the effective range swept is 0.05-0.6, not 0.05-0.8.
+
+Figures: `outputs/reports/figures/kinematics/occlusion_sweep_patient001.png` (sweep) and
+`diversion_patient001_frac50.png` (corrector vs FEM diversion).  Data:
+`outputs/viz_occlusion_sweep_patient001.json`.
+
+**Three method bugs were fixed building these, all commented in place**: clot seeds chosen by
+NODE ORDERING can land on the inlet, where the Dirichlet BC pins velocity and the case is
+degenerate (`pick_mid_vessel_seed` now chooses by geometry); straight-line arclength collapses
+on a curved vessel and mixes both wall sides (replaced by a wall-subgraph geodesic); and the P2
+meshes alternate vertex and mid-side nodes along the boundary, which reads as a sawtooth rather
+than noise (rolling median).

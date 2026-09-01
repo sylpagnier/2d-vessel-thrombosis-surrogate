@@ -557,61 +557,6 @@ def integrate_mat(
     return mat
 
 
-# ---------------------------------------------------------------------------
-# FLOW-COUPLED ARM (isolated; nothing above this line changes behaviour)
-# ---------------------------------------------------------------------------
-#
-# The shipped arms freeze the gate at t=0.  COMSOL re-evaluates it on the CURRENT flow, and
-# the GT-flow oracle shows that is worth wall F1 0.8405 -> 0.8953 and count floor
-# 0.0424 -> 0.0254.  This arm tries to recover that deployably by letting the model's own
-# clot reroute its own flow through ``LocalKinematicCorrector``.
-#
-# An earlier evaluation of exactly this idea (``scripts/diag_corrector_rollout.py``) scored a
-# clean negative and concluded the corrector had a SIGN error learned from isolated-clot
-# training patches.  That was wrong on three counts, each measured:
-#
-#   * the corrector LOWERS wake shear like GT does (-0.063 against GT -0.194 at the physical
-#     Delta-mu) and RAISES the low-shear open fraction (+0.047 against GT +0.053).  Right
-#     sign -- ``scripts/diag_corrector_sign.py``;
-#   * it was driven at ``delta_mu = 3.0`` Pa.s, the stale clamp in
-#     ``corrector_max_delta_mu_si``, against a measured GT median of **0.68** at committed
-#     wall nodes.  The patch factory's real training range is (0.1, 10.0) Pa.s, so 0.68 is
-#     comfortably inside it and 3.0 over-drives by 4.4x;
-#   * its ODE-ignition-only mask was compared against a static mask that also carries 6-hop
-#     graph growth.  Like-for-like the static baseline is 73.7, not 81.5, so the reported
-#     "shrink to 73.3" was -0.4 nodes -- ``scripts/diag_corrector_mask_accounting.py``.
-#
-# What actually limits it is the BOOTSTRAP: the loop cannot start until nodes have already
-# crossed ``viscosity_mat_crit``, while GT's clot has been growing under continuously-opening
-# gates since t=0.  Handed GT's occlusion the corrector recovers 88% of the oracle's F1 gain
-# (``scripts/diag_corrector_ceiling.py``), so ``seed_ramp`` below feeds it the model's OWN
-# t=0 predicted mask instead of waiting.  That uses no GT and is deploy-legal.
-
-
-@dataclass
-class CorrectorArm:
-    """Configuration for the flow-coupled arm.  ``seed_ramp=0`` disables seeding."""
-
-    corrector: object                 # loaded LocalKinematicCorrector
-    phys_cfg: object
-    device: object = None
-    delta_mu: float = 0.68            # measured GT median at committed wall nodes
-    every: int = 10                   # rollout steps between corrector calls
-    num_hops: int = 5                 # corrector's receptive field
-    # Swept on WALL_COHORT_V2_TRAIN (scripts/sweep_corrector_arm.py, 26 vessels, GT t=0 flow,
-    # delta_mu 0.68).  The response is broad and shallow, and the ORIGINAL GUESS OF 2.0 WAS
-    # NEARLY THE WORST POINT ON IT:
-    #
-    #     ramp   0.00    0.50    1.00    1.50    2.00    3.00
-    #     score 0.7659  0.7689  0.7600  0.7568  0.7512  0.7445     (static baseline 0.7489)
-    #
-    # Anything in [0, 1] beats static by ~+0.017; the 0.50-vs-0.00 gap (+0.003) is inside the
-    # noise this knob can produce, so read the plateau, not the argmax.
-    seed_ramp: float = 0.50           # fraction of the predicted mask seeded per unit time
-    front_admission: bool = True
-    relax: float = 2.0                # shear-admission multiple of lss, as shipped
-    grow_hops: int = 6                # graph-growth hops, as shipped
-    da_scale: float = 40.0
 
 
 def _wall_adjacency(data):
@@ -634,143 +579,135 @@ def predicted_seed_mask(data, bio_cfg, fields, *, relax=2.0, grow_hops=6, adj=No
     return cur, adm, A
 
 
-def corrector_blockage(data, bio_cfg, fields, arm: CorrectorArm, *, hops: int = 3,
-                       flow_source: str = "gt"):
-    """A ``blockage`` callable for :func:`integrate_mat_trajectory`.
+# ---------------------------------------------------------------------------
+# The gelation shear collapse: one measured constant, and its measured limits
+# ---------------------------------------------------------------------------
+#
+# WHAT IT IS.  `sr/sr0` is 1.000 before gelation and **0.1226** after: p25-p75 0.113-0.136,
+# 584 observations across all three wound vessels (MODEL_REVIEW_2026-08-22 9e.4, memory
+# `gelation-steps-shear-to-one-eighth`).  Tight, and genuinely measured.
+#
+# WHAT IT IS NOT.  It is NOT a general clot->flow blockage law, and the temptation to use it as
+# one has been tested and refused.  On a 96-case FEM sweep with injected clots
+# (`outputs/pi_corpus`, occlusion to 75%, mu 0.1-3.0 Pa.s) the case-median ratio spans
+# **0.004 to 19.7** -- it exceeds 1.0 outright where flux redistribution accelerates the
+# residual lumen (`clot-shear-map-is-non-monotone`).
+#
+# AND AN OCCLUSION-DEPENDENT REPLACEMENT WAS FITTED AND REJECTED.  Against the obvious
+# candidate `A(dmu) * (1/h_eff)^p`, at case level, 93 cases, 12 vessels:
+#
+#     const (this value)                 median|log err| 0.524
+#     A(dmu) only                                        0.659
+#     A(dmu)*(1/h_eff)^p, best fit                       0.529   corr +0.089
+#     LEAVE-ONE-VESSEL-OUT:   2-param 0.775   vs   const 0.611
+#
+# The two-parameter law is WORSE out of sample than the constant and has no correlation with
+# truth.  So a constant is the best estimator available, and the honest response is to bound
+# its use rather than to dress it up as a law.  Do not replace this with a fitted function
+# without beating 0.611 LOVO first.
+#
+# VALIDITY.  Anchored on WOUND vessels at gelation, i.e. a specific clot viscosity at
+# essentially unoccluded geometry.  Applying it at high occlusion is extrapolation, and the
+# sweep above says the error there is of order the value itself.
 
-    Every ``arm.every`` steps: current occlusion -> per-node viscosity bump -> corrector ->
-    MLS gradients -> ``sr``/``dsrx`` -> both gates.  Occluded nodes keep at least their t=0
-    gate (hysteresis), and with ``front_admission`` a shear-admitted neighbour of committed
-    tissue is gated outright -- the time-resolved analogue of the shipped 6-hop growth.
+#: Measured post-gelation wall-shear ratio (wound vessels, at gelation).  See the block above
+#: for what this does and does not license.
+GELATION_SR_RATIO = 0.1226
 
-    ``flow_source`` selects the BASE flow the corrector bends: ``'gt'`` is the Phase-3
-    bandaid (COMSOL velocity at t=0), ``'pred'`` is ``u0_pred``/``v0_pred`` from RGP-DEQ and
-    is the only fully deploy-legal setting -- the corrector patches a predicted base field,
-    so no GT velocity enters the rollout at any time.  Pass ``fields`` computed from the
-    same source or the gate and the base flow disagree.
+#: Interquartile range of the measurement, carried so callers can reason about its spread
+#: instead of treating the median as exact.
+GELATION_SR_RATIO_IQR = (0.113, 0.136)
+
+#: Case-median dispersion of `sr/sr0` over the synthetic severe-occlusion corpus.  NOT a
+#: confidence interval on the constant -- it is the range the constant does not cover.
+GELATION_SR_RATIO_SWEEP_RANGE = (0.004, 19.7)
+
+
+def gelation_sr_ratio(default: float | None = None) -> float:
+    """The gelation shear ratio, overridable at runtime.
+
+    Reads `CLOT_GELATION_SR_RATIO` so a caller can substitute a value measured on THEIR
+    population rather than silently inheriting the wound-vessel anchor.  Returns
+    :data:`GELATION_SR_RATIO` when unset.
     """
-    import torch as _torch
+    import os as _os
 
-    from src.inference.corrector_coupling import couple_flow_with_corrector
+    if default is not None:
+        return float(default)
+    raw = (_os.environ.get("CLOT_GELATION_SR_RATIO") or "").strip()
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            return GELATION_SR_RATIO
+        if v > 0.0:
+            return v
+    return GELATION_SR_RATIO
 
-    device = arm.device or _torch.device("cpu")
+
+def oracle_blockage(data, bio_cfg, fields, *, hops: int = 3, ratio: float | None = None,
+                    every: int = 1, phys_cfg=None):
+    """ORACLE ``blockage`` callable: the best any flow corrector could ever do.
+
+    NOT DEPLOY-LEGAL AND NOT MEANT TO BE.  At rollout step ``i`` it reads the **ground-truth**
+    clot occupancy at pack time ``i`` and applies the measured gelation collapse
+    ``sr <- sr * ratio`` there, re-differentiates along the wall with the SAME MLS operator
+    the consumer uses (so no stencil mismatch enters), and re-evaluates the deposition gate.
+
+    This is the upper bound for the whole corrector programme: perfect clot localisation
+    **and** the correct shear response, with no model error at all.  If the deploy score does
+    not move here, no corrector -- learned, analytic or otherwise -- can pay, and the
+    clot->flow loop should be closed as a research direction rather than rebuilt.
+
+    Hysteresis: an occluded node never loses the gate it already had.
+    """
+    from src.config import PhysicsConfig
+    from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
+
+    ratio = gelation_sr_ratio(ratio)
+    phys = phys_cfg if phys_cfg is not None else PhysicsConfig(phase="biochem")
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    crit = float(bio_cfg.viscosity_mat_crit)
-    nt = int(data.t.reshape(-1).shape[0])
-
-    seed, adm, A = predicted_seed_mask(data, bio_cfg, fields,
-                                       relax=arm.relax, grow_hops=arm.grow_hops)
-    order = np.argsort(-(fields.gate * seed))
-    n_seed = int(seed.sum())
-
     pos = node_positions(data)
     ei = data.edge_index.detach().cpu().numpy()
-    Dx, Dy = build_mls_gradient(pos, ei, hops=hops)
-    u_ref = float(data.u_ref.reshape(-1)[0])
+    Dx, _ = build_mls_gradient(pos, ei, hops=hops)
     d_bar = float(data.d_bar.reshape(-1)[0])
-    if flow_source == "pred":
-        if getattr(data, "u0_pred", None) is None:
-            raise ValueError("flow_source='pred' needs u0_pred (deployable base flow absent)")
-        u0 = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-        v0 = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-    else:
-        u0 = data.y[0, :, 0].detach().cpu().numpy().astype(np.float64)
-        v0 = data.y[0, :, 1].detach().cpu().numpy().astype(np.float64)
-    u0_t = _torch.tensor(u0, dtype=_torch.float32, device=device)
-    v0_t = _torch.tensor(v0, dtype=_torch.float32, device=device)
-
-    class _DevView:
-        """Only the three tensors the corrector reads, on device.
-
-        ``Data.to(device)`` moves the pack in place and then breaks the CPU-side ODE
-        integrator, which calls ``.numpy()`` on ``data.y``.
-        """
-
-        def __init__(self, dd):
-            self.x = dd.x.to(device)
-            self.edge_index = dd.edge_index.to(device)
-            self.num_nodes = int(dd.num_nodes)
-
-    dev_view = _DevView(data)
-    state = {"gate": None, "last": -(10 ** 9), "calls": 0}
-
-    def _flow_gate(occ, gate0):
-        if not occ.any():
-            return gate0
-        delta = _torch.tensor(occ.astype(np.float32) * float(arm.delta_mu), device=device)
-        with _torch.no_grad():
-            uu, vv, _ = couple_flow_with_corrector(
-                dev_view, u0_t, v0_t, delta, corrector=arm.corrector,
-                phys_cfg=arm.phys_cfg, device=device, num_hops=int(arm.num_hops))
-        un = uu.detach().cpu().numpy().astype(np.float64)
-        vn = vv.detach().cpu().numpy().astype(np.float64)
-        sr = shear_rate_2d(Dx @ un, Dy @ un, Dx @ vn, Dy @ vn) * (u_ref / d_bar)
-        dsx = (Dx @ sr) / (d_bar * M_TO_CM)
-        g = gate_from_shear(sr, dsx, bio_cfg, wall=wall)
-        state["calls"] += 1
-        return np.where(occ, np.maximum(g, gate0), g)
+    sr0 = np.asarray(fields.sr, dtype=np.float64)
+    nt = int(data.y.shape[0])
+    state = {"gate": None, "last": -(10 ** 9), "calls": 0, "occ": 0}
 
     def blockage(mat, gate0, i):
-        if state["gate"] is not None and i - state["last"] < arm.every:
+        if state["gate"] is not None and i - state["last"] < int(every):
             return state["gate"]
-        occ = mat >= crit
-        if arm.seed_ramp > 0.0 and n_seed:
-            k = int(np.clip(n_seed * (i / max(nt - 1, 1)) * float(arm.seed_ramp), 0, n_seed))
-            s = np.zeros(len(wall), dtype=bool)
-            s[order[:k]] = True
-            occ = (s & seed) | occ
-        g = _flow_gate(occ, gate0)
-        if arm.front_admission:
-            g = g.copy()
-            adj = (np.asarray(A @ (mat >= crit).astype(np.int8)).reshape(-1) > 0) & adm
-            g[adj] = np.maximum(g[adj], 1.0)
+        ti = max(0, min(int(i), nt - 1))
+        occ = gt_clot_phi_at_time(data, ti, phys).detach().cpu().numpy().reshape(-1) > 0.5
+        if not occ.any():
+            g = gate0
+        else:
+            sr = np.where(occ, sr0 * float(ratio), sr0)
+            dsx = (Dx @ sr) / (d_bar * M_TO_CM)
+            g = gate_from_shear(sr, dsx, bio_cfg, wall=wall)
+            g = np.where(occ, np.maximum(g, gate0), g)
         state["gate"], state["last"] = g, i
+        state["calls"] += 1
+        state["occ"] = int(occ.sum())
         return g
 
     blockage.state = state
-    blockage.seed_mask = seed
     return blockage
-
-
-def predict_corrector(data, bio_cfg, arm: CorrectorArm, *, hops: int = 3,
-                      flow_source: str = "gt", ap_closure=True):
-    """Flow-coupled wall-clot mask.  Returns ``(mask [N], onset [N], fields, calls)``."""
-    from src.core_physics.ap_closure import SHIPPED, make_rollout_hook
-
-    fields = t0_flow_fields(data, bio_cfg, hops=hops, flow_source=flow_source)
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    blk = corrector_blockage(data, bio_cfg, fields, arm, hops=hops, flow_source=flow_source)
-    hook = make_rollout_hook(SHIPPED, bio_cfg, fields.sr) if ap_closure else None
-    traj, _ = integrate_mat_trajectory(data, bio_cfg, fields.gate * wall,
-                                       da_scale=arm.da_scale, blockage=blk,
-                                       ap_closure=hook)
-    onset = first_crossing(traj, float(bio_cfg.viscosity_mat_crit))
-    mask = (onset >= 0) & wall
-    return mask, np.where(wall, onset, -1), fields, blk.state["calls"]
 
 
 def predict_phi(
     data,
     bio_cfg,
+    mode: str = "phi",
     *,
-    mode: str = "ode",
     hops: int = 3,
     da_scale: float = 1.0,
     time_index: int = 0,
-    arm: "CorrectorArm | None" = None,
     flow_source: str = "gt",
 ) -> tuple[torch.Tensor, T0Fields, np.ndarray | None]:
-    """Binary wall-clot prediction ``phi_pred`` [N] plus the intermediates.
-
-    ``mode='corrector'`` runs the flow-coupled arm and requires ``arm``.  The other modes
-    are unchanged.
-    """
-    if mode == "corrector":
-        if arm is None:
-            raise ValueError("mode='corrector' requires a CorrectorArm")
-        mask, _, fields, _ = predict_corrector(data, bio_cfg, arm, hops=hops,
-                                               flow_source=flow_source)
-        return torch.tensor(mask.astype(np.float32)), fields, None
+    """Binary wall-clot prediction ``phi_pred`` [N] plus the intermediates."""
+    del flow_source  # reserved for callers that pass deploy-flow kwargs uniformly
     fields = t0_flow_fields(data, bio_cfg, hops=hops, time_index=time_index)
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
     if mode == "gate":
