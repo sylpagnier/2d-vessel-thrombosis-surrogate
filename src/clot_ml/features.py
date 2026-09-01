@@ -154,6 +154,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     if flow == "pred":
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
+    from src.clot_ml.temporal import _flow_hops
     hops = _flow_hops(flow)
     u = (data.u0_pred if flow in ("pred", "fem") else data.y[0, :, 0]).reshape(-1).detach().cpu().numpy().astype(np.float64)
     v = (data.v0_pred if flow in ("pred", "fem") else data.y[0, :, 1]).reshape(-1).detach().cpu().numpy().astype(np.float64)
