@@ -3,17 +3,29 @@
 
 Scores `src/core_physics/local_fem_solver.py` on the synthetic biochem anchor packs, in the
 currencies that were measured to predict the clot outcome -- wall `dsrx` correlation and gate
-union Jaccard first ([[analytic-prior-matches-the-surrogate]]), velocity rel-L2 second, because
-rel-L2 has repeatedly ranked flow arms the wrong way round.
+union Jaccard first, velocity rel-L2 second, because rel-L2 has repeatedly ranked flow arms
+the wrong way round.
 
-Three arms per vessel, all against COMSOL `y[0, :, 0:2]`:
+Two arms per vessel, all against COMSOL `y[0, :, 0:2]`:
 
     fem     the local solve, inlet Dirichlet taken from the pack's own inlet BC
     deq     the RGP-DEQ field already cached on the pack as `u0_pred` (when present)
 
-`fem` inherits the `pred` treatment downstream (hops=4, ``PRED_DSRX_GAIN``); both were fitted
-for the surrogate's under-resolution, so the gate columns are reported at gain 1 and gain 3 and
-at several stencil widths, and the choice is left to the caller.
+Gate columns are reported across (hops, gain) combinations.  The shipped path for FEM inherited
+the pred treatment (hops=6 in features.py, gain=PRED_DSRX_GAIN=3.00) -- both factors were
+fitted for the surrogate's under-resolution and are not obviously right for a converged field.
+The table below shows what each combination tests:
+
+    hops=3  gain=1.00  -- GT treatment (converged field; hypothesis: this is correct for FEM)
+    hops=4  gain=1.00  -- temporal.py treatment, no amplitude correction
+    hops=6  gain=1.00  -- features.py stencil, no amplitude correction
+    hops=6  gain=2.18  -- features.py stencil + stencil attenuation only (DSRX_STENCIL_GAIN)
+    hops=6  gain=3.00  -- today's shipped path (PRED_DSRX_GAIN = DSRX_STENCIL_GAIN * 1.38)
+    deq h6  gain=3.00  -- surrogate at shipped settings (reference)
+
+DSRX_STENCIL_GAIN=2.18 is the h3->h6 attenuation measured on the GT field alone (2026-08-23);
+it is a property of the operator, not the flow model.  PRED_DSRX_GAIN=3.00 bundles that with
+an additional 1.38x surrogate deficit.  A converged FEM field should not carry the deficit term.
 
     python scripts/diag_local_fem_accuracy.py --cohort --out outputs/diag_local_fem_accuracy.json
 """
@@ -187,7 +199,7 @@ def main() -> int:
     ap.add_argument("--stems", nargs="*", default=None)
     ap.add_argument("--cohort", action="store_true", help="FIT+DEV clot-carrying packs plus the wounds")
     ap.add_argument("--hops", default="3,4,6")
-    ap.add_argument("--gains", default="1,3")
+    ap.add_argument("--gains", default="1,2.18,3")
     ap.add_argument("--quiet", action="store_true", default=True)
     ap.add_argument("--out", default="")
     args = ap.parse_args()

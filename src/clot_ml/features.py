@@ -38,6 +38,8 @@ is provably inert on every no-wound pack in the cohort.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -152,32 +154,10 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     if flow == "pred":
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-        # 6, not 4.  `dsrx` is a second derivative of a SMOOTH SURROGATE field, and the
-        # stencil width decides whether it carries signal or its own sign flip.  Measured
-        # 2026-08-23 against COMSOL t=0 (wall nodes, 10 vessels), correlation of predicted
-        # `dsrx`:  hops=3 -0.22 | hops=4 +0.24 | hops=6 +0.96 | hops=8 +0.98.  hops=4 sits
-        # inside the sign-flip band and is ANTI-correlated on 3 of 10 vessels (036 -0.90,
-        # 024 -0.43, 018 -0.11); at 6 every vessel is >= 0.76.  `sr` peaks at 6 as well
-        # (0.89 vs 0.88), so nothing is traded away, and a leave-one-vessel-out probe on
-        # these 69 columns reads oracle-F1 0.482 at hops=4 against 0.551 at hops=6.
-        # GT keeps 3: its field is not a surrogate and does not need the extra smoothing.
-        #
-        # !! THE TWO SCALES ARE NOT COMPARABLE.  A 6-hop stencil attenuates `dsrx` by ~2.18x
-        # relative to a 3-hop one -- measured on the GT field alone, so it is a property of
-        # the operator, not of the flow model (the residual surrogate deficit, like for
-        # like at hops=6, is only 1.38x at corr 0.95).  Every `dsrx`-derived channel
-        # (`dsrx_over_sgt`, `gate_sep`, `gate_A`, `gate`) therefore lands on a different
-        # scale here than in a GT-built cache, and `sgt` is a PHYSICAL constant fitted
-        # against the 3-hop convention.  A model trained on GT features must not be scored
-        # on this block without an amplitude correction -- fit one on its own split, or
-        # retrain on a pred-flow cache so the normaliser sees this scale.  Nothing shipped
-        # reads `flow="pred"` (every `locked.py` entry point defaults to "gt"), so this is
-        # a research-arm change; it is the retrain's input, not a deploy path.
-        hops = 6
-    else:
-        u = data.y[0, :, 0].detach().cpu().numpy().astype(np.float64)
-        v = data.y[0, :, 1].detach().cpu().numpy().astype(np.float64)
-        hops = 3
+    hops = _flow_hops(flow)
+    u = (data.u0_pred if flow in ("pred", "fem") else data.y[0, :, 0]).reshape(-1).detach().cpu().numpy().astype(np.float64)
+    v = (data.v0_pred if flow in ("pred", "fem") else data.y[0, :, 1]).reshape(-1).detach().cpu().numpy().astype(np.float64)
+
     p = data.y[0, :, 2].detach().cpu().numpy().astype(np.float64)
 
     Dx, Dy = build_mls_gradient(pos_nd, ei, hops=hops)
@@ -190,6 +170,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
         # Same amplitude correction `t0_flow_fields` applies -- `sgt` is a physical constant
         # and `dsrx` here is on the 6-hop surrogate scale.  See PRED_DSRX_GAIN for the
         # measurement and for why no per-vessel estimator exists.
+        # FEM at hops=3 needs no correction: it is a converged field on the same scale as GT.
         dsrx = dsrx * PRED_DSRX_GAIN
         dsry = dsry * PRED_DSRX_GAIN
     vort = (vx - uy) * scale
@@ -233,8 +214,21 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     # injured segment no deposition at all, so `mat_phys` -- and `log_mat_owner`, and every
     # transport channel built on it -- read zero exactly where the clot is guaranteed
     # (docs/WOUND_PROGRESS.md 14.6).  Bit-identical on any pack without a wound mask.
+    # RESEARCH ARM, off by default and bit-identical when off.  `CLOT_ML_ORACLE_BLOCKAGE`
+    # closes the clot->flow loop with an ORACLE (GT clot occupancy + the measured 0.1226
+    # gelation shear collapse), which is the upper bound on any corrector.  It reads GT at
+    # t>0 and is therefore NOT deploy-legal -- it exists to size the corrector programme
+    # before anything is built.  See `physics_wall_model.oracle_blockage`.
+    _blk = None
+    _orc = (os.environ.get("CLOT_ML_ORACLE_BLOCKAGE") or "").strip()
+    if _orc not in ("", "0"):
+        from src.core_physics.physics_wall_model import GELATION_SR_RATIO, oracle_blockage
+
+        _ratio = GELATION_SR_RATIO if _orc == "1" else float(_orc)
+        _blk = oracle_blockage(data, bio_cfg, f0, hops=hops, ratio=_ratio, phys_cfg=phys_cfg)
     traj, _ = integrate_mat_trajectory(data, bio_cfg, deposition_gate(data, f0, wall=wall),
-                                       da_scale=SHIPPED_DA_SCALE, ap_closure=hook)
+                                       da_scale=SHIPPED_DA_SCALE, ap_closure=hook,
+                                       blockage=_blk)
     mat_phys = traj[-1]
     # onset index in the backbone rollout (-1 -> never); a timing prior for the network
     crit = float(bio_cfg.viscosity_mat_crit)

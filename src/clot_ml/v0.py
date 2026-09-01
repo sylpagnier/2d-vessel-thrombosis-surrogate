@@ -300,8 +300,12 @@ def solve_fem_into_pack(data) -> None:
     from src.core_physics.local_fem_solver import solve_local_t0_flow
 
     nas_path = _resolve_anchor_mesh(data)
-    u_gt_nd = data.y[0, :, 0:2].numpy() if getattr(data, "y", None) is not None else None
-    u_dim = solve_local_t0_flow(nas_path, data, PhysicsConfig(), max_iters=50, tol=1e-5,
+    u_gt_nd = None
+    if not bool(getattr(data, "research_synthetic", False)):
+        y = getattr(data, "y", None)
+        if y is not None and torch.is_tensor(y) and y.numel() > 0:
+            u_gt_nd = y[0, :, 0:2].detach().cpu().numpy()
+    u_dim = solve_local_t0_flow(nas_path, data, PhysicsConfig(), max_iters=300, tol=1e-9,
                                 u_gt_inlet_nd=u_gt_nd)
     if isinstance(u_dim, torch.Tensor):
         u_dim = u_dim.numpy()
@@ -328,10 +332,11 @@ def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) ->
 
     cfg: ClotMlV0Config = bundle["cfg"]
     bio = BiochemConfig(phase="biochem")
-    
-    if flow == "fem":
-        solve_fem_into_pack(data)
-        flow = "pred"
+    # Note: flow="fem" must NOT be rewritten here.  The caller (eval_clot_ml_v0.py,
+    # research_sweep_runner.py) runs solve_fem_into_pack() before calling this function so that
+    # the sample, features, and baseline are all built on the FEM field -- not on GT.  Aliasing
+    # "fem" -> "pred" here would give the right u0_pred slot but the wrong stencil/gain treatment
+    # downstream (D1+D2+D3 as documented in the commit message).
 
     S = sample if sample is not None else build_sample(data, bio, flow=flow, variant="v4")
     base = predict_temporal_v4_wound(bundle["base"], data, times, flow=flow, sample=S)

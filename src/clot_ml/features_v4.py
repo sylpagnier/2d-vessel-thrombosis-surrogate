@@ -23,7 +23,7 @@ __all__ = ["indicator_physics", "horizon_for", "new_channels", "augment_sample",
 #: MLS stencil width per flow source -- must match ``features.build_features``, which widens
 #: the stencil on the noisier predicted field.  Kept here so the v4 block and the v3 block
 #: differentiate the same velocity with the same operator.
-HOPS_FOR_FLOW = {"gt": 3, "pred": 6}
+HOPS_FOR_FLOW = {"gt": 3, "pred": 6, "fem": 3}
 
 
 def indicator_physics(data, bio, wall, hops=None, *, flow: str = "gt"):

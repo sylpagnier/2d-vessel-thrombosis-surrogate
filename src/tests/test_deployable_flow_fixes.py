@@ -228,6 +228,7 @@ def test_pred_dsrx_is_scaled_and_gt_is_not():
 
     GT (hops=3) is the convention `sgt` was fitted against, so it must stay untouched no
     matter what the gain is set to; the surrogate (hops=6) must carry it exactly.
+    FEM (hops=3) must also stay untouched: it is a converged field, not a surrogate.
     """
     import src.core_physics.physics_wall_model as pwm
 
@@ -242,14 +243,17 @@ def test_pred_dsrx_is_scaled_and_gt_is_not():
         pwm.PRED_DSRX_GAIN = 1.0
         raw_pred = pwm.t0_flow_fields(data, bio, hops=6, flow_source="pred").dsrx.copy()
         raw_gt = pwm.t0_flow_fields(data, bio, flow_source="gt").dsrx.copy()
+        raw_fem = pwm.t0_flow_fields(data, bio, hops=3, flow_source="fem").dsrx.copy()
         pwm.PRED_DSRX_GAIN = 7.0
         scaled_pred = pwm.t0_flow_fields(data, bio, hops=6, flow_source="pred").dsrx
         scaled_gt = pwm.t0_flow_fields(data, bio, flow_source="gt").dsrx
+        scaled_fem = pwm.t0_flow_fields(data, bio, hops=3, flow_source="fem").dsrx
     finally:
         pwm.PRED_DSRX_GAIN = real
 
     assert np.allclose(scaled_pred, 7.0 * raw_pred, rtol=1e-6, atol=0)
     assert np.array_equal(scaled_gt, raw_gt), "the GT convention must not move"
+    assert np.array_equal(scaled_fem, raw_fem), "FEM must not be scaled (no surrogate deficit)"
     assert 2.0 < real < 4.0, "gain left outside the FIT/DEV bracket it was fitted in"
 
 

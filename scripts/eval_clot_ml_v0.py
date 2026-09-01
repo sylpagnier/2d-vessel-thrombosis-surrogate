@@ -83,13 +83,13 @@ def _score_one(bundle_base, bundle_v0, stem: str, every: int, flow: str) -> dict
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     times = _times(data, every)
     if flow == "fem":
-        # `predict_clot_ml_v0` solves FEM internally, but the SAMPLE and the baseline are
-        # built out here first -- so doing it there left both on ground truth and the run
-        # scored GT under a FEM label.  Solve up front, then use the validated `pred` path.
+        # `predict_clot_ml_v0` no longer runs the FEM solve internally (doing it there left
+        # the sample and the baseline on GT while the run was labelled `fem`).  Solve here so
+        # that EVERY downstream call -- build_sample, baseline, v0 rollout -- sees the FEM field.
+        # flow stays "fem"; features.py/temporal.py give it the GT treatment (hops=3, gain=1.0).
         from src.clot_ml.v0 import solve_fem_into_pack
 
         solve_fem_into_pack(data)
-        flow = "pred"
     S = build_sample(data, bio, flow=flow, variant="v4")
     ei = torch.tensor(np.asarray(S["edge_index"]))
     gts = gt_series(data, phys, times)

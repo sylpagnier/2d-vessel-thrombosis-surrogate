@@ -36,9 +36,12 @@ DEFAULT_ATTENUATION = 0.16
 
 #: MLS stencil width per flow source.  GT is differentiated at the consumer's own hops=3;
 #: any RECONSTRUCTED field needs a wider stencil to keep its second derivative from being its
-#: own sign flip.  `fem` is a solved field like `pred`, not ground truth, so it takes the same
-#: treatment -- and it must appear here or a `fem` run dies on a KeyError deep in the rollout.
-_FLOW_HOPS = {"gt": 3, "pred": 4, "fem": 4}
+#: own sign flip.  `fem` is a converged field like `gt` -- it does NOT need the extra smoothing
+#: and takes the GT treatment (hops=3).  Confirmed 2026-09-01 by diag: fem h3 gateJ 0.908 vs
+#: h6 gateJ 0.062-0.67 (the shipped path scored 0.520 at h6 g3.0).
+#: `pred` uses hops=6 to match `features.py` (features.py was 6, temporal.py was 4 -- aligned
+#: here so the chemistry/ODE path and the feature builder use the same stencil for the same arm).
+_FLOW_HOPS = {"gt": 3, "pred": 6, "fem": 3}
 
 
 def _flow_hops(flow: str) -> int:
