@@ -204,8 +204,9 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=20, 
     u_skfem = np.zeros((mesh.p.shape[1], 2))
     u_skfem[:basis.nodal_dofs.shape[1], 0] = x[basis.nodal_dofs[0, :]]
     u_skfem[:basis.nodal_dofs.shape[1], 1] = x[basis.nodal_dofs[1, :]]
-    u_skfem[basis.nodal_dofs.shape[1]:, 0] = x[basis.facet_dofs[0, :]]
-    u_skfem[basis.nodal_dofs.shape[1]:, 1] = x[basis.facet_dofs[1, :]]
+    if u_skfem.shape[0] > basis.nodal_dofs.shape[1]:
+        u_skfem[basis.nodal_dofs.shape[1]:, 0] = x[basis.facet_dofs[0, :]]
+        u_skfem[basis.nodal_dofs.shape[1]:, 1] = x[basis.facet_dofs[1, :]]
     
     u_pred = np.zeros((len(pos_target_nd), 2))
     u_pred[skfem_to_target] = u_skfem
