@@ -180,7 +180,7 @@ def test_the_empty_gt_metric_term_is_off_by_default():
         "the clot-free metric term is on by default again -- it has no measured benefit, and "
         "at +/-0.074 off-wall this cohort cannot resolve a global-bias term at all")
 
-    from scripts.promote_clot_gnn_v4 import BASE as PBASE
+    from scripts.archive.clot_gnn_v4_era.promote_clot_gnn_v4 import BASE as PBASE
 
     assert PBASE["empty_gt_loss"] == BASE["empty_gt_loss"], (
         "promotion trains with a different objective from the CV that selected the design")
@@ -196,7 +196,7 @@ def test_promotion_will_not_reuse_a_member_from_a_different_generation():
     """
     import inspect
 
-    from scripts import promote_clot_gnn_v4 as P
+    from scripts.archive.clot_gnn_v4_era import promote_clot_gnn_v4 as P
 
     src = inspect.getsource(P.main)
     assert "_fingerprint" in src, "the resume path has no fingerprint check"
@@ -218,7 +218,7 @@ def test_promotion_and_cv_agree_on_the_c0_constraint():
     manifest, so the value that produced the weights always travels with them
     (MODEL_REVIEW 9b).
     """
-    from scripts.promote_clot_gnn_v4 import BASE as PBASE
+    from scripts.archive.clot_gnn_v4_era.promote_clot_gnn_v4 import BASE as PBASE
     from scripts.run_phase9_cv import BASE
 
     assert "shape_w" in BASE and "shape_w" in PBASE, (

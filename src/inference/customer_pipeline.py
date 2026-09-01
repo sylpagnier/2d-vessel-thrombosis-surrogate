@@ -1,6 +1,8 @@
-"""Customer-facing deploy pipeline: kine + corrector + wall/offwall species + clot-phi.
+"""Customer-facing deploy pipeline: RGP-DEQ t=0 flow + clot_ml_0 rollout.
 
-Returns a scrubbable trajectory for the desktop and browser Predict apps.
+Default path: frozen kinematics at t=0, then the locked C0-tail clot baseline
+(``clot_ml_v0`` artifact).  ``LegacySpeciesDeployPipeline`` remains for explicit
+mat-growth / compound comparisons only.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ from src.core_physics.species_viscosity_calibration import resolve_clot_readout_
 from src.core_physics.t0_device import require_cuda_device
 from src.core_physics.t0_mu_physics import rollout_t0_clot_phi
 from src.core_physics.t0_rung_config import RUNG2_GAMMA_MODE, t0_rung2_env
-from src.inference.corrector_coupling import CorrectorCoupledFlow
 from src.inference.species_gnn_deploy_env import load_deploy_manifest, species_gnn_deploy_env
 from src.utils.paths import get_project_root
 
@@ -384,7 +385,7 @@ class LegacySpeciesDeployPipeline:
                 phi_all[ti] = traj[ti]["phi"].detach().cpu().numpy()
                 if int(ti) in velocity_indices:
                     mu_eff_si = traj[ti]["mu"].to(self.device)
-                    u, v = self._flow_provider.couple(data, mu_eff_si, publish=False)
+                    u, v, _ = self._flow_provider.couple(data, mu_eff_si, publish=False)
                     vel_all[ti] = torch.sqrt(u**2 + v**2).detach().cpu().numpy()
                 else:
                     vel_all[ti] = np.zeros_like(phi_all[ti], dtype=np.float32)
@@ -493,7 +494,6 @@ class CustomerDeployPipeline:
             else self.model_name
         )
         self._bundle: dict | None = None
-        self._flow_provider: CorrectorCoupledFlow | None = None
 
     def __getattr__(self, name: str) -> Any:
         """Keep explicit legacy research callers source-compatible."""
@@ -511,9 +511,6 @@ class CustomerDeployPipeline:
         from src.clot_ml.locked import load_temporal_v4_wound
 
         self._bundle = load_temporal_v4_wound(name=self.locked_model_name)
-        self._flow_provider = CorrectorCoupledFlow(
-            device=self.device, phys_cfg=PhysicsConfig(phase="biochem")
-        )
 
     def run(
         self,
@@ -570,19 +567,15 @@ class CustomerDeployPipeline:
             int(i): np.zeros_like(phi_all[int(i)], dtype=np.float32) for i in indices
         }
         velocity_indices: list[int] = []
-        if include_velocity and indices:
+        if include_velocity and indices and hasattr(out, "u0_pred") and out.u0_pred is not None:
             velocity_indices = [indices[0], indices[-1]] if len(indices) > 1 else [indices[0]]
             velocity_indices = sorted(set(velocity_indices))
-            log(f"[i] Coupling local flow at {len(velocity_indices)} bookend step(s)…")
-            flow_data = out.clone().to(self.device)
-            self._flow_provider.invalidate_base_cache()
+            log(f"[i] Using frozen t=0 flow at {len(velocity_indices)} bookend step(s)…")
+            u0 = out.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float32)
+            v0 = out.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float32)
+            frozen_vel = np.sqrt(u0 * u0 + v0 * v0)
             for i in velocity_indices:
-                mu = torch.as_tensor(mu_all[int(i)], dtype=torch.float32, device=self.device)
-                bulk = torch.full_like(mu, baseline_mu)
-                u, v, _ = self._flow_provider.couple(
-                    flow_data, mu, mu_bulk_si=bulk, publish=False
-                )
-                vel_all[int(i)] = torch.sqrt(u**2 + v**2).detach().cpu().numpy()
+                vel_all[int(i)] = frozen_vel
 
         def _mask_np(name: str) -> np.ndarray | None:
             value = getattr(out, name, None)

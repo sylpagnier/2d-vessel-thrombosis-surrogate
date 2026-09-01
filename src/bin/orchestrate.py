@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> None:
         _run_module("src.training.train_kinematics_predictor")
     if phase in ("biochem", "all"):
         print("=== Biochem training ===")
-        _run_module("src.training.train_biochem_gnn")
+        _run_module("src.archive.mat_growth.train_biochem_gnn")
 
 
 if __name__ == "__main__":

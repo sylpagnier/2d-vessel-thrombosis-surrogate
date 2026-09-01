@@ -13,8 +13,10 @@ below: `scripts/gen_gnn_viz_data.py` + `scripts/build_gnn_temporal_artifact.py`
 (`clot_gnn_v1`). Reference implementation for a learned model with NO held-out set left
 (point 8 below) and genuine per-timestep predictions in both windows:
 `scripts/gen_v3_temporal_data.py` + `scripts/build_v3_temporal_artifact.py` (`clot_gnn_v3`);
-updated for a stricter nested-CV protocol with reported noise floor and significance:
-`scripts/gen_v4_temporal_data.py` + `scripts/build_v4_temporal_artifact.py` (`clot_gnn_v4`).
+for genuine per-timestep predictions in both windows with outer-fold OOF generalization:
+`scripts/run_phase9_cv.py` -> `scripts/eval_strict_temporal.py` ->
+`scripts/gen_clot_ml_v0_oof_viz_data.py` -> `scripts/build_clot_oof_temporal_artifact.py`
+(`clot_ml_v0`). Legacy v4 builders live under `scripts/archive/clot_gnn_v4_era/`.
 Run the relevant pair, then publish the resulting `outputs/*.html` file as an Artifact
 (Claude Code's hosted-page tool). Note this is unrelated to
 [docs/PUBLISHING.md](PUBLISHING.md), which is this repo's git tracking policy — nothing

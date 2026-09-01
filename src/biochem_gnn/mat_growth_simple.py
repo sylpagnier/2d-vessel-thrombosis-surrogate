@@ -4828,91 +4828,16 @@ def init_mat_single_from_fimat_ckpt(
         print(f"[OK] mat warm-start mode={mode_n} from {path} ({copied} tensors)", flush=True)
     return copied
 
-# =====================================================================================
-# COHORT SPLIT v2 (WALL_MODEL_PLAN.md 21). Supersedes the ad-hoc 5-vessel sub-cohort split.
-#
-# Built from measured per-vessel descriptors, not by hand: positive rate, best-feature AUC,
-# nucleation fraction, and width-profile skew (which cleanly recovers the geometry class --
-# aneurysms 039/040/043 skew +1.05/+0.69/+0.65, stenoses 041/042/044 skew -0.58/-0.57/-0.51).
-#
-# Holdout construction rules, applied programmatically:
-#   * every holdout vessel is INTERIOR on all four descriptor axes (never a global min/max),
-#     so the sealed set tests interpolation rather than extrapolation;
-#   * T >= 150, so no severely truncated simulation is in the holdout;
-#   * class balance ~proportional to the pool (2 aneurysm / 6 stenosis vs the pool's 7/28);
-#   * patient042 (median stenosis) and patient043 (the long-sealed aneurysm) are the two
-#     dev-set holdouts, keeping continuity with every number in sections 9-20.
-#
-# Coverage: train spans the holdout's range on pos%, nucleation% and skew. The single
-# exception is the AUC upper bound -- holdout 0.944 (043) vs train 0.941 (040), a 0.003
-# tie -- which is immaterial.
-#
-# patient002 is excluded on the project's existing data-quality call (see the
-# 'no 023/002 junk' note above); patient023/026/027/030/033/034/017/022 have no clot.
-# Truncated sims (T<150) ARE kept in train: training consumes WINDOWS, whose per-step
-# GT deltas are valid regardless of run length. T>=150 is a HOLDOUT rule, because there
-# the vessel's final map is the target and 14.6 showed nucleation runs into the last
-# quartile -- a T=29 'final' state is simply a different quantity.
-#
-# 039-044 remains the DEV cohort; 039/040/041/044 are dev-train, 042/043 are dev-holdout.
-# 2026-08-22: VIZ_HALF (001/010/014/042) RELEASED from SEALED into TRAIN -- see
-# docs/SEALED_SPLIT.md.  They were already permanently open for visualization; this makes
-# them trainable too.  SEALED is now FINAL_HALF only.  Anything fitted before this date was
-# fitted without them, so historical "SEALED never seen" claims stand for those artifacts.
-WALL_COHORT_V2_VIZ_RELEASED: tuple[str, ...] = (
-    "patient001", "patient010", "patient014", "patient042",
+from src.biochem_gnn.wall_cohort_constants import (  # noqa: E402
+    WALL_COHORT_V2_CLOT_FREE,
+    WALL_COHORT_V2_DEV,
+    WALL_COHORT_V2_DEV_HOLDOUT,
+    WALL_COHORT_V2_DEV_TRAIN,
+    WALL_COHORT_V2_FIT,
+    WALL_COHORT_V2_GENERALIZATION,
+    WALL_COHORT_V2_SEALED_PRE_20260822,
+    WALL_COHORT_V2_TRAIN,
+    WALL_COHORT_V2_VIZ_RELEASED,
 )
 
-WALL_COHORT_V2_TRAIN: tuple[str, ...] = (
-    "patient003", "patient004", "patient005",
-    "patient006", "patient008", "patient009", "patient011",
-    "patient012", "patient015", "patient016", "patient018",
-    "patient019", "patient020", "patient021", "patient024",
-    "patient025", "patient028", "patient029", "patient032",
-    "patient035", "patient036", "patient037", "patient039",
-    "patient040", "patient041", "patient044",
-) + WALL_COHORT_V2_VIZ_RELEASED
-
-# SEALED. Do not train on these, and do not tune against them. They exist to be spent once.
-# FINAL_HALF only since 2026-08-22 (docs/SEALED_SPLIT.md).
-WALL_COHORT_V2_GENERALIZATION: tuple[str, ...] = (
-    "patient007", "patient013", "patient031", "patient043",
-)
-
-#: The 8-vessel SEALED set as it stood BEFORE the 2026-08-22 release.  Frozen deliberately:
-#: every artifact promoted before that date carries a "SEALED never seen" claim, and after
-#: the release `set(training_pool) & set(WALL_COHORT_V2_GENERALIZATION)` would be trivially
-#: empty for a reason that has nothing to do with the artifact.  Provenance tests on
-#: pre-release artifacts must assert against THIS tuple, or they silently stop testing.
-WALL_COHORT_V2_SEALED_PRE_20260822: tuple[str, ...] = (
-    "patient001", "patient007", "patient010", "patient013",
-    "patient014", "patient031", "patient042", "patient043",
-)
-
-#: Clot-free vessels: ``maxMat = 0``, empty GT, full horizon (T=201).  Neither pool nor
-#: SEALED until 2026-08-22.  They carry no positive class, so they are excluded from any
-#: recall-bearing mean -- but they are real evidence about FALSE POSITIVES, which is the
-#: failure mode the readout's burden compression actually exhibits.  Scored through
-#: ``severity_components``' empty-GT branch: commit nothing -> 1.0, a few -> down a bit, many
-#: -> tanks (``empty_gt_fp_tol``).  See docs/MODEL_REVIEW_2026-08-22.md 8b.
-WALL_COHORT_V2_CLOT_FREE: tuple[str, ...] = (
-    "patient017", "patient022", "patient023", "patient026",
-    "patient027", "patient030", "patient033", "patient034",
-)
-
-WALL_COHORT_V2_DEV: tuple[str, ...] = (
-    "patient039", "patient040", "patient041",
-    "patient042", "patient043", "patient044",
-)
-# 042 left SEALED on 2026-08-22, so it is now a DEV-train vessel like the rest of DEV;
-# 043 is the only DEV member still sealed.
-WALL_COHORT_V2_DEV_HOLDOUT: tuple[str, ...] = ("patient043",)
-# DEV-train slice of TRAIN (042/043 live in SEALED, not here).  Same four names as
-# scripts/sweep_ml_clean_protocol.py DEV_CANDIDATES -- FIT/DEV/SEALED for any wall-cohort
-# scalar or architecture choice.
-WALL_COHORT_V2_DEV_TRAIN: tuple[str, ...] = tuple(
-    n for n in WALL_COHORT_V2_DEV if n not in WALL_COHORT_V2_DEV_HOLDOUT
-)
-WALL_COHORT_V2_FIT: tuple[str, ...] = tuple(
-    n for n in WALL_COHORT_V2_TRAIN if n not in WALL_COHORT_V2_DEV_TRAIN
-)
+# Backward-compatible re-exports (prefer wall_cohort_constants / wall_cohort_splits).

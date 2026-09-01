@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from scripts.exp_template_ab import detect_xy_scale, expr_to_key, npz_scalar, rel_l2
+from scripts.archive.tier1_retired.exp_template_ab import detect_xy_scale, expr_to_key, npz_scalar, rel_l2
 
 
 def test_expr_to_key_matches_export():

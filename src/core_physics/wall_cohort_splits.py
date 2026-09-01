@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from src.biochem_gnn.mat_growth_simple import (
+from src.biochem_gnn.wall_cohort_constants import (
     WALL_COHORT_V2_CLOT_FREE,
     WALL_COHORT_V2_DEV,
     WALL_COHORT_V2_DEV_HOLDOUT,

@@ -6,10 +6,10 @@ Short cheat sheet for agents and contributors. Full orientation: [docs/PROJECT_C
 
 | Stack | Train | Docs |
 |-------|-------|------|
-| **RGP-DEQ** (`rgp_deq_kine`) | `python -m src.bin.main train rgp-deq-kine` or `scripts/go_kinematics_*.ps1` | [docs/KINEMATICS_BEST_ARCHITECTURE.md](docs/KINEMATICS_BEST_ARCHITECTURE.md) |
-| **biochem_gnn** | `scripts/go_biochem_gnn.ps1` or `python -m src.bin.main train biochem-gnn` | [docs/BIOCHEM_GNN.md](docs/BIOCHEM_GNN.md) |
-| Mat-growth (research) | `go_mat_*.ps1`, `go_wc_v7_*.ps1` | [docs/MAT_GROWTH.md](docs/MAT_GROWTH.md) |
-| Local corrector | `python -m src.training.train_local_kinematic_corrector` | [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md) |
+| **RGP-DEQ** (`rgp_deq_kine`) | `python -m src.bin.main train rgp-deq-kine` or `scripts/go_kinematics_production_allfix.ps1` | [docs/KINEMATICS_BEST_ARCHITECTURE.md](docs/KINEMATICS_BEST_ARCHITECTURE.md) |
+| **clot_ml_v0** (deploy clot) | `scripts/promote_clot_ml_v0.py`, `scripts/eval_clot_ml_v0.py` | [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) |
+| **biochem_gnn** (locked / customer) | `go_customer_predict.ps1`; training archived under `src/archive/mat_growth/` | [docs/BIOCHEM_GNN.md](docs/BIOCHEM_GNN.md) |
+| Mat-growth / corrector (reference) | `src/archive/mat_growth/`, `src/archive/corrector_era/` | [docs/MAT_GROWTH.md](docs/MAT_GROWTH.md), [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md) |
 
 - **Promote biochem:** `python scripts/promote_biochem_gnn.py` → `outputs/biochem/biochem_gnn/locked/` + `data/reference/biochem_gnn_baseline.json`
 - **Locked wall mat:** `WC_v7_clot_phi_mse` (2026-07-19); cohort clot F1 **~0.767**, clot score **~0.791** — still the wall-only / compound backbone
@@ -70,7 +70,8 @@ Always-apply rule: [`.cursor/rules/robust-system-wide-changes.mdc`](.cursor/rule
 ## Scripts
 
 - Active only: [scripts/README.md](scripts/README.md)
-- Retired: `scripts/archive/` — do not revive GNODE / clot-ML / T0 trainers without restoring modules from git ([docs/BIOCHEM_LEGACY_LESSONS.md](docs/BIOCHEM_LEGACY_LESSONS.md))
+- Retired source: `src/archive/` (mat-growth trainers, ML ladder, corrector tools). Thin shims remain at `src/training/train_*` for import compatibility.
+- Retired scripts: `scripts/archive/` — do not revive GNODE / clot-ML / T0 trainers without restoring modules from git ([docs/BIOCHEM_LEGACY_LESSONS.md](docs/BIOCHEM_LEGACY_LESSONS.md))
 
 ## Debugging visualizations — "viz" means this
 

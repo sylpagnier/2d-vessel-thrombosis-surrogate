@@ -68,7 +68,7 @@ def test_oof_viz_generator_and_series_export_refuse_final_half():
 
 
 def test_oof_viz_template_prioritizes_viewer_and_distributions():
-    from scripts import build_v4_temporal_artifact as builder
+    from scripts import build_clot_oof_temporal_artifact as builder
 
     # The legacy Phase-10 template remains in the source for historical reference, but the
     # active template must not regress to its long model-review narrative.

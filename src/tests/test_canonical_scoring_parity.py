@@ -62,7 +62,7 @@ def test_gate_sweep_uses_the_canonical_grader():
     """The sweep must not call the raw grader again."""
     from pathlib import Path
 
-    src = Path("scripts/diag_regime_gate_sweep.py").read_text(encoding="utf-8")
+    src = Path("scripts/archive/tier1_retired/diag_regime_gate_sweep.py").read_text(encoding="utf-8")
     assert "canonical_grade_series(" in src
     # the raw grader may still be imported transitively, but must not be *called* here
     assert "grade_deploy_clot_series(" not in src, (

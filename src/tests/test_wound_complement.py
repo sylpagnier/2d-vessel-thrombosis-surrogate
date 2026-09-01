@@ -198,7 +198,7 @@ def _v4w_bundle():
 
     root = Path("outputs/clot_ml/locked/clot_gnn_v4w")
     if not (root / "manifest.json").exists():
-        pytest.skip("clot_gnn_v4w not promoted (run scripts/promote_clot_gnn_v4_wound.py)")
+        pytest.skip("clot_gnn_v4w not promoted (see scripts/archive/clot_gnn_v4_era/promote_clot_gnn_v4_wound.py)")
     from src.clot_ml.locked import load_temporal_v4
 
     manifest = json.loads((root / "manifest.json").read_text())
