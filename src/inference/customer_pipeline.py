@@ -37,6 +37,7 @@ from src.core_physics.t0_device import require_cuda_device
 from src.core_physics.t0_mu_physics import rollout_t0_clot_phi
 from src.core_physics.t0_rung_config import RUNG2_GAMMA_MODE, t0_rung2_env
 from src.inference.species_gnn_deploy_env import load_deploy_manifest, species_gnn_deploy_env
+from src.inference.corrector_coupling import CorrectorCoupledFlow
 from src.utils.paths import get_project_root
 
 # Wall backbone = WC_v7_clot_phi_mse; customer default stacks compound growth specialist
@@ -529,7 +530,7 @@ class CustomerDeployPipeline:
             )
         del extra_env  # Legacy stack-only knob; the locked baseline is immutable.
         self._ensure_loaded()
-        assert self._bundle is not None and self._flow_provider is not None
+        assert self._bundle is not None
         log = progress or (lambda _msg: None)
         out = data.clone() if hasattr(data, "clone") else data
         if t_final_s is not None and hasattr(out, "t") and out.t is not None:

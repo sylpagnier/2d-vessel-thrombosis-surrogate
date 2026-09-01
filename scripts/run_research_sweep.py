@@ -315,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
                 arm_filter=args.arm.strip() or None,
             )
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             failures += 1
             print(f"[ERR] Sweep {path.name} failed: {exc}", flush=True)
             if not args.all:

@@ -279,6 +279,8 @@ def run_research_arm(
     elif model_norm in ("locked_canonical", "biochem", "legacy"):
         if pipeline is None:
             raise ValueError("locked_canonical requires CustomerDeployPipeline")
+        import traceback
+        traceback.print_exc()
         log(f"[i] Arm {name}: rolling out legacy biochem deploy...")
         traj, pack = run_legacy_biochem_arm(
             pipeline=pipeline,

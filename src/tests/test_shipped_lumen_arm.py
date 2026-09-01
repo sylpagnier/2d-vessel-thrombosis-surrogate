@@ -24,7 +24,7 @@ def _line(n):
 
 def test_shipped_lumen_constants_are_the_swept_optimum():
     """PHASE6_RESULTS 21.1.  0.3 was measurably worse than not running the arm."""
-    import scripts.predict_wall_clot as pw
+    import scripts.archive.wall_physics_era.predict_wall_clot as pw
 
     assert pw.LUMEN_HOPS == 2
     assert abs(pw.LUMEN_SPEED - 0.2) < 1e-9

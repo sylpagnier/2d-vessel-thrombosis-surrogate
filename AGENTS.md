@@ -69,7 +69,8 @@ Always-apply rule: [`.cursor/rules/robust-system-wide-changes.mdc`](.cursor/rule
 
 ## Scripts
 
-- Active only: [scripts/README.md](scripts/README.md)
+- Active only: [scripts/README.md](scripts/README.md) (four stacks: clot_ml_v0, RGP-DEQ, customer, research)
+- Archived buckets and purpose: [docs/ARCHIVED_STACKS.md](docs/ARCHIVED_STACKS.md)
 - Retired source: `src/archive/` (mat-growth trainers, ML ladder, corrector tools). Thin shims remain at `src/training/train_*` for import compatibility.
 - Retired scripts: `scripts/archive/` — do not revive GNODE / clot-ML / T0 trainers without restoring modules from git ([docs/BIOCHEM_LEGACY_LESSONS.md](docs/BIOCHEM_LEGACY_LESSONS.md))
 
