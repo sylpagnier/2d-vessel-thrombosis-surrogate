@@ -1,12 +1,12 @@
-# HemoRGP — project context
+# Local FEM Solver — project context
 
 Orientation for contributors: goals, stages, layout, and safe places to change behavior.
 
 ## Goal
 
-**HemoRGP** is a mesh-agnostic SciML surrogate for **velocity, pressure, viscosity, and clot-related fields** on vessel graphs, trained against COMSOL with physics-informed losses and a DEQ-style flow core.
+**Local FEM Solver** is a mesh-agnostic deployable thrombosis surrogate for parametric vessel studies: **local FEM at t=0** + unified **deploy-clot** (`clot_ml_0`) clot rollout on vessel graphs. Research stacks (`rgp_deq_kine`, `biochem_gnn`) remain for ablation and historical comparison — see [PUBLICATION_NOTES.md](PUBLICATION_NOTES.md).
 
-Canonical biochem path: frozen **RGP-DEQ** + trained **`biochem_gnn`** (species GraphSAGE, gelation, clot trigger). See [BIOCHEM_GNN.md](BIOCHEM_GNN.md) and [MODEL_NOMENCLATURE.md](MODEL_NOMENCLATURE.md).
+Canonical deploy path: in-house Carreau FEM + **deploy-clot** (`clot_ml_0`). See [WOUND_PROGRESS.md](WOUND_PROGRESS.md) and [RESEARCH_SWEEPS.md](RESEARCH_SWEEPS.md).
 
 ## Stages
 
@@ -24,7 +24,7 @@ Config “phase” names (`kinematics`, `biochem`, `biochem_anchors`, …) selec
 - **`RGP_DEQ`** (`src/architecture/ginodeq.py`) — Stage-A RGP-DEQ; id `rgp_deq_kine`. Legacy class alias: `GINO_DEQ`.
 - **`BiochemGNN`** (`src/biochem_gnn/`) — deploy stack; package alias `src.biochem_deploy`.
 - **`PhysicsKernels`** (`src/core_physics/physics_kernels.py`) — residual / BC / rheology shared by train and tests.
-- **Optional** `LocalKinematicCorrector` — local `[dU, dV]` on frozen UV; [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md).
+- **Deprecated** `LocalKinematicCorrector` — local `[dU, dV]` on frozen UV; deleted 2026-09-01, not for publication; [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md).
 
 ### Clot semantics
 
@@ -66,7 +66,7 @@ Checkpoints: `outputs/kinematics/`, `outputs/biochem/` (local). Reference manife
 | `src/architecture/` | RGP-DEQ, DEQ loop, spectral layers |
 | `src/biochem_gnn/` | Deploy stack package |
 | `src/data_gen/` | Pipelines + `lib/` mesh/COMSOL/graph builders |
-| `src/training/` | Trainers (kinematics, biochem_gnn, mat-growth, local corrector) |
+| `src/training/` | Trainers (kinematics, biochem_gnn, mat-growth; local-corrector trainer archived, deprecated) |
 | `src/evaluation/` | Benchmarks and viz |
 | `src/inference/` | Deploy / customer pipelines |
 | `src/utils/` | Paths, metrics, batching, kinematics helpers |

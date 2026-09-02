@@ -127,7 +127,7 @@ def main() -> int:
                     help="'all' (default) trains on every vessel in the cache, clot-free "
                          "included; 'carrying' drops the empty-GT vessels, which is the "
                          "A/B arm for whether they help -- see "
-                         "scripts/diag_clot_free_headroom.py")
+                         "python -m src.tools.diagnostics clot-free-headroom")
     ap.add_argument("--save-fold-models", default="",
                     help=("directory for outer-fold member checkpoints and normalizers. "
                           "Use a shared root across the separate v5a/v5b/v5c C0 runs; "

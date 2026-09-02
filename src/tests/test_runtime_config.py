@@ -22,19 +22,18 @@ from src.core_physics.species_pushforward_continuous import (
     train_deploy_eval_flow_source,
 )
 from src.evaluation.clot_relaxed_metrics import species_continuous_clout_score_mode
-from src.inference.corrector_coupling import corrector_coupling_enabled
 
 
 def test_runtime_kwargs_validate_and_build():
     kw = {
-        "corrector_coupling": True,
+        "closed_loop_coupling": True,
         "rollout_vel_source": "coupled",
         "clout_score_mode": "guiding",
         "phi_loss_weight": 20.0,
     }
     validate_runtime_kwargs(kw)
     rt = BiochemRuntimeConfig.from_kwargs(kw)
-    assert rt.coupling.corrector_coupling is True
+    assert rt.coupling.closed_loop_coupling is True
     assert rt.rollout.rollout_vel_source == "coupled"
     assert rt.scoring.clout_score_mode == "guiding"
     assert rt.gelation.phi_loss_weight == 20.0
@@ -43,12 +42,12 @@ def test_runtime_kwargs_validate_and_build():
 def test_split_legacy_runtime_env():
     cfg, rem = split_legacy_runtime_env(
         {
-            "BIOCHEM_CORRECTOR_COUPLING": "1",
+            "SPECIES_CLOSED_LOOP_COUPLING": "1",
             "SPECIES_ROLLOUT_VEL_SOURCE": "coupled",
             "SOME_UNKNOWN_KNOB": "x",
         }
     )
-    assert cfg["corrector_coupling"] is True
+    assert cfg["closed_loop_coupling"] is True
     assert cfg["rollout_vel_source"] == "coupled"
     assert rem == {"SOME_UNKNOWN_KNOB": "x"}
 
@@ -59,7 +58,7 @@ def test_wg_sweep_v3_runtime_is_typed():
     kw = get_mat_growth_runtime_kwargs("WG_sweep_v3_01")
     validate_runtime_kwargs(kw)
     rt = BiochemRuntimeConfig.from_kwargs(kw)
-    assert rt.coupling.corrector_coupling is True
+    assert rt.coupling.closed_loop_coupling is True
     assert rt.rollout.rollout_vel_source == "coupled"
     assert rt.rollout.dynamic_occlusion is True
     assert rt.gelation.viscosity_calib is True
@@ -68,12 +67,12 @@ def test_wg_sweep_v3_runtime_is_typed():
 def test_active_runtime_overrides_helpers():
     rt = BiochemRuntimeConfig.from_kwargs(
         {
-            "corrector_coupling": False,
+            "closed_loop_coupling": False,
             "clout_score_mode": "relaxed_prec_floor",
         }
     )
     with use_biochem_runtime(rt):
-        assert corrector_coupling_enabled() is False
+        assert get_active_runtime() is rt
         assert species_continuous_clout_score_mode() == "relaxed_prec_floor"
 
 

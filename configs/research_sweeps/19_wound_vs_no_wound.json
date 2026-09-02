@@ -1,0 +1,11 @@
+{
+  "id": "19_wound_vs_no_wound",
+  "title": "Wound on vs off (control) vs research parameters",
+  "axis": "wound_enabled",
+  "description": "Same straight geometry; compare no wound vs standard mid wound (width 0.15).",
+  "control": {"geometry_preset": "wound_geometry_mid"},
+  "arms": [
+    {"name": "no_wound", "axis_value": 0.0, "geometry": {"wound_enabled": false}},
+    {"name": "wound_mid", "axis_value": 1.0, "geometry": {"wound_enabled": true}}
+  ]
+}

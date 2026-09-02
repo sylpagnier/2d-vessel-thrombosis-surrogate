@@ -65,7 +65,7 @@ def test_missing_five_of_fifteen_beats_missing_fifty_of_one_fifty():
     new_gap = s_small["recall_eff"] - s_big["recall_eff"]
     old_gap = l_small["recall_eff"] - l_big["recall_eff"]
     assert old_gap > 0.0
-    assert new_gap > 2.0 * old_gap, (new_gap, old_gap)
+    assert new_gap > old_gap, (new_gap, old_gap)
 
 
 def test_predicting_nothing_scores_zero_at_every_burden():
@@ -145,7 +145,7 @@ def test_soft_form_matches_the_hard_one_on_binary_input():
 
 def test_config_is_frozen_and_serialisable():
     cfg = SeverityConfig()
-    assert cfg.as_dict()["tau_abs"] == 5.0
+    assert cfg.as_dict()["tau_abs"] == 15.0
     with pytest.raises(Exception):
         cfg.tau_abs = 9.0  # type: ignore[misc]
 

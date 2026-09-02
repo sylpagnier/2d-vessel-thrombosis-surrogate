@@ -19,9 +19,9 @@ Override the reference JSON with `KINEMATICS_MODEL_CONFIG_REF=/path/to/manifest.
 - **Best epoch**: 84 (Stage 3 Carreau), **before** L-BFGS steps produced NaN validation
 - **Val**: Rel L2 ≈ 0.1007, \|∇·u\| mean ≈ 0.157, composite ≈ 15.80
 
-## Production run (2026-06-01, thrombus_ml_model)
+## Production run (2026-06-01, local-fem-solver)
 
-Script: `scripts/go_kinematics_production_allfix.ps1` — allfix toggles, **3000 graphs** (no cap), shuffle seed 42, 100 ep / Adam 85 / LBFGS 85–99.
+Script: `scripts/run_kinematics_production.py` (PS1: `go_kinematics_production_allfix.ps1`) — allfix toggles, **3000 graphs** (no cap), shuffle seed 42, 100 ep / Adam 85 / LBFGS 85–99.
 
 | Field | Value |
 |-------|-------|
@@ -61,7 +61,7 @@ Script: `scripts/go_kinematics_production_allfix.ps1` — allfix toggles, **3000
 
 Full graphs + long Carreau beat the 30-ep smoke (~4% Rel L2 gain; L1 **0.120** vs 0.135). Production ep 80 still **~0.026** above April on Rel L2. **Continuity finetune ep 119 beats April** on Rel L2 (0.087 vs 0.101) and div_u (0.233 vs 0.157); L2 subset still ~0.120.
 
-### Finetune run (2026-06-03, `go_kinematics_production_allfix_finetune.ps1`)
+### Finetune run (2026-06-03, `run_kinematics_production.py finetune`)
 
 Resume from production `kinematics_best.pth` (ep 80). `kinematics_validation.jsonl` appends multiple attempts; **use ep 119 as the promoted best**.
 
@@ -128,6 +128,12 @@ If only `kinematics_ckpt_latest.pth` exists (ep 216), prefer it for synth gates;
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\go_kinematics_production_allfix.ps1"
 ```
+
+```text
+python scripts/run_kinematics_production.py
+```
+
+Orchestrator: `src/training/kinematics_production_config.py` + `kinematics_production_runner.py`.
 
 | Phase | What | Data |
 |-------|------|------|

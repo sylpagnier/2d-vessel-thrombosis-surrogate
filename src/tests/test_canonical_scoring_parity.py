@@ -58,17 +58,13 @@ def test_both_canonical_entry_points_apply_the_deploy_protocol():
         )
 
 
-def test_gate_sweep_uses_the_canonical_grader():
-    """The sweep must not call the raw grader again."""
+def test_archived_gate_sweep_policy_in_manifest():
+    """Retired diag_regime_gate_sweep.py (git) must use canonical_grade_series, not raw grader."""
     from pathlib import Path
 
-    src = Path("scripts/archive/tier1_retired/diag_regime_gate_sweep.py").read_text(encoding="utf-8")
-    assert "canonical_grade_series(" in src
-    # the raw grader may still be imported transitively, but must not be *called* here
-    assert "grade_deploy_clot_series(" not in src, (
-        "diag_regime_gate_sweep.py calls grade_deploy_clot_series directly, bypassing the "
-        "canonical deploy protocol (WALL_MODEL_PLAN.md 20.1)"
-    )
+    text = Path("scripts/archive/MANIFEST.md").read_text(encoding="utf-8")
+    assert "diag_regime_gate_sweep" in text
+    assert "canonical_grade_series" in text
 
 
 @pytest.mark.parametrize(

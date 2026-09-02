@@ -17,6 +17,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.clot_ml.features import build_features, feature_matrix  # noqa: E402
+from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T  # noqa: E402
 
@@ -25,7 +26,7 @@ DIR = REPO / "data/processed/graphs_biochem_anchors"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", default="gt", choices=["gt", "pred"])
+    ap.add_argument("--flow", default="gt", choices=["gt", "pred", "fem"])
     ap.add_argument("--out", default="")
     ap.add_argument("--force", action="store_true",
                     help="rebuild vessels already present.  Needed after any change to the "
@@ -62,6 +63,14 @@ def main() -> int:
             continue
         t0 = time.time()
         try:
+            if args.flow == "fem":
+                # `torch.load` restores no provenance, so the mesh resolver has nothing to go
+                # on; the stem IS the anchor name here.
+                if not str(getattr(d, "graph_stem", "") or ""):
+                    d.graph_stem = a
+                # The FEM field has to be IN the pack before features are built -- building
+                # first and solving after is what left `flow="fem"` runs scoring ground truth.
+                solve_fem_into_pack(d)
             S = build_features(d, bio, phys, flow=args.flow)
         except Exception as e:  # noqa: BLE001
             print("[ERR ] %s %s" % (a, e), flush=True)

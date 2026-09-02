@@ -24,12 +24,6 @@ from src.biochem_gnn.config import (
 from src.config import BiochemConfig, PhysicsConfig
 from src.utils import species_channels as sc
 from src.core_physics.clot_phi_rollout import KinematicsUvProvider
-from src.core_physics.clot_phi_simple import sdf_nd_from_data
-from src.core_physics.coupled_shear_gnn import (
-    LocalKinematicCorrector,
-    assemble_local_corrector_features,
-    load_local_corrector,
-)
 from src.core_physics.clot_coupled_rollout import (
     reset_coupled_uv_cache,
     set_coupled_uv_cache,
@@ -116,11 +110,6 @@ class BiochemDeployConfig:
     nucleation: bool = True
     nucleation_hops: int = 1
     pin_other_species: str = "rest"
-    # Optional local kinematic corrector (velocity diversion around micro-clots).
-    local_corrector_ckpt: str | Path | None = None
-    local_corrector_hops: int = 4
-    # SI delta-mu above fluid baseline that flags a node as clot for the corrector.
-    local_corrector_mu_thresh_si: float = 1e-4
 
 
 @dataclass
@@ -160,7 +149,6 @@ class BiochemGNN:
         self.phys = PhysicsConfig(phase="biochem")
         self.bio = BiochemConfig(phase="biochem")
         self._kine: KinematicsUvProvider | None = None
-        self._local_corrector: LocalKinematicCorrector | None = None
 
     @classmethod
     def from_manifest(
@@ -179,13 +167,11 @@ class BiochemGNN:
             raise FileNotFoundError(f"species GNN ckpt not found: {ckpt}")
         beta_p = m.get("viscosity_beta") or rel_path(beta_ckpt_path())
         kine_p = m.get("kinematics_ckpt") or rel_path(DEFAULT_KINE_CKPT)
-        corrector_p = m.get("local_corrector_ckpt")
         cfg = BiochemDeployConfig(
             species_ckpt=str(ckpt),
             viscosity_beta=str(beta_p),
             kinematics_ckpt=str(kine_p),
             flow_mode=flow_mode,
-            local_corrector_ckpt=str(corrector_p) if corrector_p else None,
         )
         return cls(bundle, device=dev, cfg=cfg, manifest=m)
 
@@ -227,67 +213,6 @@ class BiochemGNN:
         if self.cfg.gelation_beta is not None:
             return float(self.cfg.gelation_beta)
         return resolve_deploy_gelation_beta(self.device)
-
-    def set_local_corrector(self, model: LocalKinematicCorrector) -> None:
-        """Attach a trained local kinematic corrector for coupled rollout."""
-        self._local_corrector = model.to(self.device).eval()
-
-    def _local_corrector_model(self) -> LocalKinematicCorrector | None:
-        if self._local_corrector is None and self.cfg.local_corrector_ckpt:
-            p = Path(self.cfg.local_corrector_ckpt)
-            if p.is_file():
-                self._local_corrector = load_local_corrector(p, device=self.device)
-        return self._local_corrector
-
-    @torch.no_grad()
-    def _apply_local_corrector(
-        self,
-        corrector: LocalKinematicCorrector,
-        data,
-        mu_pred_si: torch.Tensor,
-        u0: torch.Tensor,
-        v0: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Patch the frozen base flow with a local diversion around clot nodes.
-
-        Operates on the **full** mesh graph (``data.edge_index``): flow diverts
-        through the lumen, not just within the wall band. Returns full-graph
-        ``(u_next, v_next)`` so downstream band lookups stay valid.
-        """
-        from torch_geometric.utils import k_hop_subgraph
-
-        u_next = u0.clone()
-        v_next = v0.clone()
-
-        n = int(data.num_nodes)
-        fluid_mu_si = float(getattr(self.phys, "mu_inf", 0.0035))
-        # SI delta-mu flags clot nodes; the corrector feature is the ND delta-mu so
-        # the synthetic-patch trainer and this deploy path share one viscosity scale.
-        delta_mu_si = mu_pred_si.reshape(-1) - fluid_mu_si
-        clot_nodes = torch.where(delta_mu_si > float(self.cfg.local_corrector_mu_thresh_si))[0]
-        if clot_nodes.numel() == 0:
-            return u_next, v_next
-
-        subset, sub_edge_index, _, _ = k_hop_subgraph(
-            clot_nodes,
-            num_hops=int(self.cfg.local_corrector_hops),
-            edge_index=data.edge_index,
-            relabel_nodes=True,
-            num_nodes=n,
-        )
-
-        pos_nd = data.x[:, 0:2].to(device=self.device, dtype=torch.float32)
-        sdf_nd = sdf_nd_from_data(data, self.device, n).reshape(-1)
-        # mu_pred_si and mu_inf share mu_viscosity_nd_scale, so delta_mu_nd is exact.
-        delta_mu_nd = self.phys.viscosity_si_to_nd(delta_mu_si)
-        x_sub = assemble_local_corrector_features(
-            pos_nd, sdf_nd, u0, v0, delta_mu_nd, clot_nodes, subset
-        )
-
-        delta_uv = corrector(x_sub, sub_edge_index.to(self.device))
-        u_next[subset] = u_next[subset] + delta_uv[:, 0]
-        v_next[subset] = v_next[subset] + delta_uv[:, 1]
-        return u_next, v_next
 
     def _flow_source_str(self) -> str:
         if self.cfg.flow_mode == FlowMode.GT:
@@ -356,15 +281,6 @@ class BiochemGNN:
             meta={"decoupled": True, "pin_other_species": pin},
         )
 
-def recompute_sdf_euclidean(pos: torch.Tensor, new_wall_mask: torch.Tensor) -> torch.Tensor:
-    wall_pos = pos[new_wall_mask]
-    if wall_pos.size(0) == 0:
-        return torch.full((pos.size(0),), 99.0, device=pos.device, dtype=pos.dtype)
-    dist = torch.cdist(pos.unsqueeze(0), wall_pos.unsqueeze(0)).squeeze(0)
-    min_dist, _ = dist.min(dim=1)
-    return min_dist
-
-
     @torch.no_grad()
     def _rollout_coupled(
         self,
@@ -402,7 +318,6 @@ def recompute_sdf_euclidean(pos: torch.Tensor, new_wall_mask: torch.Tensor) -> t
         phi_prev: torch.Tensor | None = None
         commits_prev: torch.Tensor | None = None
         kine = self._kine_provider()
-        corrector = self._local_corrector_model()
 
         try:
             with t0_rung2_env():
@@ -485,12 +400,7 @@ def recompute_sdf_euclidean(pos: torch.Tensor, new_wall_mask: torch.Tensor) -> t
                         flow_width = new_flow.shape[1]
                         stat.base_feats[:, flow_start : flow_start + flow_width] = new_flow.to(dtype=stat.base_feats.dtype)
                     else:
-                        if corrector is not None:
-                            u_next, v_next = self._apply_local_corrector(
-                                corrector, data, step.mu_pred_si, u0, v0
-                            )
-                        else:
-                            u_next, v_next = kine.uv_nd_from_mu_si(data, step.mu_pred_si)
+                        u_next, v_next = kine.uv_nd_from_mu_si(data, step.mu_pred_si)
                     
                     set_coupled_uv_cache(data, u_next, v_next)
                     u0, v0 = u_next, v_next
@@ -550,9 +460,17 @@ def recompute_sdf_euclidean(pos: torch.Tensor, new_wall_mask: torch.Tensor) -> t
             meta={
                 "interleaved": True,
                 "gelation_beta": gel_beta,
-                "local_corrector": corrector is not None,
             },
         )
+
+
+def recompute_sdf_euclidean(pos: torch.Tensor, new_wall_mask: torch.Tensor) -> torch.Tensor:
+    wall_pos = pos[new_wall_mask]
+    if wall_pos.size(0) == 0:
+        return torch.full((pos.size(0),), 99.0, device=pos.device, dtype=pos.dtype)
+    dist = torch.cdist(pos.unsqueeze(0), wall_pos.unsqueeze(0)).squeeze(0)
+    min_dist, _ = dist.min(dim=1)
+    return min_dist
 
 
 # Backward-compatible aliases

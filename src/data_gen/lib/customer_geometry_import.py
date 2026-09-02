@@ -1,7 +1,7 @@
 """Customer geometry inbox + load helpers for the Predict app.
 
 Supports:
-  - existing HemoRGP ``.pt`` graphs
+  - existing Local FEM Solver ``.pt`` graphs
   - tagged Gmsh ``.msh`` / ``.nas`` with a same-stem sidecar ``.json``
   - parametric vessel build (caller supplies mesh+meta via ``graph_from_mesh_meta``)
 
@@ -10,6 +10,7 @@ Does not invent boundary tags for untagged STL.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -20,7 +21,7 @@ import numpy as np
 import torch
 from torch_geometric.data import Data
 
-from src.config import PhysicsConfig, VesselConfig
+from src.config import BiochemConfig, PhysicsConfig, VesselConfig
 from src.data_gen.lib.mesh_to_graph import MeshToGraph
 from src.data_gen.lib.mesh_to_graph_biochem import default_biochem_bio_inlet_bc
 from src.utils.channel_schema import (
@@ -36,6 +37,45 @@ SUPPORTED_SUFFIXES = (".pt", ".msh", ".nas")
 DEFAULT_N_STEPS = 60
 DEFAULT_RE = 450.0
 
+# `mesh_h_nd_target` multiplier for a parametric customer build.  1.0 reproduces
+# `VesselConfig.mesh_h_nd_target` exactly -- the density `clot_ml_0` was actually trained
+# against (docs/RGP_DEQ_REPAIR_PLAN.md Sec 8/9).  Swept 1.0-4.0x on 6 geometry classes
+# (straight/bend/stenosis/aneurysm x wound/no-wound, plus a severe narrow-throat case):
+# node count and FEM solve time both drop sharply through 2.0x, then plateau (the
+# lumen-width-aware size callback in `_install_lumen_size_callback` floors any throat at
+# `mesh_min_elems_across` elements regardless of the global target) -- 2.5x-4.0x bought under
+# 5% more nodes than 2.0x on every case, so there is nothing left to gain by going coarser.
+# FEM convergence held on every case up to 4.0x. 2.0x is therefore the coarsest setting that
+# is still capturing all the available speedup, not merely "the coarsest one that happened to
+# converge" -- a comfortable margin inside the safe range, not the edge of it.
+DRAFT_MESH_RESOLUTION_FACTOR = 2.0
+FULL_MESH_RESOLUTION_FACTOR = 1.0
+
+
+def default_customer_mesh_cache_dir(root: Path | None = None) -> Path:
+    """Persistent Gmsh meshes for parametric customer vessels (FEM t=0 flow)."""
+    return (root or get_project_root()) / "outputs" / "customer" / "_meshes"
+
+
+def _parametric_cache_key(
+    params: dict[str, Any],
+    *,
+    re_target: float,
+    t_final_s: float,
+    n_steps: int,
+    mesh_resolution_factor: float = FULL_MESH_RESOLUTION_FACTOR,
+) -> str:
+    payload = {
+        "params": params,
+        "re_target": float(re_target),
+        "t_final_s": float(t_final_s),
+        "n_steps": int(n_steps),
+        "mesh_resolution_factor": float(mesh_resolution_factor),
+    }
+    return hashlib.sha1(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:16]
+
 CustomerMaxPathology = Literal["max_stenosis", "max_aneurysm"]
 
 
@@ -46,31 +86,36 @@ class CustomerGeometryError(ValueError):
 def apply_customer_max_pathology(
     params: dict[str, Any],
     cfg: VesselConfig | None = None,
-    kind: CustomerMaxPathology = "max_stenosis",
+    kind: str = "max_stenosis",
+    strength: float = 1.0,
+    location: float = 0.5,
+    sharpness: float = 1.0,
 ) -> dict[str, Any]:
     """Overlay a mid-vessel max stenosis or max aneurysm on parametric vessel params.
 
     Uses both-wall peak offsets so stenosis hits ``max_stenosis_diameter_occlusion``
     and aneurysm hits ``max_aneurysm_width_scale`` (3x inlet). Wall noise is cleared
-    so the preview matches the configured strength.
+    so the preview matches the configured strength. ``strength``/``location``/
+    ``sharpness`` scale the magnitude, axial position, and taper of the overlay
+    around those defaults (1.0 / 0.5 / 1.0 reproduce the fixed max preset).
     """
     cfg = cfg or VesselConfig(phase="kinematics")
-    if kind not in ("max_stenosis", "max_aneurysm"):
+    if kind not in ("max_stenosis", "max_aneurysm", "stenosis", "aneurysm"):
         raise ValueError(f"Unknown max pathology kind {kind!r}")
 
     out = dict(params)
     width = float(out.get("width", cfg.width_min))
     n = int(cfg.num_ctrl_pts)
-    if kind == "max_stenosis":
-        mag = float(cfg.max_stenosis_wall_offset(width))
+    if "stenosis" in kind:
+        mag = float(cfg.max_stenosis_wall_offset(width)) * strength
         out["v_type"] = "stenosis"
     else:
-        mag = float(cfg.max_aneurysm_wall_offset(width))
+        mag = float(cfg.max_aneurysm_wall_offset(width)) * strength
         out["v_type"] = "aneurysm"
 
     min_idx, max_idx = max(3, int(n * 0.2)), min(n - 4, int(n * 0.8))
-    peak = int(min_idx + 0.5 * (max_idx - min_idx))
-    std_dev = max(1.0, 0.035 * n)
+    peak = min_idx + location * (max_idx - min_idx)
+    std_dev = max(1.0, 0.035 * n) / max(0.01, sharpness)
     x_idx = np.arange(n, dtype=float)
     gauss = np.exp(-0.5 * ((x_idx - peak) / std_dev) ** 2)
     out["offsets"] = (mag * gauss).tolist()
@@ -245,6 +290,20 @@ def _seed_bio_frame_from_data(data: Data, n_nodes: int) -> torch.Tensor:
     if abs(float(frame[:, 3].mean().item())) < 1e-12:
         # mu_eff_nd ~ 1 when unknown
         frame[:, 3] = 1.0
+    if abs(float(frame[:, 4].mean().item())) < 1e-12:
+        # RP_log1p_nd / AP_log1p_nd (resting + activated platelets) left at 0 here
+        # silently starve `wall_platelet_constants`'s rp/ap read of data.y[0]: with both
+        # zero, the wound module's chemistry ODE (src.clot_ml.wound.mat_trajectory_torch)
+        # has no source term at all (dep = sat*(k_rs*rp + k_as*ap_i)), so every
+        # customer/parametric pack (no COMSOL RP/AP field to copy) predicts zero wound
+        # clot regardless of geometry or wound placement. Seed the resting bulk
+        # concentrations (c_RP0, c_AP0) that measured COMSOL packs carry at t=0
+        # (src/tests/test_ap_closure.py: RP_log1p_nd ~1e-6, AP_log1p_nd ~5e-8 -- these
+        # ND encodings are `concentration / (c_RP0 * bulk_scale)`, not `/ c_RP0` alone).
+        bio_cfg = BiochemConfig(phase="biochem")
+        scale0 = float(bio_cfg.get_species_scales(device="cpu")[0])
+        frame[:, 4] = float(np.log1p(bio_cfg.c_RP0 / scale0))
+        frame[:, 5] = float(np.log1p(bio_cfg.c_AP0 / scale0))
     return frame
 
 
@@ -265,12 +324,13 @@ def synthesize_deploy_timeline(
     y_series = frame0.unsqueeze(0).expand(steps, -1, -1).contiguous().clone()
     # Keep existing species IC from a biochem graph when present
     y_old = getattr(data, "y", None)
-    if (
+    has_real_biochem_y = (
         y_old is not None
         and torch.is_tensor(y_old)
         and y_old.dim() == 3
         and int(y_old.shape[-1]) == _bio_y_width()
-    ):
+    )
+    if has_real_biochem_y:
         src = y_old.detach().cpu().float()
         t_src = int(src.shape[0])
         for i in range(steps):
@@ -278,6 +338,13 @@ def synthesize_deploy_timeline(
             y_series[i] = src[j]
 
     out.y = y_series
+    # No real (COMSOL-backed) species/velocity history to draw on -- the local FEM t=0 solve
+    # must not read `y[0, :, 0:2]` as if it were ground-truth inlet velocity (it is at best a
+    # broadcast kinematics snapshot, at worst exactly zero), or it Dirichlet-clamps the inlet
+    # to that placeholder and solves a trivial zero-flow field.  See
+    # `src.clot_ml.v0.solve_fem_into_pack`.
+    if not has_real_biochem_y:
+        out.research_synthetic = True
     out.t = torch.linspace(0.0, t_end, steps=steps, dtype=torch.float32)
     if not hasattr(out, "bio_inlet_bc") or out.bio_inlet_bc is None:
         out.bio_inlet_bc = default_biochem_bio_inlet_bc(n_nodes)
@@ -290,6 +357,39 @@ def synthesize_deploy_timeline(
             mask_wall=getattr(out, "mask_wall", None),
         )
     return out
+
+
+def _ensure_p2_topology(data: Data) -> Data:
+    """Elevate a Gmsh-built P1 (linear ``triangle``) graph to the P2 (``triangle6``) topology
+    every deploy checkpoint was trained on.
+
+    ``clot_ml_0``'s base GNN and wound complement are fit exclusively on COMSOL biochem
+    anchor packs (see the ``fit_anchors`` list in every locked manifest), and COMSOL always
+    exports ``triangle6``: no deploy checkpoint has ever seen a mesh without mid-side nodes.
+    Gmsh-built customer meshes (parametric or uploaded ``.msh``/``.nas``) are linear
+    ``triangle`` by default, so the off-wall/wound shell logic -- which walks mesh HOPS, not
+    physical distance (``first_corner_shell`` in ``physics_lumen_model.py``, the wound
+    module's own shell-1 owner map) -- lands its first shell one full corner-hop further from
+    the wall than it does on any vessel the model was tuned against, and the near-wall layer
+    never fires at all. Measured end to end on a customer parametric+wound vessel: off-wall
+    clot sat at 3.1-5.5x the local mesh pitch from the nearest wall/wound node with this
+    elevation skipped, against 1.6x / 3.2x two-layer bands on the equivalent COMSOL pack run
+    through the identical ``flow="fem"`` path.
+
+    Reuses the exact elevation recipe already used to close this same P1/P2 mismatch for the
+    kinematics predictor (``src/data_gen/lib/p2_elevation.py``, RGP_DEQ_REPAIR_PLAN.md Sec 8) --
+    a mid-side node is inserted on every edge, matching COMSOL's own corner-midside-only
+    convention, with interpolated features/labels. ``src/core_physics/local_fem_solver.py``
+    registers the FEM solve's own facet DOFs against these same positions, so the local t=0
+    flow at an elevated mid-side node is a genuine solved P2 value, not a placeholder.
+    """
+    from src.data_gen.lib.p1_corner_graph import identify_midside_nodes
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+
+    already, _ = identify_midside_nodes(data)
+    if bool(already.any()):
+        return data
+    return elevate_to_p2(data, keep_wls=False)
 
 
 def graph_from_mesh_meta(
@@ -311,6 +411,7 @@ def graph_from_mesh_meta(
         )
     _validate_masks(data, stem=stem)
     data = apply_re_target(data, re_target)
+    data = _ensure_p2_topology(data)
     # Default scaffold; callers usually re-synthesize with the UI horizon.
     return synthesize_deploy_timeline(data, t_final_s=8000.0, n_steps=DEFAULT_N_STEPS)
 
@@ -361,6 +462,7 @@ def load_customer_geometry(
     if suffix in (".msh", ".nas"):
         mesh, meta = _load_mesh_and_meta(p)
         data = graph_from_mesh_meta(mesh, meta, re_target=re_target, stem=stem)
+        data.mesh_path = str(p.resolve())
         if t_final_s is not None or n_steps is not None:
             data = synthesize_deploy_timeline(
                 data,
@@ -384,22 +486,35 @@ def build_parametric_customer_graph(
     amplitude: float | None = None,
     level: int = 0,
     params_override: dict[str, Any] | None = None,
+    mesh_resolution_factor: float = DRAFT_MESH_RESOLUTION_FACTOR,
 ) -> Data:
     """Build a synthetic vessel mesh and return a deploy-ready graph.
 
     ``params_override`` may be an edited-walls params dict from
     ``geometry_to_params_override`` (skips width/angle sampling).
-    """
-    import tempfile
 
+    ``mesh_resolution_factor`` scales ``VesselConfig.mesh_h_nd_target`` (the open-lumen
+    element size, in units of ``d_bar``): 1.0 is the exact density ``clot_ml_0`` trained on,
+    ``DRAFT_MESH_RESOLUTION_FACTOR`` (2.0) is the coarsest setting measured to still capture
+    essentially all of the available speedup (see the constant's docstring above). Runs
+    ~3-4x faster with node count and FEM solve time both cut by roughly that much, and the
+    P2 topology fix (mid-side adjacency) is unaffected -- it is a property of every edge, not
+    of overall density.
+
+    Meshes are cached under ``outputs/customer/_meshes/`` so local FEM can resolve
+    ``mesh_path`` after the build returns.
+    """
     from src.data_gen.lib.vessel_generator import (
         VesselGenerator,
         build_vessel_mesh,
         make_vessel_params,
     )
 
-    cfg = VesselConfig(phase="kinematics")
+    factor = float(mesh_resolution_factor)
+    base_h_nd = VesselConfig(phase="kinematics").mesh_h_nd_target
+    cfg = VesselConfig(phase="kinematics", mesh_h_nd_target=base_h_nd * factor)
     gen = VesselGenerator(phase="kinematics")
+    gen.cfg = cfg
     cfg_dict = dict(gen._cfg_dict())
     cfg_dict["unit"] = "m"
 
@@ -419,17 +534,45 @@ def build_parametric_customer_graph(
                 overrides["curve_type"] = "sine"
         params = make_vessel_params(idx=0, level=int(level), cfg=cfg, **overrides)
 
-    with tempfile.TemporaryDirectory(prefix="customer_param_") as tmp:
-        work = Path(tmp)
-        idx, ok, err = build_vessel_mesh(params, cfg_dict, work)
+    cache_key = _parametric_cache_key(
+        params,
+        re_target=float(re_target),
+        t_final_s=float(t_final_s),
+        n_steps=int(n_steps),
+        mesh_resolution_factor=factor,
+    )
+    cache_dir = default_customer_mesh_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    msh_path = cache_dir / f"customer_{cache_key}.msh"
+    json_path = cache_dir / f"customer_{cache_key}.json"
+
+    if not msh_path.is_file() or not json_path.is_file():
+        idx, ok, err = build_vessel_mesh(params, cfg_dict, cache_dir)
         if not ok:
             raise CustomerGeometryError(err or "parametric mesh build failed")
-        msh_path = work / f"vessel_{idx}.msh"
-        json_path = work / f"vessel_{idx}.json"
-        mesh = meshio.read(msh_path)
-        meta = json.loads(json_path.read_text(encoding="utf-8"))
-        data = graph_from_mesh_meta(mesh, meta, re_target=re_target, stem=f"vessel_{idx}")
-        return synthesize_deploy_timeline(data, t_final_s=t_final_s, n_steps=n_steps)
+        built_msh = cache_dir / f"vessel_{idx}.msh"
+        built_json = cache_dir / f"vessel_{idx}.json"
+        if built_msh.resolve() != msh_path.resolve():
+            if msh_path.is_file():
+                msh_path.unlink()
+            built_msh.replace(msh_path)
+        if built_json.resolve() != json_path.resolve():
+            if json_path.is_file():
+                json_path.unlink()
+            built_json.replace(json_path)
+        for leftover in cache_dir.glob("vessel_*.*"):
+            leftover.unlink(missing_ok=True)
+
+    mesh = meshio.read(msh_path)
+    meta = json.loads(json_path.read_text(encoding="utf-8"))
+    data = graph_from_mesh_meta(
+        mesh,
+        meta,
+        re_target=re_target,
+        stem=f"customer_{cache_key}",
+    )
+    data.mesh_path = str(msh_path.resolve())
+    return synthesize_deploy_timeline(data, t_final_s=t_final_s, n_steps=n_steps)
 
 
 def preview_points_from_graph(data: Data) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

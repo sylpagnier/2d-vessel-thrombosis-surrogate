@@ -37,9 +37,7 @@
     "wall_mat_only": false,
     "nucleation_hops": 4,
     "ceiling_hops": 4,
-    "closed_loop_coupling": true,
-    "corrector_coupling": true,
-    "rollout_vel_source": "coupled",
+    "rollout_vel_source": "kinematics",
     "clout_score_mode": "guiding",
     "guide_relax_hops": 3,
     "clout_prec_rec_floor": 0.3,
@@ -49,7 +47,7 @@
     "phi_loss_type": "mse",
     "mu_loss_weight": 0.0,
     "kine_resolve_on_clot": false,
-    "train_vel_source": "coupled",
+    "train_vel_source": "kinematics",
     "train_deploy_eval_flow": "auto"
   },
   "scores": {
@@ -63,7 +61,7 @@
     "train_select_best_score": 0.278,
     "protocol": {
       "deploy_faithful": true,
-      "flow": "RGP-DEQ @ t=0 + local tiling (corrector coupling)",
+      "flow": "RGP-DEQ @ t=0 frozen kinematics (no GT velocity)",
       "no_gt_velocity": true,
       "holdout_at_ab_run": "patient020,patient034",
       "holdout_policy_going_forward": "patient020"

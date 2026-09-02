@@ -63,7 +63,7 @@ REPLACEMENTS: list[tuple[str, str]] = [
 
 TARGETS = [
     REPO / "src/evaluation/visualize_pipeline.py",
-    REPO / "src/training/train_species_pushforward_continuous.py",
+    REPO / "src/archive/mat_growth/train_species_pushforward_continuous.py",
     REPO / "src/training/train_biochem_gnn.py",
 ]
 

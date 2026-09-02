@@ -1,0 +1,71 @@
+diff a/src/core_physics/physics_wall_model.py b/src/core_physics/physics_wall_model.py	(rejected hunks)
+@@ -143,16 +143,26 @@ def gt_flow_gate_series(
+     return out
+ 
+ 
+-#: Amplitude correction that puts predicted-flow ``dsrx`` on the scale ``sgt`` was fitted at.
++#: h3->h6 stencil attenuation: a property of the MLS operator measured on the GT field alone
++#: (2026-08-23, wall nodes, 10 vessels).  A wide stencil smooths the second derivative of any
++#: field, regardless of which solver produced it.
++DSRX_STENCIL_GAIN = 2.18
++
++#: Surrogate-specific amplitude deficit at hops=6, like-for-like (corr 0.95, 2026-08-23).
++#: The RGP-DEQ surrogate's near-wall velocity is further 1.38x underestimated relative to GT
++#: at the same stencil width.  FEM and GT both carry zero surrogate deficit.
++DSRX_SURROGATE_GAIN = 1.38   # = PRED_DSRX_GAIN / DSRX_STENCIL_GAIN
++
++#: Combined amplitude correction for the RGP-DEQ surrogate at ``hops=6``.
+ #:
+ #: ``sgt`` is a PHYSICAL constant read off COMSOL's deposition law, but the discrete ``dsrx``
+ #: it is compared against depends on the stencil that produced it, and the two flow sources do
+ #: not use the same one: GT is differentiated at ``hops=3`` and the surrogate needs ``hops=6``
+ #: to escape a sign flip (``src/clot_ml/features.py``).  Two effects stack, both measured
+ #: 2026-08-23 at the wall: a 6-hop stencil attenuates ``dsrx`` **2.18x** relative to a 3-hop
+-#: one on the GT field alone, and the surrogate is a further **1.38x** low like-for-like at
+-#: hops=6 (corr 0.95).  Uncorrected, the ``sgt`` gate branch fires on 0.56x the nodes it
+-#: should and agrees with the GT gate on almost none of them.
++#: one on the GT field alone (DSRX_STENCIL_GAIN), and the surrogate is a further **1.38x** low
++#: like-for-like at hops=6 (DSRX_SURROGATE_GAIN, corr 0.95).  Uncorrected, the ``sgt`` gate
++#: branch fires on 0.56x the nodes it should and agrees with the GT gate on almost none of them.
+ #:
+ #: **This is a fitted constant, not a derivation, and it is fitted on FIT only.**  The obvious
+ #: deploy-legal alternative was tested and fails: the same operator chain applied to a smooth
+@@ -166,11 +176,14 @@ def gt_flow_gate_series(
+ #: Wall gate union Jaccard against the GT gate, median:  FIT **0.20 -> 0.52**, DEV (held out)
+ #: **0.47 -> 0.54**.  Fire rate relative to GT: FIT x0.61 -> x0.89, DEV x0.67 -> x1.24.
+ #:
++#: Kept as a DERIVED ALIAS (= DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN) so the RGP-DEQ arm's
++#: numbers are bit-identical and the split can be verified: 2.18 * 1.38 = 3.01, rounded to 3.00.
+ #: Applied here and in ``src/clot_ml/features.py`` -- the two places that gate on `sgt`.
+-#: Deliberately NOT applied in ``src/differentiable_wall_model``: its gates are soft and its
++#: Deliberately NOT applied in the retired differentiable-wall ML ladder
++#: (``src/archive/differentiable_wall_model``): its gates are soft and its
+ #: thresholds are *learned* per artifact (``compute_soft_gates`` / ``ParameterMap``), so they
+ #: absorb the scale themselves and rescaling the input would invalidate its trained weights.
+-PRED_DSRX_GAIN = 3.00
++PRED_DSRX_GAIN = 3.00   # = DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN; keep for DEQ arm
+ 
+ 
+ def t0_flow_fields(
+@@ -208,14 +221,17 @@ def t0_flow_fields(
+         v = data.y[time_index, :, 1].detach().cpu().numpy().astype(np.float64)
+         sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
+     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)                                   # 1/(s*cm)
+-    if flow_source in ("pred", "fem"):
+-        # `CLOT_PRED_DSRX_GAIN` overrides the shipped constant.  That constant was least-squares
+-        # fitted to the OLD surrogate's under-resolution, so it is not obviously right for any
+-        # other reconstructed field -- a converged FEM solve least of all.
++    if flow_source == "pred":
++        # `CLOT_PRED_DSRX_GAIN` overrides the shipped constant for diag sweeps.
++        # PRED_DSRX_GAIN = DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN: the surrogate needs both
++        # corrections.  FEM does NOT -- it is a converged field and carries no surrogate deficit.
+         import os as _os
+ 
+         _g = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
+         dsrx = dsrx * (float(_g) if _g else PRED_DSRX_GAIN)
++    # flow_source == "fem": GT treatment -- hops=3, gain=1.0.  A converged FEM field is already
++    # on the correct scale (diag 2026-09-01: fem h3 g1 gateJ 0.908 vs shipped h6 g3.0 = 0.520).
++    # flow_source == "gt": no correction by definition.
+ 
+     sgt_cgs = float(bio_cfg.sgt) / M_TO_CM             # 1/(s*m) -> 1/(s*cm)
+     return T0Fields(

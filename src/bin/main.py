@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
     }:
         print(
             "[WARN] Mat-growth biochem training is archived under src/archive/mat_growth/. "
-            "Prefer locked checkpoints and clot_ml_v0 for deploy."
+            "Prefer locked checkpoints and clot_ml_0 for deploy."
         )
 
     if ns.group == "orchestrate":

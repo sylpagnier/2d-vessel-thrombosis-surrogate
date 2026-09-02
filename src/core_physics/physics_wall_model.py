@@ -185,6 +185,27 @@ DSRX_SURROGATE_GAIN = 1.38   # = PRED_DSRX_GAIN / DSRX_STENCIL_GAIN
 PRED_DSRX_GAIN = 3.00   # = DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN; keep for DEQ arm
 
 
+def dsrx_gain(flow_source: str) -> float:
+    """Wall-shear x-derivative amplitude correction, per flow source.
+
+    `pred` carries the surrogate's fitted deficit; `fem` and `gt` are converged fields on
+    COMSOL's own scale and take 1.0.  `CLOT_PRED_DSRX_GAIN` overrides the reconstructed
+    sources so the constant can be swept apart from the field.
+
+    Centralised because the override used to be read inline here only, while `features.py`
+    applied a hardcoded `PRED_DSRX_GAIN` to its own `dsrx` -- so an ablation moved one of the
+    two derivatives and not the other.
+    """
+    import os as _os
+
+    src = str(flow_source)
+    if src in ("pred", "fem"):
+        raw = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
+        if raw:
+            return float(raw)
+    return {"pred": PRED_DSRX_GAIN}.get(src, 1.0)
+
+
 def t0_flow_fields(
     data, bio_cfg, *, hops: int = 3, time_index: int = 0, flow_source: str = "gt"
 ) -> T0Fields:
@@ -220,22 +241,7 @@ def t0_flow_fields(
         v = data.y[time_index, :, 1].detach().cpu().numpy().astype(np.float64)
         sr = shear_rate_2d(Dx @ u, Dy @ u, Dx @ v, Dy @ v) * (u_ref / d_bar)
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)                                   # 1/(s*cm)
-    if flow_source == "pred":
-        # `CLOT_PRED_DSRX_GAIN` overrides the shipped constant.  That constant was least-squares
-        # fitted to the OLD surrogate's under-resolution, so it is not obviously right for any
-        # other reconstructed field.
-        import os as _os
-
-        _g = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
-        dsrx = dsrx * (float(_g) if _g else PRED_DSRX_GAIN)
-    elif flow_source == "fem":
-        # GT treatment: gain=1.0.  A converged FEM field is already on the same scale as
-        # COMSOL's own field -- no surrogate deficit, no stencil sign-flip issue at hops=3.
-        # Confirmed 2026-09-01: full cohort (n=33) median fem h3 g1 gateJ 0.935 vs shipped h6 g3.0 = 0.811.
-        import os as _os
-
-        _g = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
-        dsrx = dsrx * (float(_g) if _g else 1.0)
+    dsrx = dsrx * dsrx_gain(flow_source)
 
     sgt_cgs = float(bio_cfg.sgt) / M_TO_CM             # 1/(s*m) -> 1/(s*cm)
     return T0Fields(

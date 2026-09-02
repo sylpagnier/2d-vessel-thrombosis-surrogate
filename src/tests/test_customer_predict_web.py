@@ -77,7 +77,7 @@ def test_customer_baseline_uses_the_clot_ml_0_alias_without_loading_weights():
     pipeline = CustomerDeployPipeline(device=torch.device("cpu"), require_cuda=False)
     assert DEFAULT_CUSTOMER_CLOT_MODEL == "clot_ml_0"
     assert pipeline.model_name == "clot_ml_0"
-    assert pipeline.locked_model_name == "clot_ml_v0"
+    assert pipeline.locked_model_name == "clot_ml_0"
 
 
 def test_parametric_vessel_is_clean_and_defined_only_by_visible_controls():

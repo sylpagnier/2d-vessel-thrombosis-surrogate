@@ -9,7 +9,7 @@ if str(REPO) not in sys.path:
 
 from src.utils.kinematics_inference import predict_kinematics_and_latent
 from src.biochem_gnn.config import apply_deploy_env
-from src.inference.corrector_coupling import resolve_kinematics_checkpoint
+from src.utils.kinematics_inference import resolve_kinematics_checkpoint
 from src.utils.kinematics_inference import load_kinematics_predictor
 import os
 

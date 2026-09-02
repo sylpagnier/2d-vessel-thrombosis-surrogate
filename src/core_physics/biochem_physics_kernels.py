@@ -8,7 +8,7 @@ from src.config import BULK_SPECIES_ORDER, SPECIES_GROUPS, BulkSpecies, BiochemN
 from src.utils.channel_schema import biochem_encoder_x
 from src.utils.rheology import compute_shear_rate
 from src.utils.nondim import time_ratio_global_to_convective
-from src.core_physics.mls_gradient import graph_gradient_operators
+from src.core_physics.mls_gradient import graph_gradient_operators, graph_laplacian_operator
 from src.utils.tensor_utils import as_tensor_like
 
 
@@ -120,6 +120,15 @@ class BiochemPhysicsKernels:
         (docs/PHASE3_RESULTS.md 1). ``BIOCHEM_GRAD_OPERATOR=legacy`` restores them.
         """
         return graph_gradient_operators(data, device=like.device, dtype=like.dtype)
+
+    @staticmethod
+    def _lap_op(data, like: torch.Tensor):
+        """Laplacian for ``data``, in the packs' non-dimensional length unit.
+
+        Same reason as :meth:`_grad_ops`: the shipped ``data.Laplacian`` is rank-deficient
+        and reads ``lap(x^2 + y^2)`` as 1.79 against an exact 4.0.
+        """
+        return graph_laplacian_operator(data, device=like.device, dtype=like.dtype)
 
     def set_biochem_huber_delta(self, delta: float) -> None:
         """Update shared residual Huber delta during curriculum annealing."""
@@ -399,7 +408,7 @@ class BiochemPhysicsKernels:
             advection_nd = u * dC_dx_nd + v * dC_dy_nd
 
             # Diffusion in dimensionless form: div((1/Pe) grad(C_nd)).
-            laplacian_C_nd = torch.sparse.mm(data.Laplacian, C_col_nd).squeeze(1)
+            laplacian_C_nd = torch.sparse.mm(self._lap_op(data, C_col_nd), C_col_nd).squeeze(1)
             inv_pe = as_tensor_like(D, like=u_ref_safe) / (u_ref_safe * d_bar_safe)
             inv_pe_col = inv_pe.unsqueeze(1)
             dinvpe_dx = torch.sparse.mm(_gx, inv_pe_col).squeeze(1)

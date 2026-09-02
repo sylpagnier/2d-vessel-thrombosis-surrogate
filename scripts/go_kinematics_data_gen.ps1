@@ -1,37 +1,31 @@
+# Kinematics mesh / anchor / graph generation helper.
+#   powershell ... -File .\scripts\go_kinematics_data_gen.ps1 [-NumVessels 100] [-Overwrite]
+
 param(
-  [int]$NumVessels = 100,
-  [switch]$Overwrite
+    [int] $NumVessels = 100,
+    [switch] $Overwrite
 )
 
-$ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $RepoRoot
-
+. (Join-Path $PSScriptRoot "_launcher_common.ps1")
+$RepoRoot = Initialize-HemoRepo -ScriptRoot $PSScriptRoot
 $env:PYTHONPATH = "."
-$env:PYTHONIOENCODING = "utf-8"
 
-# 1. Vessels
-Write-Host "Generating straight_max vessels..." -ForegroundColor Cyan
+Write-Host "[i] Generating straight_max vessels (n=$NumVessels)..." -ForegroundColor Cyan
 $vesselArgs = @("--phase", "1", "--level", "0", "-n", "$NumVessels", "--pathology-mode", "straight_max")
-if ($Overwrite) {
-    $vesselArgs += "--overwrite"
-}
-& python src/data_gen/lib/vessel_generator.py @vesselArgs
+if ($Overwrite) { $vesselArgs += "--overwrite" }
+$rc = Invoke-HemoPython -Args (@("src/data_gen/lib/vessel_generator.py") + $vesselArgs)
+if ($rc -ne 0) { Exit-GoLauncher -Rc $rc -Label "vessel_generator" }
 
-# 2. Anchors (COMSOL)
-Write-Host "Generating COMSOL anchors..." -ForegroundColor Cyan
-$ow_str = if ($Overwrite) { "True" } else { "False" }
+Write-Host "[i] Generating COMSOL anchors..." -ForegroundColor Cyan
+$ow = if ($Overwrite) { "True" } else { "False" }
 $pyScript = @"
 from src.data_gen.lib.anchor_generator import AnchorGenerator
 gen = AnchorGenerator(phase='phase1')
-allow_overwrite = $ow_str
-gen.run_batch(max_new=$NumVessels, allow_overwrite=allow_overwrite)
+gen.run_batch(max_new=$NumVessels, allow_overwrite=$ow)
 "@
-& python -c $pyScript
+$rc = Invoke-HemoPython -Args @("-c", $pyScript)
+if ($rc -ne 0) { Exit-GoLauncher -Rc $rc -Label "anchor_generator" }
 
-# 3. Mesh to Graph (PyG)
-Write-Host "Converting meshes to PyG graphs..." -ForegroundColor Cyan
-$meshArgs = @("--phase", "1", "--rheology", "newtonian")
-& python src/data_gen/lib/mesh_to_graph.py @meshArgs
-
-Write-Host "Done!" -ForegroundColor Green
+Write-Host "[i] Converting meshes to PyG graphs..." -ForegroundColor Cyan
+$rc = Invoke-HemoPython -Args @("src/data_gen/lib/mesh_to_graph.py", "--phase", "1", "--rheology", "newtonian")
+Exit-GoLauncher -Rc $rc -Label "mesh_to_graph"

@@ -1,8 +1,8 @@
-"""Customer-facing deploy pipeline: RGP-DEQ t=0 flow + clot_ml_0 rollout.
+"""Customer-facing deploy pipeline: local FEM t=0 flow + clot_ml_0 rollout.
 
-Default path: frozen kinematics at t=0, then the locked C0-tail clot baseline
-(``clot_ml_v0`` artifact).  ``LegacySpeciesDeployPipeline`` remains for explicit
-mat-growth / compound comparisons only.
+Default path: in-house Carreau FEM at t=0, then the locked unified
+``clot_ml_0`` artifact (same stack as research sweeps).  ``LegacySpeciesDeployPipeline``
+remains for explicit mat-growth / compound comparisons only.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from src.core_physics.t0_device import require_cuda_device
 from src.core_physics.t0_mu_physics import rollout_t0_clot_phi
 from src.core_physics.t0_rung_config import RUNG2_GAMMA_MODE, t0_rung2_env
 from src.inference.species_gnn_deploy_env import load_deploy_manifest, species_gnn_deploy_env
-from src.inference.corrector_coupling import CorrectorCoupledFlow
 from src.utils.paths import get_project_root
 
 # Wall backbone = WC_v7_clot_phi_mse; customer default stacks compound growth specialist
@@ -254,7 +253,7 @@ class LegacySpeciesDeployPipeline:
         self.offwall_ckpt = _resolve_offwall_ckpt(offwall_ckpt)
         self.mat_leg = mat_leg
         self._bundle = None
-        self._flow_provider: CorrectorCoupledFlow | None = None
+        self._flow_provider = None  # CorrectorCoupledFlow; legacy path only
 
     def _ensure_loaded(self) -> None:
         if self._bundle is not None:
@@ -278,6 +277,8 @@ class LegacySpeciesDeployPipeline:
             self._bundle = load_species_gnn_rollout_bundle(self.wall_ckpt, device=self.device)
         if self._bundle is None:
             raise FileNotFoundError(f"Could not load species GNN bundle: {self.wall_ckpt}")
+        from src.inference.corrector_coupling import CorrectorCoupledFlow
+
         self._flow_provider = CorrectorCoupledFlow(device=self.device, phys_cfg=PhysicsConfig(phase="biochem"))
 
     def run(
@@ -457,18 +458,19 @@ class LegacySpeciesDeployPipeline:
         )
 
 
-# The customer product uses the reviewed C0-tail clot baseline.  The on-disk release
-# is named ``clot_ml_v0``; ``clot_ml_0`` is the customer-facing baseline name.
+# Customer deploy uses the locked ``clot_ml_0`` unified stack.
 DEFAULT_CUSTOMER_CLOT_MODEL = "clot_ml_0"
-_LOCKED_CUSTOMER_CLOT_MODEL = "clot_ml_v0"
+DEFAULT_CUSTOMER_FLOW = "fem"
+_LOCKED_CUSTOMER_CLOT_MODEL = "clot_ml_0"
 
 
 class CustomerDeployPipeline:
     """Customer inference with the locked ``clot_ml_0`` baseline and wound complement.
 
-    A single RGP-DEQ solve produces deployable t=0 flow.  The C0-tail temporal GNN then
-    rolls the clot set forward.  This intentionally does not use COMSOL velocity labels.
-    ``LegacySpeciesDeployPipeline`` remains available only for explicit comparisons.
+    A single local Carreau FEM solve produces deployable t=0 flow (``solve_fem_into_pack``).
+    The unified ``clot_ml_0`` stack then rolls the clot set forward.  This intentionally does
+    not use COMSOL velocity labels.  ``LegacySpeciesDeployPipeline`` remains available only
+    for explicit comparisons.
     """
 
     def __init__(
@@ -491,7 +493,8 @@ class CustomerDeployPipeline:
             self._flow_provider = None
             return
         self.locked_model_name = (
-            _LOCKED_CUSTOMER_CLOT_MODEL if self.model_name in {"clot_ml_0", "clot_ml_v0"}
+            _LOCKED_CUSTOMER_CLOT_MODEL
+            if self.model_name in {"clot_ml_0", "clot_ml_0"}
             else self.model_name
         )
         self._bundle: dict | None = None
@@ -509,9 +512,9 @@ class CustomerDeployPipeline:
             return
         if self._bundle is not None:
             return
-        from src.clot_ml.locked import load_temporal_v4_wound
+        from src.clot_ml.v0 import load_v0_bundle
 
-        self._bundle = load_temporal_v4_wound(name=self.locked_model_name)
+        self._bundle = load_v0_bundle(name=self.locked_model_name)
 
     def run(
         self,
@@ -537,22 +540,26 @@ class CustomerDeployPipeline:
             n_steps = int(out.y.shape[0])
             out.t = torch.linspace(0.0, float(t_final_s), steps=n_steps, dtype=torch.float32)
 
-        # One deployable t=0 flow solve.  This also attaches u0_pred/v0_pred, which the
-        # clot baseline consumes through flow="pred"; it never reads data.y velocity labels.
-        log("[i] Solving deployable t=0 kinematics…")
-        from src.core_physics.species_gnn_clot_rollout import prepare_species_gnn_rollout_static
+        # Local FEM at t=0 (same path as research sweeps).  Writes u0_pred/v0_pred; the
+        # clot stack consumes them through flow="fem" with the wider MLS stencil.
+        log("[i] Solving local FEM flow at t=0...")
+        from src.clot_ml.locked import build_sample
+        from src.clot_ml.v0 import predict_clot_ml_0, solve_fem_into_pack
 
-        prepare_species_gnn_rollout_static(out, device=self.device)
-        # ``prepare_*`` evaluates RGP-DEQ on the accelerator and mutates the PyG object
-        # through ``data.to(device)``.  The locked sklearn/PyG clot readout is CPU-based;
-        # keep only the deployable u0_pred/v0_pred fields and return its inputs to CPU.
+        solve_fem_into_pack(out)
         out = out.cpu()
         n_steps = int(out.t.reshape(-1).numel())
         indices = list(range(n_steps))
-        log("[i] Rolling out clot_ml_0 C0-tail baseline…")
-        from src.clot_ml.locked import predict_temporal_v4_wound
-
-        result = predict_temporal_v4_wound(self._bundle, out, indices, flow="pred")
+        bio = BiochemConfig(phase="biochem")
+        sample = build_sample(out, bio, flow=DEFAULT_CUSTOMER_FLOW, variant="v4")
+        log("[i] Rolling out clot_ml_0...")
+        result = predict_clot_ml_0(
+            self._bundle,
+            out,
+            indices,
+            flow=DEFAULT_CUSTOMER_FLOW,
+            sample=sample,
+        )
         phi_all = {
             int(i): np.asarray(result["series"][int(i)], dtype=np.float32)
             for i in indices
@@ -604,7 +611,7 @@ class CustomerDeployPipeline:
             meta={
                 "model": DEFAULT_CUSTOMER_CLOT_MODEL,
                 "locked_artifact": self.locked_model_name,
-                "flow_source": "pred",
+                "flow_source": DEFAULT_CUSTOMER_FLOW,
                 "include_velocity": bool(include_velocity),
                 "velocity_indices": velocity_indices,
                 "velocity_mode": "bookends" if include_velocity else "none",

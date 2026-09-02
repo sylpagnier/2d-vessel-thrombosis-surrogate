@@ -1,0 +1,13 @@
+{
+  "id": "16_wound_width",
+  "title": "Wound patch width vs research parameters",
+  "axis": "wound_width_frac",
+  "description": "Straight mid-width vessel with mirrored wound; vary axial wound width at Re=450.",
+  "control": {"geometry_preset": "wound_mid_enabled"},
+  "arms": [
+    {"name": "w_0.08", "axis_value": 0.08, "geometry": {"wound_width_frac": 0.08}},
+    {"name": "w_0.15", "axis_value": 0.15, "geometry": {"wound_width_frac": 0.15}},
+    {"name": "w_0.25", "axis_value": 0.25, "geometry": {"wound_width_frac": 0.25}},
+    {"name": "w_0.40", "axis_value": 0.40, "geometry": {"wound_width_frac": 0.40}}
+  ]
+}

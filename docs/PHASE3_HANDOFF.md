@@ -20,7 +20,7 @@ boundary conditions, build a new wall-only clot model that generalizes to unseen
 Phase 3 is deliberately scoped *inside* a bandaid so the biochem model can be developed against a
 clean flow input instead of being confounded by flow-surrogate error.
 
-Repo: `C:\Users\pgssy\thrombus_ml_model` (Windows; PowerShell and Git Bash both available).
+Repo: `C:\Users\pgssy\local-fem-solver` (Windows; PowerShell and Git Bash both available).
 History: `docs/WALL_MODEL_PLAN.md` (~4500 lines, every claim cites a `§N`).
 **Read §26 first** (the session that produced this), then §10.1, §10.4, §19.2.
 Do **not** read §1–§13 linearly — they contain retracted conclusions, cited from later sections

@@ -214,10 +214,10 @@ analytic prior alone       0.370
 
 ## 6. Known cohort hazards
 
-* **7 deploy packs are from an older extractor revision**: `patient002` and all six `*_mirror_y`.
-  They have dead `node_type` where the other 45 are live, and anomalous prior blocks
-  (`patient002` is the bit-identical leak; the mirrors read 0.06–0.45).  `patient002` is in the
-  training pool.  Consider excluding or re-extracting all seven.
+* **`patient002` is from an older extractor revision**: dead `node_type` where the other 45
+  are live, and a bit-identical prior leak.  It is in the training pool.  Consider excluding
+  or re-extracting it.  (The six `*_mirror_y` packs shared this defect and were **deleted
+  2026-08-31** — see `GENERALIZATION_PLAN.md` §"Safe augmentation".)
 * **`patient018`** scores 0.000 in every predicted-flow arm and is its own problem
   (`DEPLOY_FLOW_PLAN.md` §2).
 * **The clinical steady-kine anchors** (`graphs_kinematics_anchors/carreau`) are what
@@ -406,6 +406,14 @@ raise wall_noise_freq_* / wall_noise_amp_frac
   -> only then generate the full cohort
 ```
 
+**The knobs are two env multipliers (2026-09-02), not a source edit.**  `VesselConfig` reads
+`KINE_WALL_NOISE_FREQ_SCALE` and `KINE_WALL_NOISE_AMP_SCALE` in `__post_init__`, so a sweep
+does not depend on editing `src/config.py` and remembering to put it back.  Two multipliers
+rather than ten fields keeps the sampler's SHAPE fixed and moves it as one dial, so a
+calibration run varies one thing.  The `--dry-run` banner prints the resolved band and the
+element order unconditionally -- "which wall-noise setting was this cohort generated at" is not
+a question anyone should have to answer from shell history.
+
 Twenty vessels is minutes, and it is the difference between a cohort that trains and 250 that do
 not.
 
@@ -434,6 +442,27 @@ KINEMATICS_PREPARED_CACHE=outputs/cache/kine_prepared
 BIOCHEM_GRAD_CACHE_CPU=300
 KINEMATICS_TRAIN_SUBSAMPLE=100      # iteration only; drop it for a final run
 ```
+
+**Added 2026-09-02, for the run on the regenerated corpus** (`RGP_DEQ_REPAIR_PLAN.md` §17):
+
+```bash
+KINEMATICS_DECODER_SKIP=1           # decoder reads [z*, x_enc], not the LayerNorm shell alone
+KINEMATICS_RESIDUAL_GAIN=1          # per-node gain on the hard-BC residual; exp(0)=1 at init
+KINEMATICS_BAND_ON_CORNERS=1        # C2, the best recipe the synthetic corpus supported
+```
+
+Both new flags default OFF and are exact no-ops at initialisation, so the arm that separates
+§16.5's label ceiling from §17.1's architectural one is the same command with them dropped.
+The pair is `scratch/tune/run_D0_ablation.sh` (flags off, the control) and
+`scratch/tune/run_D1_shell.sh` (flags on).  **Run D0 first.**  The corpus on disk now passes the
+wall-shear regime check the 2026-08-28 cohort failed (`RGP_DEQ_REPAIR_PLAN.md` §17.5), so a D1
+that beats the analytic prior could be the corpus, the flags, or both, and D0 is the only thing
+that tells them apart.
+
+**Do not raise `KINE_WALL_NOISE_*` for this run.**  The cohort reads `wall_dsrx_sd` 1.88x of
+deploy and `sep-only` 0.89x — inside the band and slightly high, not 0.13x and failing.  The
+multipliers stay documented above as the knob for a future cohort that needs them; at 1.0 they
+are inert.
 
 `scratch/tune/launch.sh` sets all of it; an arm overrides one variable.  Read a run by its
 one-line summary:

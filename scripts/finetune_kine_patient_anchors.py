@@ -4,7 +4,7 @@ Clinical COMSOL graphs live under ``graphs_kinematics_anchors/carreau/`` and are
 in the default ``load_dataset`` corpus. This script resumes a healthy Stage-A checkpoint,
 merges patient anchors, and finetunes with heavy patient sampling.
 
-Env (set by ``go_kinematics_clinical_anchor_finetune.ps1``):
+Env (set by ``run_kinematics_production.py clinical`` or legacy PS1):
   KINEMATICS_INCLUDE_PATIENT_ANCHORS=1
   KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS=patient007,...
   KINEMATICS_CLINICAL_ANCHOR_BOOST=10

@@ -28,8 +28,28 @@ import torch
 
 REPO = Path(__file__).resolve().parents[2]
 LOCKED = REPO / "outputs" / "clot_ml" / "locked"
-DEFAULT_NAME = "clot_ml_v0"
+DEFAULT_NAME = "clot_ml_0"
+LEGACY_NAMES = frozenset({"clot_ml_v0"})
 KIND = "unified_v0"
+
+
+def resolve_clot_ml_name(name: str | None = None) -> str:
+    """Map legacy deploy-clot artifact names to the canonical ``clot_ml_0`` id."""
+    n = (name or DEFAULT_NAME).strip()
+    if n in LEGACY_NAMES:
+        return DEFAULT_NAME
+    return n
+
+
+def _locked_root(name: str | None = None) -> Path:
+    """Resolve on-disk locked artifact directory (canonical name, then legacy fallback)."""
+    canonical = resolve_clot_ml_name(name)
+    root = LOCKED / canonical
+    if root.is_dir():
+        return root
+    if canonical == DEFAULT_NAME and (legacy := LOCKED / "clot_ml_v0").is_dir():
+        return legacy
+    return root
 
 #: COMSOL's own Damkohler split (docs/WOUND_PROGRESS.md 18.2).  Not an 003 fit.
 DA_SCALE_AUTO = 123.0
@@ -96,11 +116,11 @@ def _replace_target(data, off: np.ndarray, scope: str) -> np.ndarray:
     raise ValueError(f"Unknown chemistry replacement scope {scope!r}; expected one of {REPLACE_SCOPES}")
 
 
-def load_v0_bundle(name: str = DEFAULT_NAME, device=None) -> dict:
+def load_v0_bundle(name: str | None = None, device=None) -> dict:
     """Load a ``unified_v0`` artifact: base GNN (wound-capable) + v0 knobs + optional AP net."""
     import json
 
-    root = LOCKED / name
+    root = _locked_root(name)
     manifest = json.loads((root / "manifest.json").read_text())
     cfg = ClotMlV0Config.from_manifest(manifest)
     base = _load_wound_capable_base(cfg.base_model, manifest)
@@ -130,7 +150,7 @@ def _load_wound_capable_base(name: str, v0_manifest: dict) -> dict:
         gnn = load_temporal_v4(name=name)
         return dict(base=gnn, wound=wound, manifest=man)
     raise ValueError(
-        f"clot_ml_v0 base '{name}' has kind {kind!r}; need temporal_v4 or temporal_v4_wound")
+        f"clot_ml_0 base '{name}' has kind {kind!r}; need temporal_v4 or temporal_v4_wound")
 
 
 def _load_ap_residual(path: str | None, device=None):
@@ -279,7 +299,12 @@ def _resolve_anchor_mesh(data) -> str:
 
     root = get_project_root()
     tried = []
-    for sub in ("data/raw/biochem_anchors", "data/raw/biochem", "data/raw/kinematics/meshes"):
+    for sub in (
+        "data/raw/biochem_anchors",
+        "data/raw/biochem",
+        "data/raw/kinematics/meshes",
+        "outputs/research_sweeps/_meshes",
+    ):
         for ext in (".nas", ".msh"):
             cand = root / sub / f"{stem}{ext}"
             tried.append(str(cand))
@@ -292,7 +317,7 @@ def _resolve_anchor_mesh(data) -> str:
 def solve_fem_into_pack(data) -> None:
     """Solve the local Carreau FEM at t=0 and write it into the pack's `u0_pred`/`v0_pred`.
 
-    Separate from `predict_clot_ml_v0` because callers build the feature SAMPLE before they
+    Separate from `predict_clot_ml_0` because callers build the feature SAMPLE before they
     call it -- doing the solve inside meant the sample, and the baseline scored beside it,
     were still ground truth while the run was labelled `fem`.
     """
@@ -300,11 +325,18 @@ def solve_fem_into_pack(data) -> None:
     from src.core_physics.local_fem_solver import solve_local_t0_flow
 
     nas_path = _resolve_anchor_mesh(data)
+    # Use the COMSOL t=0 field as the inlet condition only when the pack actually HAS one.
+    # `research_synthetic` was added after some research caches were written, so those packs
+    # report the flag absent while carrying an all-zero `y[0]` -- and an all-zero inlet is not
+    # a ground truth, it is the absence of one.  Imposing it as Dirichlet drove the whole
+    # solve to exactly zero, which then "converged" at iteration 0.  Test the field itself.
     u_gt_nd = None
     if not bool(getattr(data, "research_synthetic", False)):
         y = getattr(data, "y", None)
-        if y is not None and torch.is_tensor(y) and y.numel() > 0:
-            u_gt_nd = y[0, :, 0:2].detach().cpu().numpy()
+        if y is not None and torch.is_tensor(y) and y.numel() > 0 and y.shape[1] > 0:
+            cand = y[0, :, 0:2].detach().cpu().numpy()
+            if np.isfinite(cand).all() and float(np.abs(cand).max()) > 0.0:
+                u_gt_nd = cand
     u_dim = solve_local_t0_flow(nas_path, data, PhysicsConfig(), max_iters=300, tol=1e-9,
                                 u_gt_inlet_nd=u_gt_nd)
     if isinstance(u_dim, torch.Tensor):
@@ -315,13 +347,26 @@ def solve_fem_into_pack(data) -> None:
     data.v0_pred = torch.tensor(nd[:, 1], dtype=torch.float32)
 
 
-def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) -> dict:
+def predict_clot_ml_0(bundle, data, times, *, flow: str = "gt", sample=None,
+                      preflight: str = "warn") -> dict:
     """Unified inference.  No-wound packs are bit-identical to the base GNN.
 
     Wound packs keep the GNN on the healthy wall (and the wound complement on the injured
     segment).  They replace either the full true lumen (the legacy v0 policy) or only the
     wound-local lumen with chemistry-ODE replace+depth.  Unioning the two off-wall verdicts
     is a measured loss (docs/WOUND_PROGRESS.md 17.1).
+
+    ``preflight`` checks the supplied t=0 flow before spending a rollout on it
+    (`src/clot_ml/preflight.py`).  An empty wall gate makes the readout's seed empty and every
+    downstream channel identically zero, so the result is vacuous rather than merely worse.
+
+      * ``"warn"``  (default) -- print the verdict, run anyway.  Non-breaking: every existing
+                    caller keeps its current behaviour and gains the diagnosis.
+      * ``"raise"`` -- raise on FAIL.  Use in deployment, where a vacuous prediction is worse
+                    than a refusal.
+      * ``"off"``   -- skip the check.
+
+    The verdict is returned under the ``"preflight"`` key regardless of mode.
     """
     from src.clot_ml.locked import build_sample, predict_temporal_v4_wound
     from src.clot_ml.wound import has_wound, solid_mask
@@ -332,15 +377,31 @@ def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) ->
 
     cfg: ClotMlV0Config = bundle["cfg"]
     bio = BiochemConfig(phase="biochem")
-    # Note: flow="fem" must NOT be rewritten here.  The caller (eval_clot_ml_v0.py,
+    # Note: flow="fem" must NOT be rewritten here.  The caller (eval_clot_ml_0.py,
     # research_sweep_runner.py) runs solve_fem_into_pack() before calling this function so that
     # the sample, features, and baseline are all built on the FEM field -- not on GT.  Aliasing
     # "fem" -> "pred" here would give the right u0_pred slot but the wrong stencil/gain treatment
     # downstream (D1+D2+D3 as documented in the commit message).
 
+    # Check the flow BEFORE the rollout: an empty wall gate costs a full rollout and returns
+    # identically-zero channels.  Cheap relative to what it can save.
+    pf = None
+    if preflight != "off":
+        from src.clot_ml.preflight import preflight_check
+
+        pf = preflight_check(data, flow, bio)
+        if not pf.ok:
+            if preflight == "raise":
+                raise ValueError(f"preflight FAILED for flow={flow!r}: {pf}")
+            print(pf, flush=True)
+        elif pf.reasons:
+            print(pf, flush=True)
+
     S = sample if sample is not None else build_sample(data, bio, flow=flow, variant="v4")
     base = predict_temporal_v4_wound(bundle["base"], data, times, flow=flow, sample=S)
     if not has_wound(data):
+        if pf is not None:
+            base = dict(base, preflight=pf)
         return base
 
     w = bundle["base"].get("wound") or {}
@@ -383,4 +444,9 @@ def predict_clot_ml_v0(bundle, data, times, *, flow: str = "gt", sample=None) ->
         onset=onset,
         series=series,
         base_comp=base,
+        preflight=pf,
     )
+
+
+# Legacy alias (pre-2026-09 rename).
+predict_clot_ml_v0 = predict_clot_ml_0

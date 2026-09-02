@@ -1,5 +1,9 @@
 """Minimal Mat-only single-head pushforward recipe (wall+3hop band).
 
+**Legacy mat-growth leg registry** -- retained for explicit ``legacy_species`` /
+``locked_canonical`` research comparisons only. Active deploy clot is ``clot_ml_0``.
+Cohort vessel lists: ``src/biochem_gnn/wall_cohort_constants.py``.
+
 Predicts per-step Mat log-delta on the wall-band subgraph; clot eval uses analytical
 ``mu1(Mat)`` gelation (no FI channel, no dual spatial/magnitude heads).
 

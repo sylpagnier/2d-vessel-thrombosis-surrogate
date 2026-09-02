@@ -69,6 +69,36 @@ def test_synthesize_deploy_timeline_shapes() -> None:
     assert out.t.shape == (30,)
     assert float(out.t[-1].item()) == pytest.approx(90000.0)
     assert getattr(out, "y_schema", None) == BIO_Y_SCHEMA
+    # No real (COMSOL-backed) species/velocity history was available, so the biochem `y` this
+    # attaches is a fabricated placeholder (zero species, at best a broadcast kinematics
+    # snapshot).  `solve_fem_into_pack` must be told that, or it Dirichlet-clamps the local FEM
+    # inlet to `y[0, :, 0:2]` as if it were ground truth and solves a trivial zero-flow field --
+    # which silently zeroed clot formation for every parametric/uploaded customer vessel.
+    assert getattr(out, "research_synthetic", False) is True
+
+
+def test_synthesize_deploy_timeline_keeps_real_biochem_y_and_clears_research_synthetic() -> None:
+    """A pack that already carries a real (COMSOL-shaped) biochem `y` is not synthetic."""
+    n = 12
+    real_y = torch.randn(5, n, 16)  # matches BIO_Y_SCHEMA width -> "real" by the same test used above
+    data = Data(
+        x=torch.randn(n, 18),
+        y=real_y,
+        edge_index=torch.randint(0, n, (2, 24)),
+        mask_inlet=torch.zeros(n, dtype=torch.bool),
+        mask_outlet=torch.zeros(n, dtype=torch.bool),
+        mask_wall=torch.zeros(n, dtype=torch.bool),
+        d_bar=torch.tensor([0.02]),
+        u_ref=torch.tensor([0.08]),
+    )
+    data.mask_inlet[0] = True
+    data.mask_outlet[-1] = True
+    data.mask_wall[1:5] = True
+    out = synthesize_deploy_timeline(data, t_final_s=90000.0, n_steps=8)
+    assert getattr(out, "research_synthetic", False) is False
+    # The real y at t=0 (not the zero-seeded placeholder) should have been carried into the
+    # resampled series.
+    assert torch.allclose(out.y[0], real_y[0])
 
 
 def test_apply_re_target_scales_u_ref() -> None:

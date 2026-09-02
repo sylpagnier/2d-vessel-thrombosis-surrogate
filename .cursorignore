@@ -33,3 +33,7 @@ ENV/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Local experiment outputs
+outputs/
+

@@ -107,7 +107,7 @@ def test_solid_shells_are_disjoint_and_off_solid():
     """Depth is what buys 003 its headroom (0.7897 -> 0.9240 with an oracle field), so the
     rings must not overlap -- an overlapping ring would let one node be judged at two
     different bars, and shell 1 must stay the SHIPPED ``first_corner_shell``."""
-    from scripts.go_mat_field_v6 import solid_shells
+    from src.core_physics.physics_lumen_model import solid_boundary_shells
 
     # a path graph 0-1-2-...-9 with node 0 solid; even hops are the corner shells
     n = 10
@@ -117,10 +117,9 @@ def test_solid_shells_are_disjoint_and_off_solid():
     solid[0] = True
     shipped = np.zeros(n, bool)
     shipped[1] = True                      # pretend `first_corner_shell` chose node 1
-    entry = {"solid": solid, "edge_index": ei, "shell": shipped,
-             "pos": np.stack([np.arange(n), np.zeros(n)], 1).astype(np.float64),
-             "town": np.full(n, -1, dtype=np.int64)}
-    shells, owner = solid_shells(entry, 3)
+    pos = np.stack([np.arange(n), np.zeros(n)], 1).astype(np.float64)
+    town = np.full(n, -1, dtype=np.int64)
+    shells, owner = solid_boundary_shells(pos, solid, ei, shell1=shipped, town=town, max_depth=3)
 
     assert np.array_equal(shells[0], shipped)          # shell 1 is the shipped set verbatim
     for sh in shells:

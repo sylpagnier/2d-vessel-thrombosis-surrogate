@@ -1,6 +1,6 @@
 # PHASE 6 HANDOFF — physics-informed ML for the TEMPORAL rollout
 
-Written 2026-08-14 for a fresh context window. Repo: `C:\Users\pgssy\thrombus_ml_model`
+Written 2026-08-14 for a fresh context window. Repo: `C:\Users\pgssy\local-fem-solver`
 (Windows; PowerShell and Git Bash both available).
 
 > **STEPS 1–3 ARE DONE AND BOTH PHYSICS MECHANISMS ARE NEGATIVE ON THE SCORE.**

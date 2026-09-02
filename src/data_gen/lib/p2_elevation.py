@@ -121,7 +121,7 @@ def elevate_to_p2(data, *, interpolate_labels: bool = True, keep_wls: bool = Tru
     # mask so mid-side nodes carry no fabricated supervision.
     for name in ("u_ref", "d_bar", "graph_stem", "geometry_level", "config_id",
                  "is_clinical_anchor", "x_schema", "y_schema", "channel_schema_version",
-                 "x_channel_names", "y_channel_names"):
+                 "x_channel_names", "y_channel_names", "re_actual", "bend_sign", "mesh_path"):
         v = getattr(data, name, None)
         if v is not None:
             setattr(out, name, v)

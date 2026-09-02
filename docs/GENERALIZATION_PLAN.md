@@ -22,7 +22,7 @@ second-order and capped by the wall.
 
 ## Eval protocol lock (agents)
 
-1. **Deploy-faithful always.** Generalization numbers must use cold deploy with **no GT velocity leak**: RGP-DEQ once at t=0, then local tiling / kinematic corrector for clot-aware flow updates. At eval, force `flow_feats_source=auto` + corrector coupling (`eval_mat_growth_simple._apply_ckpt_recipe` / `canonical_deploy_clot_metrics`). GT is labels / timeline only. **Never** wire COMSOL `data.y[..., 0:2]` into `model.velocity` / physics-GAT / convective upwind — use `band_uv_for_model` / `resolve_species_rollout_uv`.
+1. **Deploy-faithful always.** Generalization numbers must use cold deploy with **no GT velocity leak**: RGP-DEQ once at t=0, then **frozen t=0 kinematics** for the whole rollout (local kinematic corrector was retired; see `LOCAL_KINEMATIC_CORRECTOR.md`). At eval, force `flow_feats_source=auto` (`eval_mat_growth_simple._apply_ckpt_recipe` / `canonical_deploy_clot_metrics`). GT is labels / timeline only. **Never** wire COMSOL `data.y[..., 0:2]` into `model.velocity` / physics-GAT / convective upwind — use `band_uv_for_model` / `resolve_species_rollout_uv`.
 2. **Wall-gen / phase1 / flow-source primary holdout = `patient020` only** (clot-rich). Do not use `patient020+patient034` means as the decision metric — `034` is near-zero clot and muddies the gate. Broader held-out tables remain optional diagnostics.
 
 Canonical small cohort: train `005,006,010,023,002`; val = holdout = `020`. See `AGENTS.md` and `go_flow_source_ab.ps1` / `go_phase1_sweep_v3.ps1`.
@@ -503,6 +503,21 @@ We are adopting a two-model compound architecture (`C0_compound_front_offwall_h0
      half-finished. Remaining gap: new **flow regimes** (different Re / inlet
      speed) — the Re=450 monoculture is still our biggest OOD exposure. Prefer
      more clot-rich full-length sims; avoid adding more zero-clot tubes.
+> **RETIRED 2026-08-31 — mirror augmentation is gone.** The six `*_mirror_y` packs were
+> written under an older channel layout: under the current schema they carried negated
+> `node_type` one-hots, a negated `wss_prior_nd` magnitude, a negated `AP_log1p_nd`
+> concentration, an unflipped `v_prior`/`v0_pred`, and stale WLS operators (`G_y`, `M_inv`,
+> `V`, `W`) built on the un-mirrored graph — the mechanism behind the 0.06–0.45 prior
+> rel-L2 in `RGP_DEQ_REPAIR_PLAN.md` and the dead `node_type` in `PILOT_COHORT_RUNBOOK.md`
+> §6. The only A/B ever run reads `WG_prec_mirror` 0.3529 vs `WG_prec_iter` 0.3536 on a
+> single holdout — far inside the cohort noise floor. Packs, caches, legs
+> (`WG_mirror_y`, `WG_prec_mirror`, `WG_sweep_v3_04/06`, `WG_featfix_04`), the
+> `augment_mirror_y` runtime flag and `scripts/precache_mirror_y.py` /
+> `scripts/verify_mirror_y.py` are all deleted; `src/tests/test_no_mirror_augmentation.py`
+> keeps them out. Reflection is still the only physically legal augmentation — a future
+> implementation must drive off `x_channel_names`/`y_channel_names` and rebuild the WLS
+> operators, never patch fixed indices.
+
    - **Safe augmentation = axis mirror only.** 2D incompressible Navier–Stokes is
      invariant under reflection `y -> -y` if we also flip `v_y -> -v_y`,
      `wall_normal_y -> -wall_normal_y`, keep pressure and all scalar species
@@ -521,10 +536,9 @@ We have implemented 8 specific experimental legs in `src/biochem_gnn/mat_growth_
 - `WG_dynamics_all`: The full dynamics stack combined.
 
 **Family 2: Conditioning + Data** (Attacking *where* to predict)
-- `WG_mirror_y`: Y-axis mirror augmentation (exact N-S symmetry) to double the effective dataset. (Pre-cached via `scripts/precache_mirror_y.py`).
 - `WG_geom_rich`: Enables static 2-hop geometry discriminators.
 - `WG_flux_stag`: Adds the new `flux_stag` nucleation prior channel (low shear + high residence).
-- `WG_full_stack`: The full stack (dynamics + conditioning + mirror) combined.
+- `WG_full_stack`: The full stack (dynamics + conditioning) combined.
 
 All legs inherit the `drop-xy`, `kine flow`, and `wall-mat-only` baseline configurations. You can run them via the new `scripts/go_wall_gen_probe.ps1 -Leg <LegName>` launcher.
 
@@ -591,7 +605,6 @@ Goal: find the best feature set for the wall model, holding training dynamics fi
 5-vessel cohort. Compare against the 0.30 cold baseline. Axes to sweep:
 - `SPECIES_GEOM_FEATS_RICH` on/off (strong signal from sweep above)
 - `SPECIES_FLUX_STAG_FEAT` on/off (residence-time prior, untested)
-- `WG_mirror_y` on/off (data augmentation via y-axis reflection)
 - Teacher noise level (0.0, 0.02, 0.04) — no SS, just input perturbation
 - Combinations thereof
 

@@ -23,19 +23,10 @@ from typing import Any, Iterator, Mapping
 
 @dataclass(frozen=True)
 class CouplingConfig:
-    """Local-corrector / closed-loop flow coupling."""
+    """Closed-loop flow coupling (legacy; local kinematic corrector removed)."""
 
-    corrector_coupling: bool = True
     closed_loop_coupling: bool = False
     kine_resolve_on_clot: bool = False
-    corrector_num_hops: int = 4
-    corrector_mu_thresh: float = 1e-3
-    corrector_max_delta_mu: float = 3.0
-    corrector_ckpt: str = ""
-    local_clusters: bool = True
-    cluster_radius_nd: float = 0.12
-    cluster_max_nodes: int = 64
-    growth_factor: float = 1.05
     kine_resolve_min_clot_nodes: int = 40
     kine_resolve_min_band_frac: float = 0.0
     kine_resolve_growth_factor: float = 1.5
@@ -56,7 +47,6 @@ class RolloutDeployConfig:
     ceiling_hops: int = 3
     kin_per_vessel_norm: bool = True
     wall_mat_only: bool = True  # CLOT_PHI_PHYSICS_WALL_MAT_ONLY
-    augment_mirror_y: bool = False
     latent_dropout: float = 0.0
     deploy_horizon: int = 0
     deploy_eval_full: bool = True
@@ -80,12 +70,12 @@ class ScoringConfig:
 
     clout_score_mode: str = "guiding"  # guiding | relaxed_prec_floor | relaxed_f05 | ...
     clout_prec_rec_floor: float = 0.30
-    guide_relax_hops: int = 2
+    guide_relax_hops: int = 4
     precision_select: bool = False
     speed_fp_weight: float = 4.0
-    guide_f_beta: float = 0.5
-    guide_iou_w: float = 0.5
-    guide_f05_w: float = 0.5
+    guide_f_beta: float = 1.0
+    guide_iou_w: float = 0.2
+    guide_f05_w: float = 0.8
     empty_gt_fp_tol: float = 8.0
     deploy_eval_dual: bool = False
     deploy_dual_full_w: float = 0.5
@@ -196,17 +186,8 @@ _register_sub("offwall", OffwallConfig)
 
 
 RUNTIME_ENV_TO_FIELD: dict[str, str] = {
-    "BIOCHEM_CORRECTOR_COUPLING": "corrector_coupling",
     "SPECIES_CLOSED_LOOP_COUPLING": "closed_loop_coupling",
     "BIOCHEM_KINE_RESOLVE_ON_CLOT": "kine_resolve_on_clot",
-    "BIOCHEM_CORRECTOR_NUM_HOPS": "corrector_num_hops",
-    "BIOCHEM_CORRECTOR_MU_THRESH": "corrector_mu_thresh",
-    "BIOCHEM_CORRECTOR_MAX_DELTA_MU": "corrector_max_delta_mu",
-    "BIOCHEM_CORRECTOR_CKPT": "corrector_ckpt",
-    "BIOCHEM_CORRECTOR_LOCAL_CLUSTERS": "local_clusters",
-    "BIOCHEM_CORRECTOR_CLUSTER_RADIUS_ND": "cluster_radius_nd",
-    "BIOCHEM_CORRECTOR_CLUSTER_MAX_NODES": "cluster_max_nodes",
-    "BIOCHEM_CORRECTOR_GROWTH_FACTOR": "growth_factor",
     "BIOCHEM_KINE_RESOLVE_MIN_CLOT_NODES": "kine_resolve_min_clot_nodes",
     "BIOCHEM_KINE_RESOLVE_MIN_BAND_FRAC": "kine_resolve_min_band_frac",
     "BIOCHEM_KINE_RESOLVE_GROWTH_FACTOR": "kine_resolve_growth_factor",
@@ -222,7 +203,6 @@ RUNTIME_ENV_TO_FIELD: dict[str, str] = {
     "CLOT_PHI_CEILING_HOPS": "ceiling_hops",
     "SPECIES_KIN_PER_VESSEL_NORM": "kin_per_vessel_norm",
     "CLOT_PHI_PHYSICS_WALL_MAT_ONLY": "wall_mat_only",
-    "SPECIES_AUGMENT_MIRROR_Y": "augment_mirror_y",
     "SPECIES_LATENT_DROPOUT": "latent_dropout",
     "SPECIES_CONTINUOUS_DEPLOY_HORIZON": "deploy_horizon",
     "SPECIES_CONTINUOUS_DEPLOY_EVAL_FULL": "deploy_eval_full",
@@ -328,6 +308,28 @@ def validate_runtime_kwargs(kwargs: Mapping[str, Any]) -> None:
         raise TypeError(f"Unknown BiochemRuntimeConfig fields: {bad}")
 
 
+# Removed with the local kinematic corrector purge; old ckpt meta may still carry these.
+_DEPRECATED_RUNTIME_FIELDS = frozenset(
+    {
+        "corrector_coupling",
+        "corrector_num_hops",
+        "corrector_mu_thresh",
+        "corrector_max_delta_mu",
+        "corrector_ckpt",
+        "local_clusters",
+        "cluster_radius_nd",
+        "cluster_max_nodes",
+        "growth_factor",
+    }
+)
+
+
+def _strip_deprecated_runtime_kwargs(kwargs: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not kwargs:
+        return {}
+    return {k: v for k, v in kwargs.items() if k not in _DEPRECATED_RUNTIME_FIELDS}
+
+
 @dataclass(frozen=True)
 class BiochemRuntimeConfig:
     """Composed runtime policy for train / eval / deploy (non-architecture)."""
@@ -340,6 +342,7 @@ class BiochemRuntimeConfig:
 
     @classmethod
     def from_kwargs(cls, kwargs: Mapping[str, Any] | None) -> "BiochemRuntimeConfig":
+        kwargs = _strip_deprecated_runtime_kwargs(kwargs)
         if not kwargs:
             return cls()
         validate_runtime_kwargs(kwargs)
@@ -381,6 +384,7 @@ class BiochemRuntimeConfig:
         return cls()
 
     def with_overrides(self, **kwargs: Any) -> "BiochemRuntimeConfig":
+        kwargs = _strip_deprecated_runtime_kwargs(kwargs)
         validate_runtime_kwargs(kwargs)
         base = self.to_flat_dict()
         base.update({k: _coerce(k, v) for k, v in kwargs.items()})

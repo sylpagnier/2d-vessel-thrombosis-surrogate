@@ -1,4 +1,4 @@
-"""Canonical SciML model identifiers for HemoRGP.
+"""Canonical SciML model identifiers for Local FEM Solver (local-fem-solver).
 
 Single source of truth for stack/component IDs, SciML categories, and legacy aliases.
 Human-readable rationale: docs/MODEL_NOMENCLATURE.md
@@ -7,6 +7,9 @@ Human-readable rationale: docs/MODEL_NOMENCLATURE.md
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+PROJECT_ID = "local-fem-solver"
+PROJECT_DISPLAY_NAME = "Local FEM Solver"
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,21 @@ BIOCHEM_GNN_STACK = SciMLModel(
 # Backward-compatible alias
 BIOCHEM_DEPLOY_STACK = BIOCHEM_GNN_STACK
 
+# --- Deploy clot (unified wound + non-wound) ---
+
+CLOT_ML_0 = SciMLModel(
+    id="clot_ml_0",
+    acronym="clot_ml_0",
+    display_name="Deployable thrombosis surrogate (FEM t=0 + mesh clot rollout)",
+    sciml_category="composable hybrid SciML deploy stack",
+    architecture=(
+        "in-house Carreau FEM at t=0 -> temporal_v4_wound GNN (wall SET + timing) "
+        "+ wound complement + optional chemistry-ODE replace+depth off-wall"
+    ),
+    code_class=None,
+    legacy_ids=("clot_ml_v0", "unified_v0", "deploy_clot"),
+)
+
 # --- Research biochem (GNODE path, retired) ---
 
 GNODE_BIOCHEM = SciMLModel(
@@ -195,6 +213,7 @@ _ALL_MODELS: tuple[SciMLModel, ...] = (
     FLOW_COUPLING,
     LOCAL_KINEMATIC_CORRECTOR,
     BIOCHEM_GNN_STACK,
+    CLOT_ML_0,
     GNODE_BIOCHEM,
 )
 

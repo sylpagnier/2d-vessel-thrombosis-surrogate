@@ -23,6 +23,7 @@ from src.data_gen.lib.customer_geometry_import import (
     DEFAULT_N_STEPS,
     DEFAULT_RE,
     CustomerGeometryError,
+    apply_customer_mirrored_wound,
     graph_from_mesh_meta,
     synthesize_deploy_timeline,
 )
@@ -32,6 +33,7 @@ from src.data_gen.lib.vessel_generator import (
     make_vessel_params,
     stenosis_wall_offset_for_occlusion,
 )
+from src.evaluation.research_sweep_presets import merge_geometry, resolve_wound_overlay
 from src.utils.paths import get_project_root
 
 # Shared control vessel (straight, mid-width, Re=450, no pathology).
@@ -211,9 +213,8 @@ def geometry_spec_hash(spec: dict[str, Any]) -> str:
 
 
 def arm_geometry_cache_spec(arm: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
-    """Merge control + arm geometry knobs into a cacheable spec."""
-    g = dict(control.get("geometry", {}))
-    g.update(arm.get("geometry", {}) or {})
+    """Merge control + arm geometry knobs into a cacheable mesh spec (no wound overlay)."""
+    g = merge_geometry(control, arm)
     return {
         "width": float(g.get("width", CONTROL_WIDTH_M)),
         "curve_type": str(g.get("curve_type", "straight")),
@@ -241,6 +242,19 @@ def arm_geometry_cache_spec(arm: dict[str, Any], control: dict[str, Any]) -> dic
             arm.get("n_steps", control.get("n_steps", DEFAULT_HORIZON_N_STEPS))
         ),
     }
+
+
+def apply_research_wound_overlay(
+    data: Data,
+    arm: dict[str, Any],
+    control: dict[str, Any],
+) -> Data:
+    """Stamp mirrored wound masks when the merged geometry requests it."""
+    merged = merge_geometry(control, arm)
+    overlay = resolve_wound_overlay(merged)
+    if overlay is None:
+        return data
+    return apply_customer_mirrored_wound(data, **overlay)
 
 
 def build_research_graph_from_spec(
@@ -297,6 +311,12 @@ def build_research_graph_from_spec(
             re_target=float(spec.get("re_target", CONTROL_RE)),
             stem=f"research_{geometry_spec_hash(spec)}",
         )
+        msh_cached = work / f"research_{geometry_spec_hash(spec)}.msh"
+        if msh_path.resolve() != msh_cached.resolve():
+            if msh_cached.is_file():
+                msh_cached.unlink()
+            msh_path.replace(msh_cached)
+        data.mesh_path = str(msh_cached.resolve())
         return synthesize_deploy_timeline(
             data,
             t_final_s=float(spec.get("t_final_s", DEFAULT_T_FINAL_S)),
@@ -322,16 +342,26 @@ def load_or_build_research_graph(
     pt_path = cache_dir / f"{key}.pt"
     meta_path = cache_dir / f"{key}.json"
 
-    if pt_path.is_file() and not force_rebuild:
+    if pt_path.is_file() and (cache_dir / f"research_{key}.msh").is_file() and not force_rebuild:
         data = torch.load(pt_path, map_location="cpu", weights_only=False)
-        return data, spec, pt_path
+        msh_cached = cache_dir / f"research_{key}.msh"
+        if msh_cached.is_file():
+            data.mesh_path = str(msh_cached.resolve())
+    else:
+        # Use cache_dir as work_dir so the .msh is kept
+        data = build_research_graph_from_spec(spec, work_dir=cache_dir)
+        torch.save(data, pt_path)
+        meta_path.write_text(
+            json.dumps({"hash": key, "spec": spec}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        for msh_file in cache_dir.glob("vessel_*.msh"):
+            msh_file.replace(cache_dir / f"research_{key}.msh")
+        for json_file in cache_dir.glob("vessel_*.json"):
+            if json_file.name != f"{key}.json":
+                json_file.unlink()  # Cleanup the temp JSON from gmsh
 
-    data = build_research_graph_from_spec(spec)
-    torch.save(data, pt_path)
-    meta_path.write_text(
-        json.dumps({"hash": key, "spec": spec}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    data = apply_research_wound_overlay(data, arm, control)
     return data, spec, pt_path
 
 
@@ -348,6 +378,7 @@ __all__ = [
     "build_research_vessel_params",
     "geometry_spec_hash",
     "arm_geometry_cache_spec",
+    "apply_research_wound_overlay",
     "build_research_graph_from_spec",
     "load_or_build_research_graph",
 ]

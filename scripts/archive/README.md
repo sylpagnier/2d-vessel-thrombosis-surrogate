@@ -1,10 +1,6 @@
-# Archived stacks index: docs/ARCHIVED_STACKS.md
+# Archived scripts (documentation only)
 
-Retired launchers and one-off surveys from pre-`clot_ml_v0` ladders (GNODE, clot-ML rules,
-T0, mat-growth, wall-physics-only Phase 3-6).
+**No runnable scripts live here.** See [`MANIFEST.md`](MANIFEST.md) for the deleted inventory
+(~583 files, 2026-09-01). Recover any file from git history.
 
-**Do not treat these as the supported public surface.** Active entry points live in
-`scripts/README.md` and `AGENTS.md`.
-
-Recover history via git if a script is needed; prefer extending the four active stacks
-rather than reviving deleted trainers.
+Active entry points: [`../README.md`](../README.md). Stack index: [`../../docs/ARCHIVED_STACKS.md`](../../docs/ARCHIVED_STACKS.md).

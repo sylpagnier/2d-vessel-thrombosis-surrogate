@@ -1834,3 +1834,110 @@ def test_elevation_prefers_true_midside_labels_when_the_pack_carries_them():
     if bool(wall_mid.any()):
         assert float(mid_y[wall_mid][:, 0:2].abs().max()) == 0.0, \
             "no-slip is a boundary condition, not a sample"
+
+
+# ---------------------------------------------------------------------------------------------
+# s17 -- the LayerNorm shell, and the two flags that let the decoder off it
+# ---------------------------------------------------------------------------------------------
+
+def _s17_graph(n_side: int = 6):
+    """A small structured patch with every field ``RGP_DEQ`` reads."""
+    from torch_geometric.data import Data
+    from src.config import NodeFeat
+    gx, gy = torch.meshgrid(torch.linspace(0, 0.01, n_side), torch.linspace(-1e-3, 1e-3, n_side),
+                            indexing="ij")
+    pos = torch.stack([gx.flatten(), gy.flatten()], dim=1)
+    n = pos.shape[0]
+    dist = torch.cdist(pos, pos)
+    ei = (dist < 2.6e-3).nonzero(as_tuple=False).t()
+    ei = ei[:, ei[0] != ei[1]]
+    d = Data(x=torch.randn(n, 18) * 0.1, edge_index=ei)
+    d.num_nodes = n
+    d.x[:, 0:2] = pos
+    d.x[:, NodeFeat.SDF] = (1e-3 - pos[:, 1:2].abs()).clamp(min=1e-6)
+    d.edge_attr = torch.cat([pos[ei[1]] - pos[ei[0]],
+                             (pos[ei[1]] - pos[ei[0]]).norm(dim=1, keepdim=True)], dim=1)
+    return d
+
+
+def _s17_model(**flags):
+    from src.architecture.ginodeq import RGP_DEQ
+    torch.manual_seed(0)
+    return RGP_DEQ(in_channels=15, out_channels=5, latent_dim=32, max_iters=4,
+                   num_fourier_freqs=4, use_hard_bcs=True, use_siren_decoder=False,
+                   use_width_priors=True, num_global_tokens=4, shear_head=False,
+                   **flags).eval()
+
+
+def test_deq_equilibrium_latent_lies_on_a_fixed_layernorm_shell():
+    """The measurement s17 rests on: ``z*`` is a LayerNorm output, so ||z_i|| is constant.
+
+    This is what makes per-node AMPLITUDE inexpressible by the DEQ output alone, and therefore
+    what `decoder_skip` / `residual_gain` exist to work around.  If ``RGPBlock`` ever stops
+    ending in a norm, this test should fail and the flags should be re-justified.
+    """
+    m = _s17_model()
+    d = _s17_graph()
+    with torch.no_grad():
+        z, _, _ = m._solve_equilibrium_z(d, solver="picard")
+    norms = z.double().norm(dim=1)
+    cv = float(norms.std() / norms.mean())
+    assert cv < 1e-2, f"z* is not on a fixed shell (cv={cv:.2e}); s17's premise no longer holds"
+
+
+def test_residual_gain_is_an_exact_identity_at_initialisation():
+    """Turning the flag on must not move a fresh model: the head is zero-initialised."""
+    m = _s17_model(residual_gain=True)
+    d = _s17_graph()
+    with torch.no_grad():
+        x_enc = m.encoder(m._apply_fourier_encoding(d.x)[0])
+        log_g = m.residual_gain_head(x_enc)
+    assert float(log_g.abs().max()) == 0.0, "gain head must start at exp(0) == 1"
+
+
+def test_residual_gain_can_actually_move_wall_shear_amplitude():
+    """The point of the head: a non-zero gain scales the hard-BC residual, hence wall shear.
+
+    ``d/dn(uv_prior + sdf * g * uvp)`` at ``sdf = 0`` is ``d(uv_prior)/dn + g * uvp``, so the
+    gain is a direct multiplier on the quantity `dsrxScale` measures.
+    """
+    m = _s17_model(residual_gain=True)
+    d = _s17_graph()
+    with torch.no_grad():
+        base = m(d, solver="picard")[:, :2]
+        torch.nn.init.constant_(m.residual_gain_head[-1].bias, math.log(4.0))
+        scaled = m(d, solver="picard")[:, :2]
+    from src.config import NodeFeat
+    prior = d.x[:, NodeFeat.UV_PRIOR]
+    # Compare ``sdf * uvp`` rather than ``uvp``: dividing out an sdf that reaches 1e-6 at the
+    # wall inflates float32 noise by six orders of magnitude and tests the tolerance, not the
+    # gain.  The sdf factor is common to both sides, so it cancels out of the ratio anyway.
+    r_base, r_scaled = base - prior, scaled - prior
+    assert float(r_base.abs().max()) > 0.0, "degenerate: the residual is identically zero"
+    # ``base - prior`` is a difference of two O(0.1) numbers separated by ``sdf * uvp`` with sdf
+    # down at 1e-6, so float32 loses ~5 digits to cancellation here and 1e-4 IS the noise floor.
+    # A gain that failed to apply would read 0.75, three orders clear of this bound.
+    err = float((r_scaled - 4.0 * r_base).abs().max() / r_base.abs().max())
+    assert err < 1e-3, \
+        f"a constant log-gain must scale the residual by exactly exp(log_g); rel err {err:.2e}"
+
+
+def test_decoder_skip_changes_the_decoder_width_and_round_trips_through_the_config():
+    """A skip checkpoint must be recoverable from its own tensors, not just its manifest."""
+    from src.architecture.kinematics_model_config import (
+        resolve_rgp_deq_ctor_kwargs, snapshot_rgp_deq_model_config)
+    plain, skipped = _s17_model(), _s17_model(decoder_skip=True)
+    assert skipped.kinematics_decoder.in_features == 2 * plain.kinematics_decoder.in_features
+    for m, expect in ((plain, False), (skipped, True)):
+        snap = snapshot_rgp_deq_model_config(m)
+        assert snap["decoder_skip"] is expect
+        # a manifest that LIES must lose to the tensors
+        lying = dict(snap, decoder_skip=not expect)
+        back = resolve_rgp_deq_ctor_kwargs({"model_config": lying}, m.state_dict())
+        assert back["decoder_skip"] is expect, "state dict must outrank a stale manifest"
+
+
+def test_new_flags_are_off_by_default_so_existing_checkpoints_are_unaffected():
+    m = _s17_model()
+    assert m.decoder_skip is False and m.residual_gain is False
+    assert m.residual_gain_head is None

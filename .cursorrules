@@ -1,4 +1,4 @@
-HemoRGP: Practical AI Coding Rules
+Local FEM Solver: Practical AI Coding Rules
 
 Project Reality
 - Source is organized by domain: `src/core_physics/`, `src/architecture/`, `src/data_gen/` (pipelines at package root; mesh/COMSOL/graph **lib** under `data_gen/lib/`), `src/training/`, `src/evaluation/`, `src/utils/`, `src/biochem_gnn/`, and `src/tests/`.
@@ -28,8 +28,8 @@ Configuration Architecture Guardrail
 Physics and Modeling Guardrails
 - Carreau-Yasuda rheology and Navier-Stokes consistency are central; avoid edits that weaken these constraints without justification.
 - For DEQ-related changes, preserve solver stability and convergence behavior.
-- Prefer geometry occlusion + optional `local_kinematic_corrector` over viscosity injection into frozen RGP-DEQ.
-- **Generalization eval (mandatory):** cold deploy only — RGP-DEQ once at t=0, then local tiling/corrector for flow updates; never GT velocity. Wall-gen / phase1 / flow-source holdout gate = clot-rich **`patient020` only** (see `AGENTS.md`).
+- Prefer geometry occlusion over viscosity injection into frozen RGP-DEQ. `local_kinematic_corrector` is **deprecated (deleted 2026-09-01), not for publication** — see `docs/LOCAL_KINEMATIC_CORRECTOR.md`.
+- **Generalization eval (mandatory):** cold deploy only — RGP-DEQ once at t=0, then local tiling/corrector for flow updates (corrector deprecated, see above); never GT velocity. Wall-gen / phase1 / flow-source holdout gate = clot-rich **`patient020` only** (see `AGENTS.md`).
 
 Data and File Hygiene
 - Ignore and avoid editing cache/derived files (`__pycache__`, `.pytest_cache`, `.pyc`, generated plots/logs/checkpoints under `outputs/`).

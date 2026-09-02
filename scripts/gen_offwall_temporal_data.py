@@ -40,7 +40,7 @@ from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 from src.evaluation.clot_relaxed_metrics import (  # noqa: E402
     clot_score_from_deploy_dict, compute_clot_relaxed_metrics, metrics_to_deploy_prefix,
 )
-from scripts.archive.wall_physics_era.predict_wall_clot import (  # noqa: E402
+from scripts.predict_wall_clot import (  # noqa: E402
     LUMEN_HOPS,
     LUMEN_SPEED,
     predict_wall_clot,

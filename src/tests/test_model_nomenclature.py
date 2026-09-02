@@ -1,12 +1,15 @@
-"""Tests for canonical SciML model nomenclature (HemoRGP)."""
+"""Tests for canonical SciML model nomenclature (Local FEM Solver)."""
 
 from __future__ import annotations
 
 from src.model_nomenclature import (
     BIOCHEM_DEPLOY_STACK,
     BIOCHEM_GNN_STACK,
+    CLOT_ML_0,
     GINO_DEQ_KINE,
     PMGP_DEQ_KINE,
+    PROJECT_DISPLAY_NAME,
+    PROJECT_ID,
     RGP_DEQ_KINE,
     SPECIES_GRAPHSAGE,
     is_legacy_kine_id,
@@ -16,6 +19,16 @@ from src.model_nomenclature import (
     rgp_deq_feature_lines,
     stack_display_line,
 )
+
+
+def test_project_branding() -> None:
+    assert PROJECT_ID == "local-fem-solver"
+    assert PROJECT_DISPLAY_NAME == "Local FEM Solver"
+
+
+def test_clot_ml_0_is_canonical_deploy_id() -> None:
+    assert CLOT_ML_0.id == "clot_ml_0"
+    assert resolve_model_id("clot_ml_v0") == CLOT_ML_0.id
 
 
 def test_rgp_deq_is_canonical_kine_id() -> None:

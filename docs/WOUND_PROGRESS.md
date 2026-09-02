@@ -1212,12 +1212,12 @@ residual has nothing to correct until the ODE sees evolving AP.
 
 ---
 
-## 19. `clot_ml_v0` — one artifact for wounded and non-wounded vessels (2026-08-25)
+## 19. `clot_ml_0` — one artifact for wounded and non-wounded vessels (2026-08-25)
 
 The experiments in §16–18 were separate arms: a C0 GNN (`clot_gnn_v5` / `v5w`), a learned
 `Mat` field (v6), upwind AP renewal, and a replace+depth readout.  Two classes of model
 (`clot_gnn_v5` vs `v5w`) is the wrong packaging — a wound mask is an input, not a product
-line.  `clot_ml_v0` (`kind: unified_v0`) is the composition §18.3 specified:
+line.  `clot_ml_0` (`kind: unified_v0`) is the composition §18.3 specified:
 
 | piece | what ships | why |
 |---|---|---|
@@ -1229,17 +1229,17 @@ line.  `clot_ml_v0` (`kind: unified_v0`) is the composition §18.3 specified:
 
 The GNN's temporal ODE is **not** replaced — the chemistry integration is a second field
 used only for wound off-wall.  On any pack without a wound mask the predictor is
-bit-identical to the base GNN, asserted at promotion (`scripts/promote_clot_ml_v0.py`) and
-pinned by `src/tests/test_clot_ml_v0.py`.
+bit-identical to the base GNN, asserted at promotion (`scripts/promote_clot_ml_0.py`) and
+pinned by `src/tests/test_clot_ml_0.py`.
 
 Compare against the pinned baseline, never the locked pointer:
 
 ```
-python scripts/promote_clot_ml_v0.py --base clot_gnn_v5w
-python scripts/eval_clot_ml_v0.py --baseline clot_gnn_v5w
+python scripts/promote_clot_ml_0.py --base clot_gnn_v5w
+python scripts/eval_clot_ml_0.py --baseline clot_gnn_v5w
 ```
 
-Do **not** `--repoint`.  The comparison against `clot_gnn_v5w` (`scripts/eval_clot_ml_v0.py`,
+Do **not** `--repoint`.  The comparison against `clot_gnn_v5w` (`scripts/eval_clot_ml_0.py`,
 GT t=0 flow, `--every 4`) is:
 
 | | wall | w_reg | w_lum | far |
@@ -1260,10 +1260,10 @@ more 003-like vessels exist.  v6 is not in this artifact.
 ## Next
 
 1. ~~**Wall AP with upwind renewal, then the ODE, then replace+depth.**~~ **Assembled as
-   `clot_ml_v0`** (§19) and **measured against v5w**.  Do not `--repoint`: replace+depth
+   `clot_ml_0`** (§19) and **measured against v5w**.  Do not `--repoint`: replace+depth
    helps 003 w_reg/w_lum and loses 001/002 plus 003 far.  Deploy-legal renewal is not the
    0.8512 GT-chem oracle.  The AP residual GNN waits for more 003-like vessels.
-2. ~~**Ship §17.1's replacement + depth independently of 003.**~~ In `clot_ml_v0`, scoped
+2. ~~**Ship §17.1's replacement + depth independently of 003.**~~ In `clot_ml_0`, scoped
    to wound packs so the cohort GNN off-wall (0.7078) is not replaced by an ODE field.
 3. **Fix magnitude compression directly.** Ordering is already good on the compressed vessels
    (032 AUC 0.9398, 012 0.8852) and only the scale is wrong, so this is worth ~0.2 off-wall on

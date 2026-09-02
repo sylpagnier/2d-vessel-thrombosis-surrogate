@@ -173,7 +173,7 @@ def correct_ap_cgs_trajectory(
 
     Untrained (zero-init residual) is the physics at the sampled times; values between
     samples are linearly interpolated.  Absent model is a caller concern -- this always
-    runs the net.  Used by ``clot_ml_v0`` when a v7 checkpoint is on the artifact; without
+    runs the net.  Used by ``clot_ml_0`` when a v7 checkpoint is on the artifact; without
     one the chemistry ODE stays the upwind-renewal field (docs/WOUND_PROGRESS.md 18.3).
     """
     T, _N = ap_cgs.shape

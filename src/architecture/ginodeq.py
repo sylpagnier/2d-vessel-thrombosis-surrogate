@@ -279,6 +279,8 @@ class RGP_DEQ(nn.Module):
         bc_envelope: Optional[bool] = None,
         fourier_learnable: Optional[bool] = None,
         shear_head: bool = True,
+        decoder_skip: Optional[bool] = None,
+        residual_gain: Optional[bool] = None,
     ):
         super().__init__()
         self.shear_head = shear_head
@@ -355,6 +357,44 @@ class RGP_DEQ(nn.Module):
         self.use_width_priors = bool(use_width_priors)
         self.decouple_rheology = False
 
+        # --- Dynamic-range repair (RGP_DEQ_REPAIR_PLAN.md s17) -------------------------------
+        # `RGPBlock.forward` ends in `nn.LayerNorm`, so the equilibrium `z*` the decoder reads is
+        # LITERALLY a LayerNorm output: every node's latent sits on one fixed shell.  Measured on
+        # four deploy packs under the promoted checkpoint, the coefficient of variation of
+        # ||z_i|| across nodes is 8.8e-04 - 1.1e-03, i.e. constant to a tenth of a percent.
+        # Per-node AMPLITUDE is therefore not something the DEQ output can carry; only direction
+        # on that shell is.  The consequence is measurable at the hard BC, comparing the residual
+        # the model emits, `uvp = (pred - uv_prior)/sdf`, against the one the labels require:
+        #
+        #   vessel        |uvp| p99/p50 (model)   (labels need)
+        #   patient003            9.07                24.33
+        #   patient008            8.69                20.58
+        #   patient015            9.80                30.35
+        #   patient021            7.02                26.99
+        #
+        # Medians agree (0.37-0.62 against 0.30-0.65); the model is short by ~3x on the TAIL, and
+        # wall `dsrx` spread is a tail statistic.  This is why s16.10's 48x reweighting of
+        # `l_band_dsrx` moved `dsrxScale` "not one part in a thousand" while everything else
+        # degraded, and why a single-vessel overfit reaches 0.955 (one vessel needs one scale).
+        # The objective cannot move what the architecture normalises away.
+        #
+        # Both repairs below leave the fixed-point map -- and so every convergence property of
+        # the Anderson solve -- untouched: they change only what the DECODER is allowed to read.
+        # Both default OFF and are no-ops at initialisation, so they are retrain-time choices.
+        self.decoder_skip = (
+            bool(decoder_skip)
+            if decoder_skip is not None
+            else bool(int(os.environ.get("KINEMATICS_DECODER_SKIP", "0")))
+        )
+        self.residual_gain = (
+            bool(residual_gain)
+            if residual_gain is not None
+            else bool(int(os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0")))
+        )
+        # exp(+-3) -> gain in [0.05, 20]: ~6x headroom over the 3x deficit measured above, and
+        # bounded, so a diverging gain cannot take the field with it.
+        self.residual_gain_clamp = float(os.environ.get("KINEMATICS_RESIDUAL_GAIN_CLAMP", "3.0"))
+
         freqs = (self.fourier_base ** torch.arange(num_fourier_freqs)) * torch.pi
         if self.fourier_learnable:
             self.fourier_freqs = nn.Parameter(freqs)
@@ -377,12 +417,31 @@ class RGP_DEQ(nn.Module):
             activation_fn=self.activation_fn,
             num_global_tokens=num_global_tokens,
         )
+        # With the skip on, the decoder reads [z*, x_enc]: the shell PLUS the encoder's own
+        # un-normalised per-node features (sdf, wall_normal, the width priors, the velocity
+        # prior).  That is the scale-carrying half `z*` cannot supply.
+        decoder_in = latent_dim * 2 if self.decoder_skip else latent_dim
         if self.use_siren_decoder:
-            self.siren_decoder = SIRENDecoder(latent_dim)
+            self.siren_decoder = SIRENDecoder(decoder_in)
             self.kinematics_decoder = None
         else:
-            self.kinematics_decoder = nn.Linear(latent_dim, 3)
+            self.kinematics_decoder = nn.Linear(decoder_in, 3)
             self.siren_decoder = None
+
+        if self.residual_gain:
+            # Per-node log-gain on the hard-BC residual.  Reads `x_enc` and NOT `z*`, on purpose:
+            # reading the shell would reintroduce the constraint this exists to lift.  The final
+            # layer is zero-initialised, so gain == exp(0) == 1 and a fresh model is bit-identical
+            # to `residual_gain=False` -- the flag adds capacity without moving the starting point.
+            self.residual_gain_head = nn.Sequential(
+                nn.Linear(latent_dim, latent_dim // 2),
+                _make_activation(self.activation_fn),
+                nn.Linear(latent_dim // 2, 1),
+            )
+            nn.init.zeros_(self.residual_gain_head[-1].weight)
+            nn.init.zeros_(self.residual_gain_head[-1].bias)
+        else:
+            self.residual_gain_head = None
 
         self.mu_decoder = nn.Sequential(
             SpectralLinear(latent_dim, latent_dim),
@@ -437,8 +496,13 @@ class RGP_DEQ(nn.Module):
         solver: str = "anderson",
         anderson_beta: float = 0.8,
         anderson_warmup_iters: int = 5,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Anderson/Picard DEQ solve; returns equilibrium latent ``z`` and Jacobian penalty."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Anderson/Picard DEQ solve.
+
+        Returns ``(z_eq, jac_loss, x_enc)``.  ``x_enc`` is handed back rather than recomputed
+        because the decoder skip and the residual gain both need the encoder's un-normalised
+        per-node features, and re-running ``_apply_fourier_encoding`` would double the encode.
+        """
         x_encoded, _ = self._apply_fourier_encoding(data.x)
         x_enc = self.encoder(x_encoded)
         z = x_enc.clone()
@@ -515,10 +579,16 @@ class RGP_DEQ(nn.Module):
         else:
             z_eq = z_out.squeeze(0) if z_out.ndim == 3 else z_out
             jac_loss = torch.tensor(0.0, device=z_eq.device)
-        return z_eq, jac_loss
+        return z_eq, jac_loss, x_enc
 
-    def _decode_pred_from_z(self, data, z: Tensor) -> Tensor:
+    def _decode_pred_from_z(self, data, z: Tensor, x_enc: Optional[Tensor] = None) -> Tensor:
         """Decode kinematics (+ mu, wss) from an equilibrium latent ``z``."""
+        if getattr(self, "decoder_skip", False):
+            if x_enc is None:
+                raise ValueError("decoder_skip is on but x_enc was not supplied")
+            z_dec = torch.cat([z, x_enc], dim=1)
+        else:
+            z_dec = z
         mu_raw_state = self.mu_decoder(z)
         mu = self.mu_inf_nd + (self.mu_0_nd - self.mu_inf_nd) * torch.sigmoid(mu_raw_state)
 
@@ -536,13 +606,24 @@ class RGP_DEQ(nn.Module):
             # under a full-span translation (0.284 before); both paths have to be canonicalised
             # together or the invariance is not real.  See `_canonical_coords`.
             pos_nd = _canonical_coords(pos_nd)
-            uvp, siren_pos = self.siren_decoder(z, pos_nd)
+            uvp, siren_pos = self.siren_decoder(z_dec, pos_nd)
             data.siren_pos = siren_pos
             u_v_p = uvp[:, PredChannels.KINEMATICS]
         else:
             assert self.kinematics_decoder is not None
-            kinematics_out = self.kinematics_decoder(z)
+            kinematics_out = self.kinematics_decoder(z_dec)
             u_v_p = kinematics_out[:, PredChannels.KINEMATICS]
+
+        if getattr(self, "residual_gain_head", None) is not None:
+            # Scale the residual BEFORE the hard BC multiplies it by sdf.  `d/dn(sdf * g*uvp)` at
+            # the wall is `g*uvp`, so this is a direct, per-node, learnable gain on wall shear --
+            # the one quantity `dsrxScale` measures and the LayerNorm shell cannot vary.
+            if x_enc is None:
+                raise ValueError("residual_gain is on but x_enc was not supplied")
+            log_g = self.residual_gain_head(x_enc).clamp(
+                -self.residual_gain_clamp, self.residual_gain_clamp
+            )
+            u_v_p = torch.cat([u_v_p[:, :2] * torch.exp(log_g), u_v_p[:, 2:3]], dim=1)
 
         if self.use_hard_bcs:
             # SDF is already [N, 1]; do not add another singleton (would break broadcast with [N, 2]).
@@ -582,7 +663,7 @@ class RGP_DEQ(nn.Module):
         """Frozen inference: DEQ equilibrium latent ``z_kin`` per node, shape ``[N, latent_dim]``."""
         was_training = self.training
         self.eval()
-        z, _ = self._solve_equilibrium_z(
+        z, _, x_enc = self._solve_equilibrium_z(
             data,
             solver=solver,
             anderson_beta=anderson_beta,
@@ -603,26 +684,26 @@ class RGP_DEQ(nn.Module):
         """One DEQ solve -> ``(pred [N, C], z_kin [N, latent_dim])`` (inference only)."""
         was_training = self.training
         self.eval()
-        z, _ = self._solve_equilibrium_z(
+        z, _, x_enc = self._solve_equilibrium_z(
             data,
             solver=solver,
             anderson_beta=anderson_beta,
             anderson_warmup_iters=anderson_warmup_iters,
         )
-        pred = self._decode_pred_from_z(data, z)
+        pred = self._decode_pred_from_z(data, z, x_enc)
         if was_training:
             self.train()
         return pred, z
 
     @torch.enable_grad()
     def forward(self, data, solver="anderson", anderson_beta=0.8, anderson_warmup_iters=5, current_n=None):
-        z, jac_loss = self._solve_equilibrium_z(
+        z, jac_loss, x_enc = self._solve_equilibrium_z(
             data,
             solver=solver,
             anderson_beta=anderson_beta,
             anderson_warmup_iters=anderson_warmup_iters,
         )
-        pred = self._decode_pred_from_z(data, z)
+        pred = self._decode_pred_from_z(data, z, x_enc)
         return (pred, jac_loss) if self.training else pred
 
 # Backward-compatible alias (not Li et al. GINO)

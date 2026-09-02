@@ -306,7 +306,7 @@ Ordered by blast radius.  Status is updated in place as each lands.
 | B20 | `_DEFICIENT_CACHE` keyed on `data_ptr()`, which is reused after free — a stale mask could be served for a different mesh | `src/utils/math_operators.py` | **DONE** — value fingerprint added to the key |
 | B21 | The SEALED holdout default lived in the launcher, so invoking `train_kinematics_predictor` directly still trained on 013/031/043 | `src/utils/kinematics_geometry.py` | **DONE** — §11.6; default now derived from `wall_cohort_splits` at the point of use |
 | B22 | `node_type_0..3` is identically **zero on both training corpora** and live at deploy — the same staleness as the stenosis tail | `graphs_kinematics/carreau`, `graphs_kinematics_anchors` | **Regeneration fixes synthetic; B14's sync fixes the clinical anchors.** Caught by `preflight_kine_cohort.py` |
-| B23 | 7 deploy packs are from an older extractor revision: `patient002` + all six `*_mirror_y` have dead `node_type` and anomalous priors | `graphs_biochem_anchors` | **OPEN** — `patient002` is in the training pool; consider excluding or re-extracting |
+| B23 | Deploy packs from an older extractor revision have dead `node_type` and anomalous priors | `graphs_biochem_anchors` | **PARTLY CLOSED (2026-08-31)** — the six `*_mirror_y` packs are deleted (`GENERALIZATION_PLAN.md` §"Safe augmentation"); `patient002` remains OPEN and is still in the training pool |
 | B24 | The synthetic builder wrote `node_type` as a literal `torch.zeros((N, 4))  # Placeholder` — regenerating the corpus would NOT have fixed the dead channel | `src/data_gen/lib/mesh_to_graph.py` | **DONE** — real one-hot; supersedes B22's claim that regeneration was sufficient |
 | B25 | Generation silently clobbered a populated cohort: `MeshToGraph.run()` clears every `*.pt` in its output dir and intent was never required | `src/data_gen/pipeline_kinematics.py` | **DONE** — refuses without `--overwrite`/`--append`; `--dry-run` added |
 
@@ -1986,3 +1986,157 @@ roughly a factor of two".  That 2x is in the LABELS (P1 corner wall `dsrx_sd` 30
 elevated corpus's 152).  It does **not** propagate to the model's output amplitude at deployment:
 C2 reads `dsrxScale` 0.147 against A2's ~0.12, not 0.24.  Structure transfers; amplitude does
 not, and only labels that actually carry deployment's amplitude moved it (N1: 0.385).
+
+---
+
+## 17. The amplitude ceiling is in the architecture, not only the labels  (2026-09-02)
+
+§16.10 closed on "the binding constraint is the LABELS' wall-`dsrx` amplitude", and
+`PILOT_COHORT_RUNBOOK.md` §7.4 recorded the one result that did not fit it: an arm trained with
+17 real deploy vessels in the pool — right regime, COMSOL's own labels — still scored
+`gateJ%` 33.6 against the analytic prior's 32.5, with `dsrxR` pinned at the prior's 0.57-0.62.
+That note ended "something in the architecture or the objective is preventing the residual from
+learning wall `dsrx` at all."  This is that something, and it is provable from the code before
+it is measured.
+
+### 17.1 `z*` is a LayerNorm output, so the DEQ cannot carry per-node amplitude
+
+`RGPBlock.forward` ends in `self.norm(...)` (`ginodeq.py`), so the equilibrium latent the
+decoder reads is *literally* the output of an `nn.LayerNorm`: `z_i = gamma * zhat_i + beta` with
+`zhat_i` exactly zero-mean and unit-variance across channels.  Every node's latent therefore
+lies on **one fixed shell**, the same shell for every node of every vessel.  Measured on four
+deploy packs under the promoted checkpoint (`scratchpad/probe_latent_amplitude.py`):
+
+```
+vessel          N       cv(||z_i||)     cv(||z_i - mean_c||)
+patient003   16916       1.02e-03            1.02e-03
+patient008   20377       8.79e-04            8.77e-04
+patient015   12298       1.10e-03            1.10e-03
+patient021   17824       9.97e-04            9.96e-04
+```
+
+Constant to a tenth of a percent.  Per-node *direction* on that shell is free; per-node
+*magnitude* is not something the DEQ output can express at all.
+
+### 17.2 And the deficit shows up exactly where the hard BC reads
+
+Same packs, the residual the model emits against the one the labels require — `uvp` recovered
+as `(pred - uv_prior)/sdf`, which is what `d/dn(uv_prior + sdf*uvp)` reads at the wall:
+
+```
+vessel        |uvp| p50   p99/p50   need p50   need p99/p50
+patient003      0.435       9.07      0.441       24.33
+patient008      0.367       8.69      0.647       20.58
+patient015      0.616       9.80      0.300       30.35
+patient021      0.459       7.02      0.391       26.99
+```
+
+**The medians agree; the model is short by ~3x on the TAIL.**  Wall `dsrx` spread is a tail
+statistic, so a model whose output dynamic range is compressed 3x reads `dsrxScale` ~0.12 no
+matter what it is shown or how the loss is weighted.
+
+This retro-explains three results that were previously filed as separate puzzles:
+
+* §16.10's M1 arm raised `l_band_dsrx` to 38% of the loss and moved `dsrxScale` "not one part in
+  a thousand".  **A gradient cannot move what the architecture normalises away.**  The objective
+  was exonerated for the right reason and the wrong conclusion was drawn from it.
+* §16.10's capacity probe reached `dsrxScale` 0.955 on ONE vessel.  One vessel needs one
+  amplitude, and a single global decoder scale can supply that; a cohort needs a different one
+  per node and per vessel, which the shell forbids.
+* The runbook's deploy-vessel arm: correct labels, unchanged `dsrxR`.  The labels were never the
+  only ceiling.
+
+**This does not overturn §16.5.**  The corpus really is at 0.13x deployment's wall `dsrx`
+spread, and a model cannot learn an amplitude it is never shown.  The correction is that fixing
+the labels alone would have hit a second ceiling ~3x below what the gate needs.  Both have to
+move, which is why the regeneration and the two flags below belong to the same run.
+
+### 17.3 The repair: let the decoder off the shell
+
+Two changes, both in `ginodeq.py`, both **default OFF**, and neither touches the fixed-point map
+— so every convergence property of the Anderson solve is unchanged by construction.
+
+| flag | what it does | why it is the minimal fix |
+|---|---|---|
+| `KINEMATICS_DECODER_SKIP=1` | decoder reads `[z*, x_enc]` instead of `z*` | `x_enc` is the encoder's own un-normalised per-node output — sdf, wall_normal, the width priors, the velocity prior.  That is the scale-carrying half `z*` cannot supply, and it is already computed. |
+| `KINEMATICS_RESIDUAL_GAIN=1` | `uvp <- exp(clamp(g(x_enc))) * uvp` before the hard BC | `d/dn(sdf * g*uvp)` at the wall is `g*uvp`, so this is a direct per-node multiplier on wall shear — the quantity `dsrxScale` measures.  Bounded to `exp(±3)`, ~6x headroom over the 3x deficit. |
+
+The gain head reads `x_enc` and **not** `z*` on purpose: reading the shell would reintroduce the
+constraint the head exists to lift.  Its last layer is zero-initialised, so `gain == exp(0) == 1`
+and turning the flag on does not move a fresh model's starting point — it adds capacity, not a
+perturbation.  A skip checkpoint is recoverable from its own tensors (the decoder is
+`2 * latent_dim` wide), and the tensors outrank the manifest, so a stale env var cannot build a
+head a checkpoint has no weights for.
+
+Pinned by five tests in `test_rgp_deq_repair.py`, including one on the shell itself: if
+`RGPBlock` ever stops ending in a norm, `test_deq_equilibrium_latent_lies_on_a_fixed_layernorm_shell`
+fails and this whole section has to be re-justified.
+
+### 17.4 What is NOT claimed
+
+No arm has been trained with either flag.  What is measured is the *mechanism* (§17.1, exact)
+and the *deficit* (§17.2, four packs) — not that closing it moves `gateJ%`.  The bar is still
+the analytic prior's 32.5 on the strided 8, and the honest prior expectation is that the flags
+are necessary and, like the corpus, not sufficient on their own.  Judge them the way §16 judged
+everything else: gate union Jaccard as a fraction of ceiling, then `dsrxScale`, and never on
+velocity rel-L2.
+
+### 17.5 CORRECTION: the corpus on disk already passes the regime gate  (2026-09-02)
+
+The first draft of §17.5 opened "regenerate the corpus with the wall-variation sampler tuned
+against preflight's regime check", and proposed raising `KINE_WALL_NOISE_*` to close §16.5's
+10.7x.  **That is wrong, and it would have made the corpus worse.**  Preflight on the cohort
+actually on disk (`data/processed/graphs_kinematics/carreau`, 250 packs, written 2026-08-29
+19:17, i.e. after `d0ef206` exported true P2 mid-side labels and `d1fb974` redrew the cohort as
+the deployment class):
+
+```
+[ ok ] wall-shear regime matches deployment (n=40)
+       sep-only median  0.818 vs deploy 0.9146 (0.89x)
+       wall_dsrx_sd     1349  vs deploy 717.7  (1.88x)   deploy p10-p90 [350.5, 2228]
+       wall_sr_med      125.5 vs deploy  91.8  (1.37x)
+[ ok ] resolution matches deployment   h_nd 0.0244 at P2 vs 0.0245 (1.00x)
+[ ok ] severe-stenosis coverage        24% at ratio >= 2.0 (deployment 26%)
+0 FAIL, 1 WARN
+```
+
+Against §7.4's 2026-08-28 reading of `wall_dsrx_sd` **95.7 (0.13x)** and `sep-only` **0**, both
+FAIL.  **The label deficit §16.5 diagnosed and §16.10 concluded on is closed**, and slightly
+overshot — 1.88x sits in the upper half of deploy's own p10-p90 band, so raising wall noise
+further would push the corpus out of the band on the high side.  The `KINE_WALL_NOISE_*`
+multipliers stay in the code as the documented knob; they should be left at 1.0.
+
+**What this does NOT settle.**  §16.9-16.11's arms report "239 prepared graphs", which is
+exactly this cohort's 250 minus the 11 that `KINEMATICS_MAX_NODES=26000` drops — so those arms
+may already have run on this corpus, in which case §16.10's "the labels are the limit" was
+measured against §16.5's stale 0.13x while training on labels that were no longer 0.13x.  The
+arm output directories have not survived, so this cannot be settled from artifacts.  It is the
+difference between "the retrain is the first run on a fixed corpus" and "the corpus was fixed
+and the arms still failed", and D0 below answers it directly.
+
+### 17.6 Order of work
+
+1. **Do not regenerate.**  The corpus passes.  If a cohort is ever regenerated, re-read this
+   section first and leave `KINE_WALL_NOISE_*` at 1.0 unless preflight says otherwise.
+2. **Run D0** (`scratch/tune/run_D0_ablation.sh`) — C2's recipe on the corpus that is on disk,
+   §17's flags OFF.  This is the control, and it is also the missing measurement from §17.5:
+   if D0 alone clears the analytic prior's 32.5, the headline is the corpus and §17's urgency
+   drops even though its mechanism still stands.
+3. **Run D1** (`scratch/tune/run_D1_shell.sh`) — identical plus `KINEMATICS_DECODER_SKIP=1` and
+   `KINEMATICS_RESIDUAL_GAIN=1`.  Since both flags are exact no-ops at initialisation, D1 minus
+   D0 is attributable to the added capacity and nothing else.
+4. Judge on gate union Jaccard as a fraction of ceiling, then `dsrxScale`.  Never on velocity
+   rel-L2 (§10.3, §16.10).
+
+### 17.7 One thing left open, deliberately not claimed
+
+Preflight's surviving WARN is the width channels: per-vessel max `d1` 2.45 vs deploy 10.54
+(0.23x), `d2` 33.7 vs deploy 2109 (0.016x).  All 8 deploy packs sampled carry
+`|M_inv| = 1.000e+06` **exactly** — §1i's signature of a node whose `M` was assembled from an
+edge list that did not contain it — so the deploy half of that comparison is computed with
+operators that do not match their own graphs (B13, still unwired).  An attempt to re-measure the
+width channels after `rebuild_wls_operators_from_graph` disagreed with §1i's table by four
+orders of magnitude in the opposite direction, which means the recompute path used was wrong,
+not that §1i is.  **So the WARN is not established as either a real geometry gap or an operator
+artifact, and no number from that attempt should be quoted.**  Settling it is B13's job and it
+needs the end-to-end measurement B13 has always been waiting on.

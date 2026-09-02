@@ -158,7 +158,7 @@ def test_wg_physgat_01_leg_kwargs():
     for k in ("geom_feats", "geom_feats_rich", "flux_stag_feat", "flow_feats_drop_xy", "flow_feats_source"):
         assert leg.config_kwargs.get(k) == feat.config_kwargs.get(k)
         assert ctrl.config_kwargs.get(k) == feat.config_kwargs.get(k)
-    assert leg.runtime_kwargs.get("corrector_coupling") is True
+    assert leg.runtime_kwargs.get("closed_loop_coupling") is True
 
 
 def test_pushforward_config_accepts_physics_gat():
@@ -186,7 +186,7 @@ def test_band_uv_for_model_uses_u0_pred_not_gt_when_coupled():
     rt = BiochemRuntimeConfig().with_overrides(
         train_vel_source="coupled",
         rollout_vel_source="coupled",
-        corrector_coupling=False,
+        closed_loop_coupling=False,
     )
     with use_biochem_runtime(rt):
         uv = band_uv_for_model(data, 0, torch.device("cpu"), node_idx, for_training=True)

@@ -485,8 +485,10 @@ wrong-pocket volume, so the current gate is measuring the bug, not the model.
 5. **Sealed-set leak:** `WG_clotrich_nplus` trained on `021, 032, 035, 037` — the
    `family_validation` / `generalization_challenge` vessels. Honest held-outs: `020`,
    plus `043` / `044`.
-6. **New — `*_mirror_y` vessels are duplicates.** Never let a vessel and its mirror
-   land on opposite sides of a train/test or CV split.
+6. **`*_mirror_y` vessels were duplicates — deleted 2026-08-31.** They were never valid
+   reflections (negated `node_type`/`wss_prior`/`AP`, stale WLS operators); see
+   `GENERALIZATION_PLAN.md` §"Safe augmentation". If reflection is ever reintroduced,
+   never let a vessel and its mirror land on opposite sides of a train/test or CV split.
 
 ---
 
@@ -2454,7 +2456,7 @@ do not survive contact with the data.**
 ## 14.1 Data inventory — we have been training on 14% of the available data
 
 ```
-data/processed/graphs_biochem_anchors/   43 patient packs (+ mirror augmentations)
+data/processed/graphs_biochem_anchors/   43 patient packs
   with >= 20 clotted nodes at t_final:   35
   actually used by every leg v1-v10:      5   (039,040,041,042,044)
 ```

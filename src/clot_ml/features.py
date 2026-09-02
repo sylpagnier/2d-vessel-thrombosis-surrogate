@@ -135,7 +135,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     from src.core_physics.mls_gradient import build_mls_gradient, node_positions, shear_rate_2d
     from src.core_physics.physics_lumen_model import resolve_offwall_shell
     from src.core_physics.physics_wall_model import (
-        PRED_DSRX_GAIN, deposition_gate, integrate_mat_trajectory, t0_flow_fields)
+        deposition_gate, dsrx_gain, integrate_mat_trajectory, t0_flow_fields)
     from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
     from src.core_physics.species_pushforward_continuous import resolve_deploy_eval_time_index
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
@@ -151,9 +151,6 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     u_ref = float(data.u_ref.reshape(-1)[0])
     d_bar = float(data.d_bar.reshape(-1)[0])
 
-    if flow == "pred":
-        u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-        v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
     from src.clot_ml.temporal import _flow_hops
     hops = _flow_hops(flow)
     u = (data.u0_pred if flow in ("pred", "fem") else data.y[0, :, 0]).reshape(-1).detach().cpu().numpy().astype(np.float64)
@@ -167,13 +164,13 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     sr = shear_rate_2d(ux, uy, vx, vy) * scale
     dsrx = (Dx @ sr) / (d_bar * M_TO_CM)
     dsry = (Dy @ sr) / (d_bar * M_TO_CM)
-    if flow == "pred":
-        # Same amplitude correction `t0_flow_fields` applies -- `sgt` is a physical constant
-        # and `dsrx` here is on the 6-hop surrogate scale.  See PRED_DSRX_GAIN for the
-        # measurement and for why no per-vessel estimator exists.
-        # FEM at hops=3 needs no correction: it is a converged field on the same scale as GT.
-        dsrx = dsrx * PRED_DSRX_GAIN
-        dsry = dsry * PRED_DSRX_GAIN
+    # Same amplitude correction `t0_flow_fields` applies, through the same helper -- `sgt` is a
+    # physical constant and a surrogate `dsrx` is on the 6-hop scale.  FEM and GT resolve to
+    # 1.0: converged fields on COMSOL's own scale need no correction.
+    _gain = dsrx_gain(flow)
+    if _gain != 1.0:
+        dsrx = dsrx * _gain
+        dsry = dsry * _gain
     vort = (vx - uy) * scale
     div = (ux + vy) * scale
     spd = np.hypot(u, v)

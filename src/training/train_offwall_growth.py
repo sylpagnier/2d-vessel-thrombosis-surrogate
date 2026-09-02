@@ -1,6 +1,6 @@
 """Off-wall growth specialist trainer (archived).
 
-See ``src/archive/mat_growth/train_offwall_growth.py``.
+See ``src/archive/mat_growth/train_offwall_growth.py`` for the historical implementation.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Research sweep rollout backends: clot_ml_v0 + in-house FEM (default) or legacy biochem."""
+"""Research sweep rollout backends: clot_ml_0 + in-house FEM (default) or legacy biochem."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from src.clot_ml.locked import build_sample
-from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_v0, solve_fem_into_pack
+from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0, solve_fem_into_pack
 from src.clot_ml.wound import has_wound, solid_mask, wound_region_masks
 from src.config import BiochemConfig
 from src.evaluation.research_parameters import (
@@ -96,16 +96,16 @@ def _wound_domain_summary(data, series: dict[int, np.ndarray], *, final_idx: int
     return out
 
 
-def run_clot_ml_v0_arm(
+def run_clot_ml_0_arm(
     *,
     data,
     geom_spec: dict[str, Any],
     flow: str = "fem",
-    clot_model: str = "clot_ml_v0",
+    clot_model: str = "clot_ml_0",
     include_velocity: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[ClotMlResearchTrajectory, dict[str, Any]]:
-    """FEM t=0 flow + clot_ml_v0 temporal rollout on a research graph."""
+    """FEM t=0 flow + clot_ml_0 temporal rollout on a research graph."""
     log = progress or (lambda _msg: None)
     t0 = time.perf_counter()
 
@@ -125,8 +125,8 @@ def run_clot_ml_v0_arm(
 
     log("[i] Building clot_ml sample features...")
     sample = build_sample(data, bio, flow=sample_flow, variant="v4")
-    log("[i] Running clot_ml_v0 rollout...")
-    result = predict_clot_ml_v0(
+    log("[i] Running clot_ml_0 rollout...")
+    result = predict_clot_ml_0(
         bundle,
         data,
         times,
@@ -136,7 +136,7 @@ def run_clot_ml_v0_arm(
 
     series = result.get("series") or {}
     if not series:
-        raise RuntimeError("clot_ml_v0 returned empty series")
+        raise RuntimeError("clot_ml_0 returned empty series")
 
     t_sec = data.t.detach().cpu().numpy().astype(np.float64)
     keys = sorted(int(k) for k in series.keys())
@@ -151,7 +151,7 @@ def run_clot_ml_v0_arm(
         n_steps=len(keys),
         elapsed_s=time.perf_counter() - t0,
         meta={
-            "backend": "clot_ml_v0",
+            "backend": "clot_ml_0",
             "clot_model": clot_model,
             "flow": flow_norm,
             "sample_flow": sample_flow,
@@ -262,8 +262,8 @@ def run_research_arm(
     model_norm = str(model).lower().strip()
     flow_use = str(arm.get("flow", control.get("flow", flow))).lower().strip()
 
-    if model_norm == "clot_ml_v0":
-        traj, pack = run_clot_ml_v0_arm(
+    if model_norm in ("clot_ml_0", "clot_ml_v0"):
+        traj, pack = run_clot_ml_0_arm(
             data=data,
             geom_spec=geom_spec,
             flow=flow_use,
@@ -272,15 +272,13 @@ def run_research_arm(
             progress=log,
         )
         model_meta = {
-            "resolver": "clot_ml_v0",
+            "resolver": "clot_ml_0",
             "clot_model": clot_model,
             "flow": flow_use,
         }
     elif model_norm in ("locked_canonical", "biochem", "legacy"):
         if pipeline is None:
-            raise ValueError("locked_canonical requires CustomerDeployPipeline")
-        import traceback
-        traceback.print_exc()
+            raise ValueError("locked_canonical requires CustomerDeployPipeline (legacy_species)")
         log(f"[i] Arm {name}: rolling out legacy biochem deploy...")
         traj, pack = run_legacy_biochem_arm(
             pipeline=pipeline,
@@ -351,10 +349,137 @@ def run_research_arm(
     return arm_out
 
 
+def _json_safe(obj: Any) -> Any:
+    if isinstance(obj, float):
+        if obj != obj:
+            return None
+        return obj
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().cpu().tolist()
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+def run_sweep(
+    cfg: dict[str, Any],
+    *,
+    pipeline: CustomerDeployPipeline | None = None,
+    force_rebuild: bool = False,
+    arm_filter: str | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Run all arms in a normalized sweep config and write summary.json."""
+    from pathlib import Path
+
+    from src.evaluation.research_sweep_config import DEFAULT_RESEARCH_MODEL, LEGACY_BIOCHEM_MODEL
+    from src.evaluation.research_sweep_geometry import default_mesh_cache_dir
+    from src.utils.paths import get_project_root
+
+    log = progress or (lambda _msg: None)
+    root = get_project_root()
+    out_dir = Path(cfg.get("output_dir") or f"outputs/research_sweeps/{cfg['id']}")
+    if not out_dir.is_absolute():
+        out_dir = root / out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = default_mesh_cache_dir(root)
+
+    model = str(cfg.get("model", DEFAULT_RESEARCH_MODEL))
+    flow = str(cfg.get("control", {}).get("flow", "fem"))
+    clot_model = str(cfg.get("clot_model", DEFAULT_RESEARCH_MODEL))
+    control = dict(cfg.get("control") or {})
+
+    arms = list(cfg["arms"])
+    if arm_filter:
+        arms = [a for a in arms if str(a.get("name")) == arm_filter]
+        if not arms:
+            raise ValueError(f"No arm named {arm_filter!r} in sweep {cfg.get('id')}")
+
+    log(f"[i] Sweep {cfg.get('id')}: {len(arms)} arm(s) -> {out_dir}")
+    log(f"[i] Model: {model}  flow={flow}  clot_model={clot_model}")
+    if model == LEGACY_BIOCHEM_MODEL and pipeline is not None:
+        log(f"[i] Legacy mat_leg={pipeline.mat_leg}  ckpt={pipeline.wall_ckpt}")
+
+    # One bad arm used to raise straight out of the sweep, so an unattended run lost every
+    # later arm and wrote no summary at all.  Keep going, but record what failed and re-raise
+    # at the end -- a partial sweep must never read as a complete one.
+    arm_results: list[dict[str, Any]] = []
+    failed_arms: list[dict[str, str]] = []
+    for arm in arms:
+        try:
+            arm_results.append(
+                run_research_arm(
+                    arm=arm,
+                    control=control,
+                    out_dir=out_dir,
+                    cache_dir=cache_dir,
+                    force_rebuild=force_rebuild,
+                    model=model,
+                    flow=flow,
+                    clot_model=clot_model,
+                    pipeline=pipeline,
+                    progress=log,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 -- reported below and re-raised
+            import traceback
+
+            traceback.print_exc()
+            failed_arms.append({"name": str(arm.get("name")), "error": f"{type(exc).__name__}: {exc}"})
+            log(f"[ERR] Arm {arm.get('name')} failed: {exc}")
+
+    summary_rows = []
+    for ar in arm_results:
+        row = {
+            "name": ar["name"],
+            "axis_value": ar.get("axis_value"),
+            **(ar.get("labels") or {}),
+            **(ar.get("research_parameters", {}).get("summary") or {}),
+        }
+        summary_rows.append(row)
+
+    summary = {
+        "id": cfg.get("id"),
+        "title": cfg.get("title"),
+        "axis": cfg.get("axis"),
+        "model": model,
+        "flow": flow,
+        "clot_model": clot_model if model == DEFAULT_RESEARCH_MODEL else None,
+        "output_dir": str(out_dir.as_posix()),
+        "n_arms": len(arm_results),
+        "n_arms_requested": len(arms),
+        "failed_arms": failed_arms,
+        "arms": summary_rows,
+    }
+    if pipeline is not None and model == LEGACY_BIOCHEM_MODEL:
+        summary["wall_ckpt"] = str(pipeline.wall_ckpt.as_posix())
+        summary["mat_leg"] = pipeline.mat_leg
+
+    summary_path = out_dir / "summary.json"
+    import json
+
+    summary_path.write_text(
+        json.dumps(_json_safe(summary), indent=2) + "\n", encoding="utf-8"
+    )
+    if failed_arms:
+        names = ", ".join(f["name"] for f in failed_arms)
+        log(f"[PARTIAL] Sweep {cfg.get('id')}: {len(failed_arms)}/{len(arms)} arm(s) failed -> {summary_path}")
+        raise RuntimeError(f"sweep {cfg.get('id')}: arm(s) failed: {names}")
+    log(f"[OK] Sweep complete -> {summary_path}")
+    return summary
+
+
 __all__ = [
     "ClotMlResearchTrajectory",
-    "run_clot_ml_v0_arm",
+    "run_clot_ml_0_arm",
     "run_legacy_biochem_arm",
     "run_research_arm",
+    "run_sweep",
     "DEFAULT_MAT_LEG",
 ]

@@ -16,6 +16,12 @@ Env:
   ``CLOT_GUIDE_F_BETA`` (default 0.5)
   ``CLOT_GUIDE_IOU_W`` / ``CLOT_GUIDE_F05_W`` (default 0.5 each)
   ``SPECIES_CONTINUOUS_CLOUT_SCORE`` = guiding | relaxed_f05 | dilation_iou | legacy_f1
+                                     | relaxed_prec_floor | severity
+
+``severity`` is Deploy Score v2 (`src/clot_ml/severity_metric.py`): the same shape +
+detection combination with an absolute grace on misses and false positives.  It is
+strictly more forgiving than ``guiding`` and is OPT-IN, because every number in the
+project docs was measured on ``guiding`` and the two are not comparable.
 """
 
 from __future__ import annotations
@@ -152,6 +158,11 @@ def species_continuous_clout_score_mode() -> str:
         return "dilation_iou"
     if raw in ("relaxed_prec_floor", "prec_floor", "relaxed_prec", "precision_floor"):
         return "relaxed_prec_floor"
+    # Deploy Score v2.  Opt-in: it is a MORE FORGIVING score (absolute miss/FP graces), so
+    # its numbers are not comparable with anything in the docs, which were all measured on
+    # `guiding`.  Keep it for figures and for future selection; compare arms on `guiding`.
+    if raw in ("severity", "deploy_v2", "v2", "clot_severity"):
+        return "severity"
     return "guiding"
 
 
@@ -287,6 +298,8 @@ def clot_score_from_deploy_dict(m: dict[str, float]) -> float:
         prec = float(m.get("deploy_clot_relaxed_prec", m.get("clot_relaxed_prec", 0.0)))
         rec = float(m.get("deploy_clot_relaxed_rec", m.get("clot_relaxed_rec", 0.0)))
         return relaxed_prec_floor_score(prec, rec)
+    if mode == "severity":
+        return float(m.get("deploy_clot_severity", m.get("clot_severity", 0.0)))
     return float(m.get("deploy_clot_guiding", m.get("clot_guiding", 0.0)))
 
 
@@ -342,7 +355,26 @@ def compute_clot_relaxed_metrics(
     strict_union = int((pred_pos | gt_pos).sum().item())
     strict_iou = _safe_div(float(strict_inter), float(strict_union))
 
+
     guiding = clot_guiding_score(dilation_iou, relaxed_f_beta)
+
+    # Deploy Score v2 (severity mechanics).  The formula and every tolerance live in
+    # `src/clot_ml/severity_metric.py` -- imported, never restated here, so the two
+    # implementations cannot drift.  Relaxed at `SeverityConfig.relax_hops`, which is NOT
+    # the `hops` the guiding score uses, so its counts are computed on their own dilation.
+    from src.clot_ml.severity_metric import DEFAULT as _SEV_CFG, severity_from_counts
+
+    if int(_SEV_CFG.relax_hops) == hops:
+        sev_tp_prec, sev_tp_rec, sev_iou = tp_prec, tp_rec, dilation_iou
+    else:
+        sev_gt_dil = graph_dilate_hops(gt_pos, edge_index, int(_SEV_CFG.relax_hops))
+        sev_pred_dil = graph_dilate_hops(pred_pos, edge_index, int(_SEV_CFG.relax_hops))
+        sev_tp_prec = int((pred_pos & sev_gt_dil).sum().item())
+        sev_tp_rec = int((gt_pos & sev_pred_dil).sum().item())
+        sev_iou = _safe_div(float(int((sev_pred_dil & sev_gt_dil).sum().item())),
+                            float(int((sev_pred_dil | sev_gt_dil).sum().item())))
+    severity = severity_from_counts(n_gt=n_gt, n_pred=n_pred, tp_rec=sev_tp_rec,
+                                    tp_prec=sev_tp_prec, shape_iou=sev_iou, cfg=_SEV_CFG)
 
     # Tight 1-hop, precision/recall-balanced agreement: forgives mesh jitter but not
     # "somewhere in the neighbourhood", and does not saturate the way 3-hop does.
@@ -360,6 +392,7 @@ def compute_clot_relaxed_metrics(
         "clot_relaxed_f_beta": relaxed_f_beta,
         "clot_dilation_iou": dilation_iou,
         "clot_guiding": guiding,
+        "clot_severity": float(severity),
         "clot_prec": strict_prec,
         "clot_rec": strict_rec,
         "clot_f1": strict_f1,
@@ -548,6 +581,7 @@ def metrics_to_deploy_prefix(m: dict[str, float], *, prefix: str = "deploy_") ->
         "clot_relaxed_f_beta": f"{prefix}clot_relaxed_f_beta",
         "clot_dilation_iou": f"{prefix}clot_dil_iou",
         "clot_guiding": f"{prefix}clot_guiding",
+        "clot_severity": f"{prefix}clot_severity",
         "clot_iou": f"{prefix}clot_iou",
         "pred_pos_frac": f"{prefix}clot_pred_pos_frac",
         "clot_mass_ratio": f"{prefix}clot_mass_ratio",

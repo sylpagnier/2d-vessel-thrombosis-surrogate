@@ -8,7 +8,7 @@ import runpy
 import warnings
 
 warnings.warn(
-    "train_species_pushforward_continuous is archived; use locked checkpoints or clot_ml_v0.",
+    "train_species_pushforward_continuous is archived; use locked checkpoints or clot_ml_0.",
     DeprecationWarning,
     stacklevel=2,
 )

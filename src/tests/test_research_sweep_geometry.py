@@ -10,6 +10,7 @@ from src.evaluation.research_sweep_geometry import (
     build_research_vessel_params,
     geometry_spec_hash,
 )
+from src.evaluation.research_sweep_presets import resolve_wound_overlay
 
 
 def test_build_research_params_straight_zero_noise():
@@ -65,6 +66,50 @@ def test_wall_roughness_deterministic():
     b = build_research_vessel_params(wall_roughness_amp=0.0006, seed=99)
     assert a["noise_top"] == b["noise_top"]
     assert max(abs(x) for x in a["noise_top"]) > 1e-6
+
+
+def test_cache_spec_excludes_wound_so_wound_arms_share_a_mesh():
+    """The wound is an overlay stamped after the graph loads, not baked into the mesh.
+
+    `load_or_build_research_graph` calls `apply_research_wound_overlay` on the cached graph,
+    so two arms that differ only in wound width or position must hash to the SAME mesh --
+    otherwise every wound arm re-runs Gmsh for an identical vessel.
+    """
+    control = {
+        "re_target": 450.0,
+        "t_final_s": 30000.0,
+        "n_steps": 120,
+        "geometry": {"width": 0.012, "curve_type": "straight", "seed": 42},
+    }
+    base_geom = {"stenosis_occlusion": 0.5}
+    arm_a = {"name": "w_narrow", "geometry": {**base_geom, "wound_enabled": True,
+                                              "wound_width_frac": 0.2}}
+    arm_b = {"name": "w_broad", "geometry": {**base_geom, "wound_enabled": True,
+                                             "wound_width_frac": 0.6}}
+
+    spec_a = arm_geometry_cache_spec(arm_a, control)
+    spec_b = arm_geometry_cache_spec(arm_b, control)
+
+    assert spec_a["stenosis_occlusion"] == 0.5
+    assert not any(k.startswith("wound_") for k in spec_a)
+    assert geometry_spec_hash(spec_a) == geometry_spec_hash(spec_b)
+
+    # ...and the overlay is what actually separates the two arms.
+    over_a = resolve_wound_overlay({**control["geometry"], **arm_a["geometry"]})
+    over_b = resolve_wound_overlay({**control["geometry"], **arm_b["geometry"]})
+    assert over_a is not None and over_b is not None
+    assert over_a["width_frac"] != over_b["width_frac"]
+
+
+def test_resolve_wound_align_stenosis():
+    w = resolve_wound_overlay({
+        "wound_enabled": True,
+        "wound_align_stenosis": True,
+        "path_loc_frac": 0.35,
+        "wound_position_frac": 0.9,
+    })
+    assert w is not None
+    assert abs(w["position_frac"] - 0.35) < 1e-9
 
 
 def test_cache_spec_hash_stable():

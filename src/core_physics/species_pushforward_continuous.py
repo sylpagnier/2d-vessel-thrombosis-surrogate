@@ -4215,57 +4215,6 @@ def deploy_species_rollout_series(
 
     coupler = None
     mu_bulk_si = None
-    if os.environ.get("SPECIES_CLOSED_LOOP_COUPLING") == "1" or flow_source == "auto":
-        try:
-            flow_device = device
-            from src.inference.corrector_coupling import ClotAwareFlow, resolve_kinematics_checkpoint, resolve_corrector_checkpoint, reset_coupled_flow_registry
-            from src.core_physics.coupled_shear_gnn import LocalKinematicCorrector
-            from src.utils.kinematics_inference import load_kinematics_predictor
-            from src.core_physics.clot_growth_masks import resolve_bulk_carreau_mu_si
-            reset_coupled_flow_registry()
-            
-            global _CLOSED_LOOP_MODELS_CACHE
-            if "_CLOSED_LOOP_MODELS_CACHE" not in globals():
-                _CLOSED_LOOP_MODELS_CACHE = {}
-                
-            kine_ckpt = resolve_kinematics_checkpoint()
-            corr_ckpt = resolve_corrector_checkpoint()
-            
-            if os.environ.get("BIOCHEM_KINE_RESOLVE_ON_CLOT") == "1":
-                cache_key = (kine_ckpt, corr_ckpt, str(flow_device))
-                if cache_key in _CLOSED_LOOP_MODELS_CACHE:
-                    kine, corr_model = _CLOSED_LOOP_MODELS_CACHE[cache_key]
-                else:
-                    kine = load_kinematics_predictor(kine_ckpt, flow_device)
-                    kine.eval()
-                    for p in kine.parameters():
-                        p.requires_grad = False
-                    from src.core_physics.coupled_shear_gnn import load_local_corrector
-                    corr_model = load_local_corrector(corr_ckpt, flow_device)
-                    corr_model.eval()
-                    for p in corr_model.parameters():
-                        p.requires_grad = False
-                    _CLOSED_LOOP_MODELS_CACHE[cache_key] = (kine, corr_model)
-            else:
-                kine = None
-                corr_cache_key = (corr_ckpt, str(flow_device))
-                if corr_cache_key in _CLOSED_LOOP_MODELS_CACHE:
-                    corr_model = _CLOSED_LOOP_MODELS_CACHE[corr_cache_key]
-                else:
-                    from src.core_physics.coupled_shear_gnn import load_local_corrector
-                    corr_model = load_local_corrector(corr_ckpt, flow_device)
-                    corr_model.eval()
-                    for p in corr_model.parameters():
-                        p.requires_grad = False
-                    _CLOSED_LOOP_MODELS_CACHE[corr_cache_key] = corr_model
-                
-            coupler = ClotAwareFlow(flow_device, phys_cfg=phys_cfg)
-            coupler._kine = kine
-            coupler._corrector = corr_model
-            u0, v0 = coupler.base_flow(data)
-            mu_bulk_si = resolve_bulk_carreau_mu_si(data, 0, phys_cfg, flow_device, u_nd=u0, v_nd=v0).reshape(-1)
-        except Exception as e:
-            print(f"[WARN] Failed to initialize closed-loop flow coupler in deploy rollout: {e}")
 
     for t in range(n_times):
         sp = pin_species_block(data, t, device)
@@ -4274,15 +4223,7 @@ def deploy_species_rollout_series(
         if t >= n_times - 1:
             break
         from src.core_physics.species_deploy_rollout import resolve_species_rollout_uv
-        if coupler is not None:
-            from src.inference.corrector_coupling import get_coupled_flow
-            coupled = get_coupled_flow(data, device)
-            if coupled is not None:
-                u, v = coupled
-            else:
-                u, v = resolve_species_rollout_uv(data, t + 1, device, for_training=False)
-        else:
-            u, v = resolve_species_rollout_uv(data, t + 1, device, for_training=False)
+        u, v = resolve_species_rollout_uv(data, t + 1, device, for_training=False)
             
         from src.core_physics.species_deploy_rollout import band_speed_from_uv
         spd = band_speed_from_uv(u, v, node_idx)
@@ -4305,40 +4246,6 @@ def deploy_species_rollout_series(
             vel_decay_alphas=vel_alphas,
             wall_mask=wall_m,
         )
-
-        if coupler is not None and t + 1 < n_times:
-            try:
-                from src.core_physics.species_gelation_readout import differentiable_clot_phi_from_species12, differentiable_mu_eff_from_species12
-                from src.core_physics.clot_phi_simple import comsol_carreau_mu_si_from_uv
-                from src.inference.corrector_coupling import write_coupled_flow_into_y, set_coupled_flow
-                
-                sp_next = pin_species_block(data, t + 1, device)
-                sp_next = scatter_log_state_to_species_block(sp_next, log_state, node_idx)
-                species_log12 = sp_next
-                
-                phi_clot = differentiable_clot_phi_from_species12(species_log12, bio_cfg)
-                u_t1 = data.y[t + 1, :, 0]
-                v_t1 = data.y[t + 1, :, 1]
-                gel_factor = torch.ones_like(u_t1)
-                mu_carreau_si = comsol_carreau_mu_si_from_uv(
-                    data,
-                    u_t1,
-                    v_t1,
-                    gel_factor,
-                    phys_cfg,
-                    device=device,
-                )
-                mu_eff_si = differentiable_mu_eff_from_species12(
-                    species_log12, mu_carreau_si, phi_clot, bio_cfg, gelation_beta=gel_beta
-                ).reshape(-1)
-
-                state = coupler.update(data, mu_eff_si, mu_bulk_si=mu_bulk_si, publish=False)
-                set_coupled_flow(data, state.u, state.v)
-                write_coupled_flow_into_y(data, state.u, state.v, time_index=t + 1)
-            except Exception as e:
-                import traceback
-                print(f"[WARN] Failed to apply closed-loop flow coupling at eval step {t+1}: {e}")
-                traceback.print_exc()
     return out, data
 
 

@@ -1,20 +1,21 @@
-# Model nomenclature (SciML-accurate) — HemoRGP
+# Model nomenclature (SciML-accurate) — Local FEM Solver
 
 Names should reflect **what each piece is**. Prefer **RGP-DEQ** / **biochem_gnn** over legacy GINO / PMGP / biochem_deploy labels.
 
 **Programmatic source of truth:** [`src/model_nomenclature.py`](../src/model_nomenclature.py)
 
-**Product name:** **HemoRGP** (Rheology-guided Graph-Perceiver hemodynamics + thrombus SciML). Former brand: HemoGINO (retired — not Li et al. GINO).
+**Product name:** **Local FEM Solver** (`local-fem-solver`). Deploy stack: in-house FEM t=0 + **deploy-clot** (`clot_ml_0`). Former brands: HemoRGP, HemoGINO (retired).
 
 ## Quick map
 
 | Canonical ID | Acronym | SciML category | Code class | Legacy alias |
 |--------------|---------|----------------|------------|--------------|
+| **`clot_ml_0`** | **deploy-clot** | Composable deploy thrombosis stack | — | `clot_ml_v0` |
 | **`rgp_deq_kine`** | **RGP-DEQ** | Rheology-coupled graph DEQ | `RGP_DEQ` | `pmgp_deq_kine`, `gino_deq_kine`, `GINO_DEQ` |
 | `species_graphsage` | — | Discrete-time GraphSAGE operator | `SpeciesDualHeadContinuousGNN` | `species_gnn` |
 | `gelation_beta` | — | Scalar calibration | — | `viscosity_beta` |
 | `clot_trigger_physics` | — | Mechanistic physics closure | — | `clot_phi` |
-| `local_kinematic_corrector` | — | Local residual GNN on frozen flow | `LocalKinematicCorrector` | `local_corrector` |
+| `local_kinematic_corrector` **(deprecated, deleted 2026-09-01)** | — | Local residual GNN on frozen flow | `LocalKinematicCorrector` | `local_corrector` |
 | **`biochem_gnn`** | — | Composable hybrid SciML pipeline | `BiochemGNN` | `biochem_deploy`, `BiochemDeployStack` |
 | `gnode_biochem` | GNODE | Graph neural ODE (retired) | `GNODE_Phase3` | `train biochem` |
 
@@ -74,13 +75,15 @@ Unchanged roles (scalar Mat scale; mechanistic Carreau + gelation + nucleation).
 
 ---
 
-## 4b. Optional coupling: `local_kinematic_corrector`
+## 4b. Deprecated coupling: `local_kinematic_corrector`
+
+> **Deprecated — deleted 2026-09-01, not for publication.** Kept below as a naming record; see [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md) for the status and failure record.
 
 **Class:** `LocalKinematicCorrector` in `src/core_physics/coupled_shear_gnn.py`.
 
-Cheap **k-hop residual GNN** that predicts `[dU, dV]` on top of frozen **RGP-DEQ** UV around clot nodes. Prefer this over viscosity injection into the DEQ (OOD). Wired optionally into `BiochemGNN` via `local_corrector_ckpt` / `set_local_corrector`.
+Cheap **k-hop residual GNN** that predicts `[dU, dV]` on top of frozen **RGP-DEQ** UV around clot nodes. Wired optionally into `BiochemGNN` via `local_corrector_ckpt` / `set_local_corrector`.
 
-Not required for the locked WC_v7 species baseline; used when coupled deploy needs flow diversion.
+Not required for the locked WC_v7 species baseline.
 
 Doc: [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md).
 
@@ -93,13 +96,13 @@ rgp_deq_kine           [frozen RGP-DEQ checkpoint, Stage A]
   -> species_graphsage  [trained]  wall-band GraphSAGE pushforward (FI/Mat)
   -> gelation_beta      [trained]  global Mat scale
   -> clot_trigger_physics [equations] Carreau + gelation + nucleation phi
-  -> local_kinematic_corrector [optional] k-hop [dU,dV] residual on clot nodes
+  -> local_kinematic_corrector [deprecated, deleted 2026-09-01] k-hop [dU,dV] residual on clot nodes
   -> flow_coupling      [optional/future] broader clot->flow refresh
 ```
 
 Train: `python -m src.bin.main train biochem-gnn`. Launcher: `scripts/go_biochem_gnn.ps1`.
 
-Local corrector train: `python -m src.training.train_local_kinematic_corrector`. Doc: [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md).
+Local corrector train: `python -m src.training.train_local_kinematic_corrector`. **Deprecated, not for publication.** Doc: [LOCAL_KINEMATIC_CORRECTOR.md](LOCAL_KINEMATIC_CORRECTOR.md).
 
 Python: `from src.biochem_gnn import BiochemGNN` (legacy: `BiochemDeployStack`, `src.biochem_deploy`).
 

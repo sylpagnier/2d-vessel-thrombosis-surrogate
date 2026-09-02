@@ -52,6 +52,7 @@ if str(REPO) not in sys.path:
 from src.clot_ml.features_v4 import (  # noqa: E402
     horizon_for, indicator_physics, new_channels,
 )
+from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T  # noqa: E402
 
@@ -61,12 +62,13 @@ M_TO_CM = 100.0
 #: v3 cache to extend, per flow source.  The v4 block is an EXTENSION of the v3 sample, so
 #: the two halves must be built from the same velocity field -- `--flow pred` reads the
 #: predicted-flow v3 cache, which `scripts/build_clot_ml_cache.py --flow pred` writes.
-SRC_FOR_FLOW = {"gt": "outputs/clot_ml_cache_gt", "pred": "outputs/clot_ml_cache_pred"}
+SRC_FOR_FLOW = {"gt": "outputs/clot_ml_cache_gt", "pred": "outputs/clot_ml_cache_pred",
+                "fem": "outputs/clot_ml_cache_fem"}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", default="gt", choices=["gt", "pred"],
+    ap.add_argument("--flow", default="gt", choices=["gt", "pred", "fem"],
                     help="velocity field for BOTH the source v3 cache and the v4 block")
     ap.add_argument("--out", default="",
                     help="default: outputs/clot_ml_cache_v4 (gt) / _v4_pred (pred)")
@@ -81,8 +83,15 @@ def main() -> int:
               "`python scripts/build_clot_ml_cache.py --flow %s` first"
               % (SRC, args.flow), flush=True)
         return 2
-    out = REPO / (args.out or ("outputs/clot_ml_cache_v4" if args.flow == "gt"
-                               else "outputs/clot_ml_cache_v4_pred"))
+    # The GT default names the ORPHAN, not the live cache.  `outputs/clot_ml_cache_v4` is the
+    # 19-vessel 08-17 cache from the `clot_gnn_v1` era; the live 68-column GT cache that every
+    # model since 08-23 trained on is `clot_ml_cache_v5`.  Left pointing at `_v4` so a bare
+    # rerun cannot silently overwrite the live cache -- pass `--out outputs/clot_ml_cache_v5`
+    # deliberately when that is what you mean.  See `src/clot_ml/data.load_cache`.
+    _DEFAULT_OUT = {"gt": "outputs/clot_ml_cache_v4",
+                    "pred": "outputs/clot_ml_cache_v4_pred",
+                    "fem": "outputs/clot_ml_cache_v4_fem"}
+    out = REPO / (args.out or _DEFAULT_OUT[args.flow])
     out.mkdir(parents=True, exist_ok=True)
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     crit = float(bio.viscosity_mat_crit)
@@ -103,6 +112,12 @@ def main() -> int:
         d = torch.load(PACKS / f"{a}.pt", map_location="cpu", weights_only=False)
         if int(d.y.shape[0]) < MIN_T:
             continue
+        if args.flow == "fem":
+            # The v4 block differentiates the SAME field the v3 half was built from, so the
+            # FEM solve has to be in the pack here too, not just in the source cache.
+            if not str(getattr(d, "graph_stem", "") or ""):
+                d.graph_stem = a
+            solve_fem_into_pack(d)
         t0 = time.time()
         z = np.load(src, allow_pickle=True)
         S = {k: z[k] for k in z.files}

@@ -458,14 +458,6 @@ def _resolve_flow_uv(data, kine_model, device: torch.device) -> tuple[torch.Tens
         y = data.y[ti].to(device=device, dtype=torch.float32)
         return y[:, 0].reshape(-1), y[:, 1].reshape(-1)
     u, v = _base_uv_from_data(data, kine_model, device)
-    if src != "kine":  # auto: corrector-coupled override at deploy (Step F)
-        from src.inference.corrector_coupling import corrector_coupling_enabled, get_coupled_flow
-
-        if corrector_coupling_enabled():
-            coupled = get_coupled_flow(data, device)
-            if coupled is not None:
-                u = coupled[0].reshape(-1).to(dtype=u.dtype)
-                v = coupled[1].reshape(-1).to(dtype=v.dtype)
     return u, v
 
 
@@ -550,11 +542,17 @@ def _flow_feats_from_uv(
     )
     if use_shear:
         from src.utils.rheology import compute_shear_rate
-        if hasattr(data, "G_x") and hasattr(data, "G_y") and data.G_x is not None and data.G_y is not None:
-            du_dx = torch.sparse.mm(data.G_x, u.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
-            du_dy = torch.sparse.mm(data.G_y, u.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
-            dv_dx = torch.sparse.mm(data.G_x, v.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
-            dv_dy = torch.sparse.mm(data.G_y, v.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
+        # Was reading the packs' `G_x`/`G_y` directly, which bypasses the MLS replacement every
+        # other consumer routes through: those operators return a ZERO derivative on 74.2% of
+        # nodes on the corner-edge packs, and correlate 0.43-0.46 with COMSOL's own viscosity
+        # elsewhere against the MLS operator's 0.997.
+        if getattr(data, "edge_index", None) is not None:
+            from src.core_physics.mls_gradient import graph_gradient_operators
+            _gx, _gy = graph_gradient_operators(data, device=u.device, dtype=torch.float32)
+            du_dx = torch.sparse.mm(_gx, u.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
+            du_dy = torch.sparse.mm(_gy, u.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
+            dv_dx = torch.sparse.mm(_gx, v.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
+            dv_dy = torch.sparse.mm(_gy, v.unsqueeze(1).to(dtype=torch.float32)).squeeze(1)
             gamma_dot_nd = compute_shear_rate(du_dx, du_dy, dv_dx, dv_dy, eps=1e-6).to(dtype=speed.dtype)
             if hasattr(data, "u_ref") and data.u_ref is not None:
                 if isinstance(data.u_ref, torch.Tensor) and data.u_ref.numel() == data.num_nodes:
@@ -748,14 +746,6 @@ def _stagnation_band_features(data, kine_model, device: torch.device, node_idx: 
     z_kin latent encodes only implicitly). All from the kinematic flow + geometry -> deployable.
     """
     u, v = _base_uv_from_data(data, kine_model, device)
-    # Corrector coupling: bend the base flow around the active clot so the deployable
-    # stagnation/shear proxies the GraphSAGE sees reflect the diverted field (Step F).
-    from src.inference.corrector_coupling import corrector_coupling_enabled, get_coupled_flow
-
-    if corrector_coupling_enabled():
-        coupled = get_coupled_flow(data, device)
-        if coupled is not None:
-            u, v = coupled[0].to(dtype=u.dtype), coupled[1].to(dtype=v.dtype)
     speed = torch.sqrt(u * u + v * v)
     pos = data.x[:, :2].to(device=device, dtype=speed.dtype)
     row, col = data.edge_index.to(device=device)
@@ -854,13 +844,6 @@ def _geometry_band_features(data, device: torch.device, node_idx: torch.Tensor) 
 @torch.no_grad()
 def _flux_stag_band_features(data, kine_model, device: torch.device, node_idx: torch.Tensor) -> torch.Tensor:
     u, v = _base_uv_from_data(data, kine_model, device)
-    from src.inference.corrector_coupling import corrector_coupling_enabled, get_coupled_flow
-
-    if corrector_coupling_enabled():
-        coupled = get_coupled_flow(data, device)
-        if coupled is not None:
-            u, v = coupled[0].to(dtype=u.dtype), coupled[1].to(dtype=v.dtype)
-            
     speed = torch.sqrt(u * u + v * v)
     pos = data.x[:, :2].to(device=device, dtype=speed.dtype)
     row, col = data.edge_index.to(device=device)

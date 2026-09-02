@@ -1,4 +1,4 @@
-HemoRGP customer geometries inbox
+Local FEM Solver customer geometries inbox
 ==================================
 
 Put your vessel files HERE (this folder), then launch:
@@ -7,7 +7,7 @@ Put your vessel files HERE (this folder), then launch:
 
 Supported files
 ---------------
-  .pt   - existing HemoRGP graph (recommended for first try)
+  .pt   - existing Local FEM Solver graph (recommended for first try)
   .msh  - Gmsh mesh with physical line tags (see below)
   .nas  - Nastran mesh exported by our pipeline (same tags)
 

@@ -108,7 +108,6 @@ import torch  # noqa: E402
 def _anchor():
     from pathlib import Path
     paths = sorted(Path("data/processed/graphs_biochem_anchors").glob("patient0*.pt"))
-    paths = [p for p in paths if "mirror" not in p.name]
     if not paths:
         pytest.skip("no biochem anchor graphs")
     return torch.load(str(paths[0]), map_location="cpu", weights_only=False)

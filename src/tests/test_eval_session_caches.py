@@ -1,4 +1,4 @@
-"""Session caches for kinematics / corrector loads (eval multi-vessel)."""
+"""Session caches for kinematics loads (eval multi-vessel)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,6 @@ from pathlib import Path
 
 import torch
 
-from src.core_physics.coupled_shear_gnn import (
-    LocalKinematicCorrector,
-    clear_local_corrector_cache,
-    load_local_corrector,
-)
 from src.utils import kinematics_inference as ki
 
 
@@ -55,23 +50,6 @@ def test_kinematics_predictor_session_cache(tmp_path, monkeypatch):
     assert a is not c
     assert calls["n"] == 2
     ki.clear_kinematics_predictor_cache()
-
-
-def test_local_corrector_session_cache(tmp_path):
-    clear_local_corrector_cache()
-    ckpt = tmp_path / "corr.pth"
-    model = LocalKinematicCorrector()
-    torch.save(
-        {"model_state": model.state_dict(), "in_channels": 6, "hidden_dim": 64, "heads": 4},
-        ckpt,
-    )
-    a = load_local_corrector(ckpt, torch.device("cpu"), cache=True)
-    b = load_local_corrector(ckpt, torch.device("cpu"), cache=True)
-    assert a is b
-    clear_local_corrector_cache()
-    c = load_local_corrector(ckpt, torch.device("cpu"), cache=True)
-    assert c is not a
-    clear_local_corrector_cache()
 
 
 def test_splice_dynamic_flow_no_grad_reuses_buffer():

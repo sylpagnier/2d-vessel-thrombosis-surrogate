@@ -1,4 +1,4 @@
-# Publishing policy (HemoRGP)
+# Publishing policy (Local FEM Solver)
 
 This repository is meant to be **publicly pushable**: source, docs, and small reference manifests are versioned. Heavy data, checkpoints, and COMSOL models stay on the machine that trains.
 
@@ -8,7 +8,7 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 |------|-----|
 | `src/` | Library, training, tools, tests |
 | `scripts/` (active) + `scripts/README.md` | Supported launchers |
-| `scripts/archive/` | Retired launchers (not the default surface) |
+| `scripts/archive/MANIFEST.md` | Deleted retired launchers (recover via git) |
 | `docs/` (active) + `docs/archive/` | Design docs + historical notebooks |
 | `docs/assets/` | Small README / paper figures (tracked) |
 | `data/reference/` | Small baseline / architecture JSON + README |
@@ -43,5 +43,5 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 ## Script surface
 
 - **Supported:** only what [`scripts/README.md`](../scripts/README.md) lists.
-- **Archived:** `scripts/archive/`.
+- **Deleted archives:** inventory in [`scripts/archive/MANIFEST.md`](../scripts/archive/MANIFEST.md) (git history for recovery).
 - Prefer not adding one-off `analyze_*.py` / `_print_*.py` to the active `scripts/` root unless documented in that README.

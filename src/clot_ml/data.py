@@ -18,8 +18,18 @@ def load_cache(flow: str = "gt") -> dict[str, dict]:
     superseded features.  There is an exact marker: `build_clot_ml_cache.py` has written a
     `solid` key since the geometry union landed (MODEL_REVIEW 5b.5), so a cache without one
     was built before the pack repair changed `wall_normal`, `node_type_*`, `width_nd` and the
-    v4 transport channels.  `outputs/clot_ml_cache_v4` is such a cache and is still the
-    default of at least one script.
+    v4 transport channels.
+
+    NAMING, because it has already cost one wrong conclusion (2026-09-02).  The live 68-column
+    GT cache is `clot_ml_cache_v5`, NOT `clot_ml_cache_v4`.  `_v4` is an orphan from the
+    `clot_gnn_v1` era: built 08-17 from the then-current v3 features, 19 clot-carrying vessels
+    and no clot-free ones, superseded five minutes after the 08-22 rebuild by `_v5` (31
+    vessels, `solid` present).  Nothing defaults to `_v4` any more.  Reading it as the GT
+    counterpart of `clot_ml_cache_v4_fem` -- which the `v4`/`v4_pred`/`v4_fem` naming invites
+    -- compares 19 vessels against 31 and moves every precision-weighted score.
+
+    `build_clot_ml_cache_v4.py --flow gt` still writes to the orphan unless `--out` names the
+    live cache; see the note there.
     """
     root = REPO / f"outputs/clot_ml_cache_{flow}"
     out = {}

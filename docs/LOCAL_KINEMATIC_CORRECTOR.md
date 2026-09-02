@@ -428,7 +428,7 @@ seven rungs; the unified `go_clot_flow_gate_full.ps1` crashed only because it ra
 ## 2026-08-31 -- THE ORACLE GATE: the corrector's ceiling, measured
 
 Asked before rebuilding anything: **if the flow model reported the clot->flow blockage
-perfectly, would `clot_ml_v0` improve?**  The corrector's whole value is bounded by that
+perfectly, would `clot_ml_0` improve?**  The corrector's whole value is bounded by that
 answer, so it was measured first.
 
 ### The instrument
@@ -466,9 +466,9 @@ node counts show the mechanism directly: `patient044` commits 61 nodes open-loop
 recovers almost exactly the missing nodes.  **This is C3' confirmed** -- one measured constant,
 no corrector, against the corrector's own -3.5%.
 
-### Result 2 -- and it buys `clot_ml_v0` NOTHING
+### Result 2 -- and it buys `clot_ml_0` NOTHING
 
-Same oracle, end to end through `scripts/eval_clot_ml_v0.py`:
+Same oracle, end to end through `scripts/eval_clot_ml_0.py`:
 
 | vessel | v0 wall off | v0 wall on | v0 off off | v0 off on |
 |---|---|---|---|---|
@@ -488,10 +488,10 @@ The ordering is the whole finding:
 ```
 0.748   physics backbone, open loop
 0.903   physics backbone + ORACLE closed loop      (+0.155)
-0.990   clot_ml_v0, open loop                      (+0.087 ABOVE the oracle backbone)
+0.990   clot_ml_0, open loop                      (+0.087 ABOVE the oracle backbone)
 ```
 
-`clot_ml_v0` already sits **0.087 above the oracle-corrected backbone**.  The network recovers
+`clot_ml_0` already sits **0.087 above the oracle-corrected backbone**.  The network recovers
 the entire closed-loop gain on its own, from t=0 geometry and shear, and the oracle hands it
 information it already has -- while costing distribution shift, since v0 was trained on
 open-loop features.  The corrector's achievable contribution lies *below* where the learned
@@ -522,7 +522,7 @@ a 3-layer 5-hop GAT on a k-hop subgraph cannot represent flux redistribution, wh
 `data/processed/cfd_results_patch_factory_v2` is also no longer on disk, so any retrain of that
 design is a COMSOL regeneration campaign.
 
-Reproduce: `CLOT_ML_ORACLE_BLOCKAGE=1 python scripts/eval_clot_ml_v0.py`.
+Reproduce: `CLOT_ML_ORACLE_BLOCKAGE=1 python scripts/eval_clot_ml_0.py`.
 Artifacts: `outputs/diag_oracle_blockage_{off,on}.json`.
 
 ---
@@ -665,7 +665,7 @@ it degrades to physics rather than extrapolating -- both pinned by tests.
 Poiseuille is recovered only where the occlusion is stiff; a soft gel barely redirects flux.
 `hydraulic_h` fixes this by blocking only the SOLID fraction of the lumen
 (`B = 1 - A`, `h_eff = 1 - (1-h)*B`), adding no free parameter and keeping both limits exact.
-Recorded in `scripts/diag_pi_flux_interaction.py`.
+Recorded in `python -m src.tools.diagnostics pi-flux-interaction`.
 
 ### The result: LOVO by vessel, 12 folds
 

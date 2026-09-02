@@ -15,8 +15,8 @@ below: `scripts/gen_gnn_viz_data.py` + `scripts/build_gnn_temporal_artifact.py`
 `scripts/gen_v3_temporal_data.py` + `scripts/build_v3_temporal_artifact.py` (`clot_gnn_v3`);
 for genuine per-timestep predictions in both windows with outer-fold OOF generalization:
 `scripts/run_phase9_cv.py` -> `scripts/eval_strict_temporal.py` ->
-`scripts/gen_clot_ml_v0_oof_viz_data.py` -> `scripts/build_clot_oof_temporal_artifact.py`
-(`clot_ml_v0`). Legacy v4 builders live under `scripts/archive/clot_gnn_v4_era/`.
+`scripts/gen_clot_ml_0_oof_viz_data.py` -> `scripts/build_clot_oof_temporal_artifact.py`
+(`clot_ml_0`). Legacy v4 builders were removed 2026-09-01; see `scripts/archive/MANIFEST.md` (git history).
 Run the relevant pair, then publish the resulting `outputs/*.html` file as an Artifact
 (Claude Code's hosted-page tool). Note this is unrelated to
 [docs/PUBLISHING.md](PUBLISHING.md), which is this repo's git tracking policy — nothing

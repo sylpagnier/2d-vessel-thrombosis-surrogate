@@ -51,7 +51,7 @@ def _khop_neighbors(edge_index: np.ndarray, n: int, hops: int) -> list[np.ndarra
     return [acc.indices[acc.indptr[i]:acc.indptr[i + 1]] for i in range(n)]
 
 
-def build_mls_gradient(
+def build_mls_operators(
     pos: np.ndarray,
     edge_index: np.ndarray,
     *,
@@ -59,8 +59,13 @@ def build_mls_gradient(
     min_pts: int = 8,
     order: int = 2,
     ridge: float = 1e-10,
-) -> tuple[sp.csr_matrix, sp.csr_matrix]:
-    """Sparse ``(Dx, Dy)`` such that ``Dx @ f`` approximates ``df/dx`` at every node.
+) -> tuple[sp.csr_matrix, sp.csr_matrix, sp.csr_matrix | None]:
+    """Sparse ``(Dx, Dy, L)`` for this graph; ``L`` is ``None`` unless ``order == 2``.
+
+    The same quadratic fit that gives the gradient already carries the second-order
+    coefficients, so the Laplacian costs nothing extra.  With the basis written in the
+    scaled offset ``dn = (p_j - p_i) / h``, ``f ~ c0 + c1 dnx + c2 dny + c3 dnx^2 +
+    c4 dnx dny + c5 dny^2``, so ``f_xx + f_yy = 2 (c3 + c5) / h^2``.
 
     ``pos`` is [N,2] in whatever length unit the caller wants the derivative in.
     Stencils are graph ``hops``-neighbourhoods, grown one hop at a time until at least
@@ -71,6 +76,7 @@ def build_mls_gradient(
     wide = None
     rows_x, cols_x, vals_x = [], [], []
     rows_y, cols_y, vals_y = [], [], []
+    rows_l, cols_l, vals_l = [], [], []
     nb_basis = 6 if order == 2 else 3
     for i in range(n):
         idx = nbrs[i]
@@ -100,10 +106,24 @@ def build_mls_gradient(
         gy = C[2] / h
         rows_x.append(np.full(len(idx), i)); cols_x.append(idx); vals_x.append(gx)
         rows_y.append(np.full(len(idx), i)); cols_y.append(idx); vals_y.append(gy)
+        if order == 2:
+            rows_l.append(np.full(len(idx), i)); cols_l.append(idx)
+            vals_l.append(2.0 * (C[3] + C[5]) / (h * h))
     Dx = sp.coo_matrix((np.concatenate(vals_x),
                         (np.concatenate(rows_x), np.concatenate(cols_x))), shape=(n, n)).tocsr()
     Dy = sp.coo_matrix((np.concatenate(vals_y),
                         (np.concatenate(rows_y), np.concatenate(cols_y))), shape=(n, n)).tocsr()
+    L = None
+    if order == 2 and rows_l:
+        L = sp.coo_matrix((np.concatenate(vals_l),
+                           (np.concatenate(rows_l), np.concatenate(cols_l))), shape=(n, n)).tocsr()
+    return Dx, Dy, L
+
+
+def build_mls_gradient(pos: np.ndarray, edge_index: np.ndarray, **kw
+                       ) -> tuple[sp.csr_matrix, sp.csr_matrix]:
+    """``(Dx, Dy)`` only -- see :func:`build_mls_operators`."""
+    Dx, Dy, _ = build_mls_operators(pos, edge_index, **kw)
     return Dx, Dy
 
 
@@ -242,7 +262,7 @@ def graph_gradient_operators(data, *, device=None, dtype=None, hops: int | None 
         return hit
     factors = _lru_get(_SCIPY_CACHE, sig)
     if factors is None:
-        factors = build_mls_gradient(pos, ei, hops=h)
+        factors = build_mls_operators(pos, ei, hops=h)
         _lru_put(_SCIPY_CACHE, sig, factors, _cache_cap("BIOCHEM_GRAD_CACHE_CPU", 12))
     ops = (_to_torch_sparse(factors[0], dev, dt), _to_torch_sparse(factors[1], dev, dt))
     cap = _cache_cap("BIOCHEM_GRAD_CACHE_DEV", 3)
@@ -254,6 +274,53 @@ def graph_gradient_operators(data, *, device=None, dtype=None, hops: int | None 
     except Exception:
         pass
     return ops
+
+
+def graph_laplacian_operator(data, *, device=None, dtype=None, hops: int | None = None):
+    """``L`` for this graph, in the SAME non-dimensional length unit as the gradients.
+
+    The packs also ship ``data.Laplacian``, and it has the same defect as ``G_x``/``G_y``:
+    on the corner-edge packs 74.2% of its rows are empty, and elsewhere it recovers
+    ``lap(x^2 + y^2)`` as **1.79 against an exact 4.0** -- the rank-deficient 1-hop stencil
+    under-resolves the second-order terms.  Returns the packs' own tensor under
+    ``BIOCHEM_GRAD_OPERATOR=legacy``.
+    """
+    dev = device if device is not None else (
+        data.Laplacian.device if getattr(data, "Laplacian", None) is not None else torch.device("cpu"))
+    dt = dtype if dtype is not None else torch.float32
+    if gradient_operator_mode() == "legacy":
+        return data.Laplacian.to(device=dev)
+
+    h = gradient_operator_hops() if hops is None else int(hops)
+    memo_key = f"_lap_op_h{h}_{dev}_{dt}"
+    memo = getattr(data, memo_key, None)
+    if memo is not None:
+        return memo
+
+    try:
+        pos = node_positions(data)
+        ei = data.edge_index.detach().cpu().numpy()
+    except (AttributeError, TypeError, IndexError):
+        return data.Laplacian.to(device=dev)
+
+    sig = (int(pos.shape[0]), int(ei.shape[1]), h,
+           float(pos[0, 0]), float(pos[-1, 1]), float(pos[:, 0].max()))
+    dev_key = sig + (str(dev), str(dt), "lap")
+    hit = _lru_get(_DEV_CACHE, dev_key)
+    if hit is not None:
+        return hit
+    # Shares `_SCIPY_CACHE` with the gradient provider, so whichever runs first pays the fit.
+    factors = _lru_get(_SCIPY_CACHE, sig)
+    if factors is None or len(factors) < 3 or factors[2] is None:
+        factors = build_mls_operators(pos, ei, hops=h)
+        _lru_put(_SCIPY_CACHE, sig, factors, _cache_cap("BIOCHEM_GRAD_CACHE_CPU", 12))
+    op = _to_torch_sparse(factors[2], dev, dt)
+    _lru_put(_DEV_CACHE, dev_key, op, _cache_cap("BIOCHEM_GRAD_CACHE_DEV", 3))
+    try:
+        setattr(data, memo_key, op)
+    except Exception:
+        pass
+    return op
 
 
 def clear_operator_cache() -> None:

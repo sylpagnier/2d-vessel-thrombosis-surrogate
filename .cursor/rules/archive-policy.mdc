@@ -1,0 +1,11 @@
+﻿---
+description: Do not load deleted script archives or bulk outputs by default
+alwaysApply: true
+---
+# Archive policy
+
+- Active scripts only: `scripts/README.md` (~30 files).
+- Deleted script inventory: `scripts/archive/MANIFEST.md` (recover via `git show`).
+- Do not grep `scripts/archive/` for `.py` files — removed 2026-09-01.
+- `outputs/` is local cruft; keep list in `docs/OUTPUTS_RETENTION.md`. Do not enumerate unless asked.
+- `src/archive/` only for explicit `legacy_species` / biochem repro.

@@ -1,7 +1,7 @@
 """FIT / DEV / SEALED splits for the wall-cohort physics model.
 
-This is the protocol ``scripts/sweep_ml_clean_protocol.py`` and
-``docs/WALL_MODEL_PLAN.md`` §21.1 already use.  Phase-7/8 evals that average
+This is the protocol used by ``scripts/eval_wall_protocol.py`` and
+``docs/WALL_MODEL_PLAN.md`` §21.1. Phase-7/8 evals that average
 ``WALL_COHORT_V2_TRAIN`` (27, or the 19 eligible full-horizon clot-carrying subset)
 are mixing FIT with DEV, and ``patient020`` is a FIT vessel -- not a holdout.
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from src.biochem_gnn.wall_cohort_constants import (
+from src.biochem_gnn.mat_growth_simple import (
     WALL_COHORT_V2_CLOT_FREE,
     WALL_COHORT_V2_DEV,
     WALL_COHORT_V2_DEV_HOLDOUT,

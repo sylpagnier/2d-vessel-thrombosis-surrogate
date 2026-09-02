@@ -705,7 +705,7 @@ def _run_batch_for_phase(
         if getattr(args, "dry_run", False):
             # Print the plan and stop. The cheapest way to confirm flags parse the way you
             # think before committing Gmsh + COMSOL time to 250 vessels.
-            from src.config import VesselConfig as _VC
+            from src.config import PhysicsConfig, VesselConfig as _VC
 
             _cfg = _VC(phase="kinematics")
             _mix = (args.pathology_mix.strip() if args.pathology_mix
@@ -722,6 +722,15 @@ def _run_batch_for_phase(
             _rr = int(getattr(args, "repair_rounds", 2))
             print(f"  mesh          lc={_cfg.mesh_lc * 1000:.2f}mm x{_cfg.mesh_size_factor}, "
                   f">={_cfg.mesh_min_elems_across} elements across the throat")
+            # The knob preflight's wall-shear regime check reads.  Printed unconditionally,
+            # including at 1.0x: "which wall-noise setting was this cohort generated at" is not a
+            # question anyone should have to answer from shell history.
+            print(f"  wall noise    freq x{_cfg.wall_noise_freq_scale:g} "
+                  f"({_cfg.wall_noise_freq_lo:.2f}-{_cfg.wall_noise_freq_hi:.2f} / "
+                  f"{_cfg.wall_noise_freq2_lo:.2f}-{_cfg.wall_noise_freq2_hi:.2f} cycles), "
+                  f"amp x{_cfg.wall_noise_amp_scale:g} ({_cfg.wall_noise_amp_frac:.3f} of width)")
+            print(f"  element order fluid=P{PhysicsConfig().comsol_order_fluid} "
+                  f"(mid-side labels are evaluated, not interpolated -- runbook s7.3)")
             if _rr <= 0:
                 print("  repair        DISABLED")
             else:

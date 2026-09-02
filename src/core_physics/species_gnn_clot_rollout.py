@@ -310,54 +310,6 @@ def rollout_species_gnn_species_series(
 
         coupler = None
         mu_bulk_si = None
-        closed_loop = False
-        try:
-            from src.architecture.runtime_config import get_active_runtime
-
-            rt = get_active_runtime()
-            if rt is not None:
-                closed_loop = bool(rt.coupling.closed_loop_coupling)
-        except Exception:
-            pass
-        if not closed_loop:
-            closed_loop = os.environ.get("SPECIES_CLOSED_LOOP_COUPLING") == "1"
-        if closed_loop:
-            try:
-                from src.inference.corrector_coupling import (
-                    ClotAwareFlow,
-                    resolve_kinematics_checkpoint,
-                    resolve_corrector_checkpoint,
-                    kine_resolve_enabled,
-                )
-                from src.core_physics.clot_growth_masks import resolve_bulk_carreau_mu_si
-                from src.core_physics.coupled_shear_gnn import load_local_corrector
-
-                kine_ckpt = resolve_kinematics_checkpoint()
-                corr_ckpt = resolve_corrector_checkpoint()
-                resolve_on = kine_resolve_enabled()
-                if resolve_on:
-                    cache_key = ("resolve", str(kine_ckpt), str(corr_ckpt), str(dev))
-                    if cache_key in _CLOSED_LOOP_MODELS_CACHE:
-                        kine, corr_model = _CLOSED_LOOP_MODELS_CACHE[cache_key]  # type: ignore[misc]
-                    else:
-                        kine = load_kinematics_predictor(kine_ckpt, dev)
-                        corr_model = load_local_corrector(corr_ckpt, dev)
-                        _CLOSED_LOOP_MODELS_CACHE[cache_key] = (kine, corr_model)
-                else:
-                    kine = None
-                    corr_cache_key = ("corr", str(corr_ckpt), str(dev))
-                    if corr_cache_key in _CLOSED_LOOP_MODELS_CACHE:
-                        corr_model = _CLOSED_LOOP_MODELS_CACHE[corr_cache_key]  # type: ignore[assignment]
-                    else:
-                        corr_model = load_local_corrector(corr_ckpt, dev)
-                        _CLOSED_LOOP_MODELS_CACHE[corr_cache_key] = corr_model
-                coupler = ClotAwareFlow(dev, phys_cfg=phys)
-                coupler._kine = kine
-                coupler._corrector = corr_model
-                u0, v0 = coupler.base_flow(data)
-                mu_bulk_si = resolve_bulk_carreau_mu_si(data, 0, phys, dev, u_nd=u0, v_nd=v0).reshape(-1)
-            except Exception as e:
-                print(f"[WARN] Failed to initialize closed-loop flow coupler: {e}")
 
         for t in range(n_steps):
             sp = pin_species_block(data, t, dev, pin_other=pin_mode)  # type: ignore[arg-type]
@@ -397,59 +349,6 @@ def rollout_species_gnn_species_series(
                 vel_decay_alphas=vel_alphas,
                 wall_mask=wmask,
             )
-
-            # If closed loop coupling is enabled, update velocity for t+1
-            if coupler is not None and t + 1 < n_steps:
-                try:
-                    from src.core_physics.species_gelation_readout import differentiable_clot_phi_from_species12, differentiable_mu_eff_from_species12
-                    from src.core_physics.clot_phi_simple import comsol_carreau_mu_si_from_uv
-                    from src.inference.corrector_coupling import write_coupled_flow_into_y
-                    
-                    sp_next = pin_species_block(data, t + 1, dev, pin_other=pin_mode)
-                    sp_next = _write_fimat_log_to_species(sp_next, log_state, stat.node_idx)
-                    species_log12 = sp_next
-                    
-                    phi_clot = differentiable_clot_phi_from_species12(species_log12, bio)
-                    use_kine_flow = False
-                    try:
-                        from src.core_physics.species_deploy_rollout import species_rollout_vel_source
-
-                        use_kine_flow = species_rollout_vel_source() == "kinematics"
-                    except Exception:
-                        pass
-                    if not use_kine_flow:
-                        use_kine_flow = (
-                            os.environ.get("T0_R4_FLOW_SOURCE") == "kinematics"
-                            or os.environ.get("CLOT_PHI_VEL_SOURCE") == "kinematics"
-                        )
-                    if (
-                        use_kine_flow
-                        or not hasattr(data, "y") or data.y is None or data.y.numel() == 0 or bool((data.y == 0).all().item())
-                    ):
-                        u_t1, v_t1 = u0, v0
-                    else:
-                        u_t1 = data.y[t + 1, :, 0]
-                        v_t1 = data.y[t + 1, :, 1]
-                    gel_factor = torch.ones_like(u_t1)
-                    mu_carreau_si = comsol_carreau_mu_si_from_uv(
-                        data,
-                        u_t1,
-                        v_t1,
-                        gel_factor,
-                        phys,
-                        device=dev,
-                    )
-                    mu_eff_si = differentiable_mu_eff_from_species12(species_log12, mu_carreau_si, phi_clot, bio).reshape(-1)
-                    
-                    state = coupler.update(data, mu_eff_si, mu_bulk_si=mu_bulk_si, publish=False)
-                    write_coupled_flow_into_y(data, state.u, state.v, time_index=t + 1)
-                    
-                    if stat.flow_series is not None and stat.flow_cols is not None:
-                        from src.core_physics.species_pushforward_gnn import _flow_feats_from_uv
-                        flow_feats_next = _flow_feats_from_uv(data, state.u, state.v, dev, stat.node_idx)
-                        stat.flow_series[t + 1] = flow_feats_next
-                except Exception as e:
-                    print(f"[WARN] Failed to apply closed-loop flow coupling at step {t+1}: {e}")
         from src.core_physics.species_viscosity_calibration import (
             apply_mat_beta_to_species_series,
             load_viscosity_calibration,

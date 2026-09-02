@@ -1,0 +1,504 @@
+"""Train the local kinematic corrector on the COMSOL Patch Factory residuals.
+
+The corrector learns the velocity diversion ``[dU, dV]`` a micro-clot induces, as a
+residual on the frozen GINO-DEQ base flow. The Patch Factory (``patch_factory_comsol``)
+writes structured-grid samples in **SI** units; this trainer non-dimensionalizes every
+sample with the *same* ``PhysicsConfig`` convention the GINO-DEQ kine model uses, so the
+corrector predicts ``dU_nd`` directly in the deploy domain:
+
+  * length  : positions / channel height ``H`` (the patch's ``d_bar`` analog)
+  * velocity: SI / ``u_ref = PhysicsConfig.get_u_ref(H)``
+  * viscosity: ``PhysicsConfig.viscosity_si_to_nd`` (delta over fluid baseline)
+
+Translation invariance is enforced by ``assemble_local_corrector_features`` (dx/dy are
+centered on the clot center of mass, averaged over clot nodes only).
+
+CLI:
+    python -m src.training.train_local_kinematic_corrector \
+        --patch-dir data/processed/cfd_results_patch_factory --epochs 100
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import math
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+
+from src.config import PhysicsConfig
+from src.core_physics.coupled_shear_gnn import (
+    LOCAL_CORRECTOR_IN_CHANNELS,
+    LocalKinematicCorrector,
+    assemble_local_corrector_features,
+    save_local_corrector,
+)
+from src.data_gen.lib.patch_factory_comsol import patch_difficulty
+from src.utils.paths import data_root, get_project_root
+
+
+DEFAULT_PATCH_DIR = data_root() / "processed" / "cfd_results_patch_factory"
+DEFAULT_OUT_DIR = get_project_root() / "outputs" / "kinematics" / "local_corrector"
+
+
+@dataclass
+class PatchNdConfig:
+    """Cropping / subsampling controls for converting a patch grid into a subgraph."""
+
+    crop_x_factor: float = 4.0   # keep |x - clot_x| <= factor * clot_width
+    crop_y_frac: float = 0.5     # keep y <= frac * channel height
+    crop_y_min_abs_factor: float = 8.0  # ...but at least factor * clot_height
+    stride: int = 1              # grid subsample stride (>=2 for large patches)
+    mu_thresh_si: float = 1e-4   # delta-mu above fluid baseline that flags a clot node
+
+
+def build_grid_edge_index(ny: int, nx: int) -> torch.Tensor:
+    """Bidirectional 4-neighbour connectivity for a regular ``(ny, nx)`` grid."""
+    idx = np.arange(ny * nx).reshape(ny, nx)
+    src: list[np.ndarray] = []
+    dst: list[np.ndarray] = []
+    # horizontal neighbours
+    src.append(idx[:, :-1].ravel()); dst.append(idx[:, 1:].ravel())
+    # vertical neighbours
+    src.append(idx[:-1, :].ravel()); dst.append(idx[1:, :].ravel())
+    s = np.concatenate(src); d = np.concatenate(dst)
+    # symmetric edges
+    ei = np.stack([np.concatenate([s, d]), np.concatenate([d, s])], axis=0)
+    return torch.from_numpy(ei).long()
+
+
+def relative_loss(
+    pred: torch.Tensor, y: torch.Tensor, batch_idx: torch.Tensor, floor: float
+) -> torch.Tensor:
+    """Mean per-graph normalized error: mean_g( sum||pred-y||^2 / (sum||y||^2 + floor) ).
+
+    Plain MSE on the ND residual is magnitude-weighted: ``du_nd`` scales with shear / clot
+    size (``u_ref`` is geometry-only), so big-signal patches dominate and the low-signal ones
+    (low shear, small/thin clots) are neglected -> high *relative* error there (see the
+    stratified eval). Normalizing each graph by its own target energy makes every patch count
+    equally, which is exactly the relL2 metric we report.
+
+    ``floor`` is an **absolute** target-energy floor (a fraction of the dataset-median patch
+    energy). A naive ``1e-12`` floor lets the lowest-signal patches (tiny ``||y||^2``) get
+    astronomically up-weighted -> exploding, oscillating loss and a collapsed model. With a
+    real floor the loss smoothly transitions: relative (``err/den``) for typical/large patches,
+    bounded (``err/floor``, MSE-like) for the near-zero ones.
+    """
+    err = ((pred - y) ** 2).sum(dim=1)   # per-node squared error
+    tgt = (y ** 2).sum(dim=1)            # per-node target energy
+    ng = int(batch_idx.max().item()) + 1
+    num = torch.zeros(ng, device=pred.device, dtype=pred.dtype).index_add_(0, batch_idx, err)
+    den = torch.zeros(ng, device=pred.device, dtype=pred.dtype).index_add_(0, batch_idx, tgt)
+    return (num / (den + floor)).mean()
+
+
+def _scalar(z: dict, key: str, default: float | None = None) -> float:
+    if key not in z:
+        if default is None:
+            raise KeyError(key)
+        return float(default)
+    return float(np.asarray(z[key]).ravel()[0])
+
+
+def patch_to_data(
+    npz_path: Path,
+    phys: PhysicsConfig,
+    cfg: PatchNdConfig,
+) -> Data | None:
+    """Load one ``patch_*.npz`` and convert it to a non-dimensionalized subgraph ``Data``.
+
+    Returns ``None`` for samples that are unusable (dry-run, missing viscosity, no clot,
+    non-finite fields, or a degenerate crop).
+    """
+    with np.load(npz_path) as z:
+        if "dry_run" in z.files and bool(np.asarray(z["dry_run"]).ravel()[0]):
+            return None
+        if "mu" not in z.files:
+            return None  # need viscosity to locate the clot + form delta-mu
+        nx = int(np.asarray(z["grid_nx"]).ravel()[0])
+        ny = int(np.asarray(z["grid_ny"]).ravel()[0])
+        x = np.asarray(z["x"], dtype=np.float64)
+        y = np.asarray(z["y"], dtype=np.float64)
+        u_base = np.asarray(z["u_base"], dtype=np.float64)
+        du = np.asarray(z["du"], dtype=np.float64)
+        dv = np.asarray(z["dv"], dtype=np.float64)
+        mu = np.asarray(z["mu"], dtype=np.float64)
+        H = _scalar(z, "height")
+        cx = _scalar(z, "clot_x_center")
+        cw = _scalar(z, "clot_width")
+        ch = _scalar(z, "clot_height")
+        clot_mu = _scalar(z, "clot_mu_peak", 0.0)
+        shear = _scalar(z, "shear_rate", 0.0)
+        d_shear_arr = np.asarray(z["d_shear"], dtype=np.float64) if "d_shear" in z.files else None
+
+    if not (np.isfinite(du).all() and np.isfinite(dv).all() and np.isfinite(mu).all()):
+        return None
+
+    # --- ND scales (match the GINO-DEQ kine domain) ---
+    length_scale = float(H)
+    u_ref = float(phys.get_u_ref(length_scale))
+    if not np.isfinite(u_ref) or u_ref <= 0.0:
+        return None
+    mu_inf = float(phys.mu_inf)
+
+    # --- reshape to (ny, nx) so we can crop a contiguous rectangular block ---
+    def g(a: np.ndarray) -> np.ndarray:
+        return a.reshape(ny, nx)
+
+    xs = g(x)[0, :]          # x varies along columns
+    ys = g(y)[:, 0]          # y varies along rows (wall at y=0 -> row 0)
+
+    col_keep = np.where(np.abs(xs - cx) <= cfg.crop_x_factor * cw)[0]
+    y_max = min(float(H), max(cfg.crop_y_frac * H, cfg.crop_y_min_abs_factor * ch))
+    row_keep = np.where(ys <= y_max)[0]
+    if col_keep.size < 2 or row_keep.size < 2:
+        return None
+    r0, r1 = int(row_keep.min()), int(row_keep.max()) + 1
+    c0, c1 = int(col_keep.min()), int(col_keep.max()) + 1
+    st = max(1, int(cfg.stride))
+
+    def crop(a: np.ndarray) -> np.ndarray:
+        return g(a)[r0:r1:st, c0:c1:st]
+
+    x_c = crop(x); y_c = crop(y)
+    du_c = crop(du); dv_c = crop(dv); ub_c = crop(u_base); mu_c = crop(mu)
+    d_shear = d_shear_arr if d_shear_arr is not None else np.zeros_like(x)
+    dshear_c = crop(d_shear)
+    ny_c, nx_c = x_c.shape
+    if ny_c < 2 or nx_c < 2:
+        return None
+
+    flat = lambda a: torch.from_numpy(np.ascontiguousarray(a.ravel())).float()
+    pos_nd = torch.stack([flat(x_c) / length_scale, flat(y_c) / length_scale], dim=-1)
+    sdf_nd = flat(y_c) / length_scale            # distance to bottom wall (clot attaches at y=0)
+    u0_nd = flat(ub_c) / u_ref                   # base flow = analytical shear baseline
+    v0_nd = torch.zeros_like(u0_nd)              # baseline v = 0
+    delta_mu_si = flat(mu_c) - mu_inf
+    delta_mu_nd = delta_mu_si / float(phys.mu_viscosity_nd_scale)
+    dshear_nd = flat(dshear_c) / (u_ref / length_scale)
+    target = torch.stack([flat(du_c) / u_ref, flat(dv_c) / u_ref, dshear_nd], dim=-1)
+
+    clot_nodes = torch.where(delta_mu_si > float(cfg.mu_thresh_si))[0]
+    if clot_nodes.numel() == 0:
+        return None
+    subset = torch.arange(pos_nd.shape[0])
+
+    feats = assemble_local_corrector_features(
+        pos_nd, sdf_nd, u0_nd, v0_nd, delta_mu_nd, clot_nodes, subset
+    )
+    edge_index = build_grid_edge_index(ny_c, nx_c)
+    data = Data(x=feats, edge_index=edge_index, y=target)
+    data.num_nodes = feats.shape[0]
+    # Stratification / difficulty metadata (scalars; ignored by the model, used by the
+    # difficulty-weighted sampler and the per-bucket eval).
+    data.clot_mu = float(clot_mu)
+    data.clot_w = float(cw)
+    data.clot_h = float(ch)
+    data.channel_h = float(H)
+    data.shear = float(shear)
+    data.occlusion = float(ch / H) if H > 0 else 0.0
+    data.difficulty = patch_difficulty(clot_mu, cw, ch)
+    return data
+
+
+class PatchFactoryDataset(torch.utils.data.Dataset):
+    """Lazily convert ``patch_*.npz`` files into non-dimensionalized subgraphs."""
+
+    def __init__(self, patch_dir: Path, phys: PhysicsConfig, cfg: PatchNdConfig):
+        self.paths = sorted(
+            glob.glob(str(Path(patch_dir) / "patch_*.npz")),
+            key=lambda p: int(os.path.basename(p).split("_")[1].split(".")[0]),
+        )
+        self.phys = phys
+        self.cfg = cfg
+        self._cache: dict[int, Data] = {}
+        self._usable: list[int] = []
+        for i, p in enumerate(self.paths):
+            d = patch_to_data(Path(p), phys, cfg)
+            if d is not None:
+                self._cache[i] = d
+                self._usable.append(i)
+
+    def __len__(self) -> int:
+        return len(self._usable)
+
+    def __getitem__(self, i: int) -> Data:
+        return self._cache[self._usable[i]]
+
+
+def train_corrector(
+    patch_dir: Path | str = DEFAULT_PATCH_DIR,
+    *,
+    epochs: int = 100,
+    batch_size: int = 8,
+    lr: float = 1e-3,
+    weight_decay: float = 1e-4,
+    hidden_dim: int = 64,
+    val_frac: float = 0.1,
+    device: torch.device | str | None = None,
+    out_dir: Path | str = DEFAULT_OUT_DIR,
+    nd_cfg: PatchNdConfig | None = None,
+    seed: int = 0,
+    hard_boost: float = 3.0,
+    curriculum_frac: float = 0.0,
+    cosine: bool = True,
+    loss_mode: str = "mse",
+    rel_floor_frac: float = 0.5,
+    grad_clip: float = 5.0,
+) -> LocalKinematicCorrector:
+    """Fit the corrector on Patch Factory residuals; save best-by-val checkpoint.
+
+    Difficulty-weighted sampling (Stage-A lesson): hard patches (high mu / big clot) are
+    over-sampled with weight ``1 + boost * difficulty``. ``curriculum_frac > 0`` ramps the
+    boost from 0 -> ``hard_boost`` over that fraction of epochs (easy-first, then hard, like
+    the L0L1 -> L2-heavy geometry curriculum). ``cosine`` anneals the LR over training.
+    """
+    dev = torch.device(device) if device is not None else torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+    torch.manual_seed(seed)
+    phys = PhysicsConfig(phase="kinematics")
+    cfg = nd_cfg or PatchNdConfig()
+
+    dataset = PatchFactoryDataset(Path(patch_dir), phys, cfg)
+    n = len(dataset)
+    if n == 0:
+        raise RuntimeError(
+            f"No usable patches in {patch_dir}. Generate them with "
+            "`python -m src.data_gen.lib.patch_factory_comsol` (mu/viscosity required)."
+        )
+    n_val = max(1, int(round(val_frac * n))) if n > 1 else 0
+    g = torch.Generator().manual_seed(seed)
+    perm = torch.randperm(n, generator=g).tolist()
+    val_idx = set(perm[:n_val])
+    train_set = [dataset[i] for i in range(n) if i not in val_idx]
+    val_set = [dataset[i] for i in range(n) if i in val_idx]
+    print(f"[i] patches: {n} usable | train {len(train_set)} | val {len(val_set)}")
+
+    # Difficulty-weighted oversampling (Stage-A clinical-anchor-boost analog). Build a loader
+    # with weights = 1 + boost*difficulty; with a curriculum the boost ramps each epoch.
+    train_diff = torch.tensor(
+        [float(getattr(d, "difficulty", 0.0)) for d in train_set], dtype=torch.float64
+    )
+
+    def _make_train_loader(boost: float) -> DataLoader:
+        if boost <= 0.0:
+            return DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        weights = (1.0 + boost * train_diff).clamp_min(1e-6)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights, num_samples=len(train_set), replacement=True
+        )
+        return DataLoader(train_set, batch_size=batch_size, sampler=sampler)
+
+    static_boost = hard_boost if curriculum_frac <= 0.0 else None
+    train_loader = _make_train_loader(static_boost if static_boost is not None else 0.0)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False) if val_set else None
+    print(
+        f"[i] difficulty: median {float(train_diff.median()):.3f} | hard_boost {hard_boost} "
+        f"| curriculum_frac {curriculum_frac} | cosine {cosine}"
+    )
+
+    # Relative-loss denominator floor: a fraction of the median per-patch target energy. This
+    # bounds the up-weighting of near-zero-signal patches so the loss can't explode/oscillate.
+    rel_floor = 0.0
+    if loss_mode == "relative":
+        patch_energy = torch.tensor(
+            [float((d.y ** 2).sum()) for d in train_set], dtype=torch.float64
+        )
+        med_energy = float(patch_energy.median()) if len(patch_energy) else 0.0
+        rel_floor = max(rel_floor_frac * med_energy, 1e-12)
+        print(
+            f"[i] relative loss: median patch energy {med_energy:.4e} | floor "
+            f"{rel_floor:.4e} (frac {rel_floor_frac}) | grad_clip {grad_clip}"
+        )
+
+    model = LocalKinematicCorrector(in_channels=LOCAL_CORRECTOR_IN_CHANNELS, hidden_dim=hidden_dim).to(dev)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = (
+        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs))
+        if cosine else None
+    )
+
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    best_path = out_dir / "local_kinematic_corrector_best.pth"
+    last_path = out_dir / "local_kinematic_corrector_last.pth"
+    best_val = float("inf")
+    best_val_rel = float("nan")
+
+    def _meta(
+        epoch: int, train_mse: float, val_mse: float | None, val_rel: float | None = None, val_rel_shear: float | None = None
+    ) -> dict[str, Any]:
+        return {
+            "model": "LocalKinematicCorrector",
+            "in_channels": LOCAL_CORRECTOR_IN_CHANNELS,
+            "hidden_dim": hidden_dim,
+            "feature_names": ["dx", "dy", "dist_to_wall", "u0", "v0", "delta_mu"],
+            "target": "delta_uv_shear_nd",
+            "normalization": {
+                "length_scale": "channel_height_H",
+                "velocity_scale": "PhysicsConfig.get_u_ref(H)",
+                "viscosity_scale": float(phys.mu_viscosity_nd_scale),
+            },
+            "patch_dir": str(patch_dir),
+            "n_patches_usable": n,
+            "epoch": epoch,
+            "train_mse_nd": train_mse,
+            "val_mse_nd": val_mse,
+            "val_rel_l2": val_rel,
+            "val_rel_shear": val_rel_shear,
+            "nd_cfg": vars(cfg),
+            "sampling": {
+                "hard_boost": hard_boost,
+                "curriculum_frac": curriculum_frac,
+                "cosine_lr": cosine,
+                "loss_mode": loss_mode,
+                "rel_floor_frac": rel_floor_frac if loss_mode == "relative" else None,
+                "grad_clip": grad_clip,
+            },
+        }
+
+    for epoch in range(epochs):
+        if curriculum_frac > 0.0:
+            ramp = min(1.0, (epoch + 1) / max(1.0, curriculum_frac * epochs))
+            train_loader = _make_train_loader(hard_boost * ramp)
+        model.train()
+        total = 0.0
+        nb = 0
+        for batch in train_loader:
+            batch = batch.to(dev)
+            optimizer.zero_grad()
+            pred = model(batch.x, batch.edge_index)
+            if loss_mode == "relative":
+                loss = relative_loss(pred, batch.y, batch.batch, rel_floor)
+            else:
+                loss = F.mse_loss(pred, batch.y)
+            loss.backward()
+            if grad_clip and grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+            total += float(loss.item())
+            nb += 1
+        train_mse = total / max(nb, 1)
+
+        val_mse: float | None = None
+        val_rel: float | None = None
+        val_rel_shear: float | None = None
+        if val_loader is not None:
+            model.eval()
+            vt = 0.0
+            vb = 0
+            sq_err = 0.0   # sum ||pred - target||^2 over all nodes/components
+            sq_tgt = 0.0   # sum ||target||^2 (global L2 norm of the diversion field)
+            sq_err_shear = 0.0
+            sq_tgt_shear = 0.0
+            with torch.no_grad():
+                for batch in val_loader:
+                    batch = batch.to(dev)
+                    pred = model(batch.x, batch.edge_index)
+                    vt += float(F.mse_loss(pred, batch.y).item())
+                    vb += 1
+                    sq_err += float(((pred[:, :2] - batch.y[:, :2]) ** 2).sum().item())
+                    sq_tgt += float((batch.y[:, :2] ** 2).sum().item())
+                    if batch.y.shape[-1] >= 3:
+                        sq_err_shear += float(((pred[:, 2] - batch.y[:, 2]) ** 2).sum().item())
+                        sq_tgt_shear += float((batch.y[:, 2] ** 2).sum().item())
+            val_mse = vt / max(vb, 1)
+            # Global relative L2 error: robust to the ~0 far-field targets (a per-sample
+            # mean would divide by tiny norms). Reported as a percentage of the true dU field.
+            val_rel = float((sq_err / sq_tgt) ** 0.5) if sq_tgt > 0 else float("nan")
+            val_rel_shear = float((sq_err_shear / sq_tgt_shear) ** 0.5) if sq_tgt_shear > 0 else float("nan")
+
+        # Selecting by MSE or relL2 picks the same epoch (val ||target|| is fixed), but we
+        # surface relL2 because it is the tangible "how far off is the diversion" number.
+        score = val_mse if val_mse is not None else train_mse
+        if score < best_val:
+            best_val = score
+            best_val_rel = val_rel if val_rel is not None else float("nan")
+            save_local_corrector(best_path, model, _meta(epoch, train_mse, val_mse, val_rel, val_rel_shear))
+
+        if scheduler is not None:
+            scheduler.step()
+
+        if epoch % 10 == 0 or epoch == epochs - 1:
+            if val_mse is not None:
+                rtxt = f" | val relL2 {val_rel * 100:.2f}%" if math.isfinite(val_rel) else ""
+                stxt = f" | shear {val_rel_shear * 100:.2f}%" if val_rel_shear is not None and math.isfinite(val_rel_shear) else ""
+                vtxt = f" | val MSE {val_mse:.6e}{rtxt}{stxt}"
+            else:
+                vtxt = ""
+            lrtxt = f" | lr {optimizer.param_groups[0]['lr']:.2e}" if scheduler is not None else ""
+            ltag = "relL2^2" if loss_mode == "relative" else "MSE"
+            print(f"[i] epoch {epoch:3d} | train {ltag} {train_mse:.6e}{vtxt}{lrtxt}")
+
+    save_local_corrector(last_path, model, _meta(epochs - 1, train_mse, val_mse, val_rel, val_rel_shear))
+    rel_txt = f" (relL2 {best_val_rel * 100:.2f}%)" if math.isfinite(best_val_rel) else ""
+    print(f"[OK] best val MSE_nd {best_val:.6e}{rel_txt} -> {best_path}")
+    return model
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Train the local kinematic corrector on Patch Factory residuals.")
+    p.add_argument("--patch-dir", type=str, default=str(DEFAULT_PATCH_DIR))
+    p.add_argument("--out-dir", type=str, default=str(DEFAULT_OUT_DIR))
+    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
+    p.add_argument("--hidden-dim", type=int, default=64)
+    p.add_argument("--val-frac", type=float, default=0.1)
+    p.add_argument("--stride", type=int, default=1, help="Grid subsample stride (>=2 for large patches).")
+    p.add_argument("--crop-x-factor", type=float, default=4.0)
+    p.add_argument("--crop-y-frac", type=float, default=0.5)
+    p.add_argument("--device", type=str, default=None)
+    p.add_argument("--seed", type=int, default=0)
+    # Stage-A lessons: difficulty oversampling + curriculum + cosine LR.
+    p.add_argument("--hard-boost", type=float, default=3.0,
+                   help="Oversample weight = 1 + boost*difficulty (0 = uniform shuffle).")
+    p.add_argument("--curriculum-frac", type=float, default=0.0,
+                   help="Ramp hard_boost 0->full over this fraction of epochs (0 = constant).")
+    p.add_argument("--no-cosine", action="store_true", help="Disable cosine LR annealing.")
+    p.add_argument("--loss", choices=["mse", "relative"], default="mse",
+                   help="'relative' normalizes each patch by its own target energy so "
+                        "low-signal (low-shear/small) clots aren't drowned out by MSE.")
+    p.add_argument("--rel-floor-frac", type=float, default=0.5,
+                   help="Relative-loss denominator floor as a fraction of median patch energy "
+                        "(stabilizes near-zero-signal patches). Larger = closer to MSE.")
+    p.add_argument("--grad-clip", type=float, default=5.0,
+                   help="Max grad norm (0 disables). Guards against relative-loss spikes.")
+    return p
+
+
+if __name__ == "__main__":
+    args = _build_arg_parser().parse_args()
+    nd_cfg = PatchNdConfig(
+        crop_x_factor=args.crop_x_factor,
+        crop_y_frac=args.crop_y_frac,
+        stride=args.stride,
+    )
+    train_corrector(
+        patch_dir=args.patch_dir,
+        out_dir=args.out_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        hidden_dim=args.hidden_dim,
+        val_frac=args.val_frac,
+        device=args.device,
+        nd_cfg=nd_cfg,
+        seed=args.seed,
+        hard_boost=args.hard_boost,
+        curriculum_frac=args.curriculum_frac,
+        cosine=not args.no_cosine,
+        loss_mode=args.loss,
+        rel_floor_frac=args.rel_floor_frac,
+        grad_clip=args.grad_clip,
+    )

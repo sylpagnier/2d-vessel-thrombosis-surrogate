@@ -1,4 +1,4 @@
-# Agent notes (HemoRGP)
+# Agent notes (Local FEM Solver)
 
 Short cheat sheet for agents and contributors. Full orientation: [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md). Publishing policy: [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
@@ -7,9 +7,9 @@ Short cheat sheet for agents and contributors. Full orientation: [docs/PROJECT_C
 | Stack | Train | Docs |
 |-------|-------|------|
 | **RGP-DEQ** (`rgp_deq_kine`) | `python -m src.bin.main train rgp-deq-kine` or `scripts/go_kinematics_production_allfix.ps1` | [docs/KINEMATICS_BEST_ARCHITECTURE.md](docs/KINEMATICS_BEST_ARCHITECTURE.md) |
-| **clot_ml_v0** (deploy clot) | `scripts/promote_clot_ml_v0.py`, `scripts/eval_clot_ml_v0.py` | [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) |
+| **deploy-clot** (`clot_ml_0`) | `scripts/promote_clot_ml_0.py`, `scripts/eval_clot_ml_0.py` | [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) |
 | **biochem_gnn** (locked / customer) | `go_customer_predict.ps1`; training archived under `src/archive/mat_growth/` | [docs/BIOCHEM_GNN.md](docs/BIOCHEM_GNN.md) |
-| Mat-growth / corrector (reference) | `src/archive/mat_growth/`, `src/archive/corrector_era/` | [docs/MAT_GROWTH.md](docs/MAT_GROWTH.md), [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md) |
+| Mat-growth (reference) / local kinematic corrector (**deprecated — deleted 2026-09-01, not for publication**) | `src/archive/mat_growth/`, `src/archive/corrector_era/` | [docs/MAT_GROWTH.md](docs/MAT_GROWTH.md), [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md) |
 
 - **Promote biochem:** `python scripts/promote_biochem_gnn.py` → `outputs/biochem/biochem_gnn/locked/` + `data/reference/biochem_gnn_baseline.json`
 - **Locked wall mat:** `WC_v7_clot_phi_mse` (2026-07-19); cohort clot F1 **~0.767**, clot score **~0.791** — still the wall-only / compound backbone
@@ -69,10 +69,10 @@ Always-apply rule: [`.cursor/rules/robust-system-wide-changes.mdc`](.cursor/rule
 
 ## Scripts
 
-- Active only: [scripts/README.md](scripts/README.md) (four stacks: clot_ml_v0, RGP-DEQ, customer, research)
+- Active only: [scripts/README.md](scripts/README.md) (four stacks: deploy-clot, RGP-DEQ, customer, research)
 - Archived buckets and purpose: [docs/ARCHIVED_STACKS.md](docs/ARCHIVED_STACKS.md)
 - Retired source: `src/archive/` (mat-growth trainers, ML ladder, corrector tools). Thin shims remain at `src/training/train_*` for import compatibility.
-- Retired scripts: `scripts/archive/` — do not revive GNODE / clot-ML / T0 trainers without restoring modules from git ([docs/BIOCHEM_LEGACY_LESSONS.md](docs/BIOCHEM_LEGACY_LESSONS.md))
+- Retired scripts: [`scripts/archive/MANIFEST.md`](scripts/archive/MANIFEST.md) (git history only)
 
 ## Debugging visualizations — "viz" means this
 
@@ -94,7 +94,7 @@ No emoji in `print` / launcher banners. Use ASCII tags (`[OK]`, `[WARN]`, `[i]`)
 **Deploy-faithful only — no GT velocity leak.** New vessels give geometry (and whatever we predict), not COMSOL `[u,v]`. Quote only cold-deploy metrics from `eval_mat_growth_simple.py` / `canonical_deploy_clot_metrics`:
 
 1. **t=0 base flow:** RGP-DEQ once (`u0_pred` / kinematics checkpoint). Never re-run the heavy global solver during rollout.
-2. **t>0 flow adjustments:** local kinematic corrector + tiling only (`corrector_coupling=1`, closed-loop when the leg uses it).
+2. **t>0 flow adjustments:** local kinematic corrector + tiling only (`corrector_coupling=1`, closed-loop when the leg uses it). The local kinematic corrector is **deprecated — not for publication**; see [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md).
 3. **Flow features at eval:** `flow_feats_source=auto` (predicted / coupled). Do **not** score generalization with `flow_feats_source=gt` or `train_vel_source=gt`.
 4. **Model UV inputs:** never pass raw COMSOL `data.y[..., 0:2]` into `model.velocity`, physics-GAT, or convective upwind. Use `band_uv_for_model` / `resolve_species_rollout_uv` (coupled / `u0_pred` / RGP-DEQ). GT may appear in **labels / timeline length / teacher-forced diagnostics** only — never as the deploy flow channel. Ignore in-training `val_*` that are GT-teacher-forced when claiming generalization.
 
@@ -182,12 +182,12 @@ the next build is a time-varying wall AP (upwind renewal on the existing Damköh
 closure) feeding the ODE, **not** another `Mat` GNN and not a species GNN as the first
 move.
 
-**Unified stack: `clot_ml_v0`** (`kind: unified_v0`, promote with
-`scripts/promote_clot_ml_v0.py`) — one artifact for wounded and non-wounded vessels. Wall
+**Unified stack: `clot_ml_0`** (`kind: unified_v0`, promote with
+`scripts/promote_clot_ml_0.py`) — one artifact for wounded and non-wounded vessels. Wall
 SET and non-wound off-wall stay the C0 GNN (`clot_gnn_v5w`); on a wound pack true-lumen is
 **replaced** (not unioned) by the chemistry ODE through solid-anchored replace+depth.
 Bit-identical to the base GNN without a wound mask. Compare with
-`python scripts/eval_clot_ml_v0.py --baseline clot_gnn_v5w` before `--repoint`. See
+`python scripts/eval_clot_ml_0.py --baseline clot_gnn_v5w` before `--repoint`. See
 [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) §19.
 
 **Active findings: [docs/PHASE7_FINDINGS.md](docs/PHASE7_FINDINGS.md)** — the off-wall

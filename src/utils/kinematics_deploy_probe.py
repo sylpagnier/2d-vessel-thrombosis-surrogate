@@ -11,7 +11,7 @@ real thing on 33 vessels with a trained checkpoint:
 
 So a run can improve every number it prints and still lose the thing it is for.  This runs
 the deployed readout instead: predict t=0 flow, write it to the pack as `u0_pred`, and score
-`clot_ml_v0` exactly as `eval_clot_ml_v0.py` does.
+`clot_ml_0` exactly as `eval_clot_ml_0.py` does.
 
 It costs about 33 s per vessel, and -- measured -- the score does NOT depend on the temporal
 grid (`every` 4, 12 and 25 return identical F1), so the grid is coarsened for speed.  Five
@@ -54,11 +54,11 @@ def deploy_f1_probe(model, device, *, stems=None, every: int = 25, verbose: bool
     try:
         from pathlib import Path
 
-        from scripts.eval_clot_ml_v0 import PACKS, _times
+        from scripts.eval_clot_ml_0 import PACKS, _times
         from scripts.eval_wound_complement import gt_series, score_domains
         from src.clot_ml.data import eval_domains
         from src.clot_ml.locked import build_sample, load_temporal_v4_wound
-        from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_v0
+        from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0
         from src.config import BiochemConfig, PhysicsConfig
         from src.data_gen.lib.legal_priors import apply_prior_source
     except Exception as exc:                       # clot stack absent on this machine
@@ -69,7 +69,7 @@ def deploy_f1_probe(model, device, *, stems=None, every: int = 25, verbose: bool
     stems = list(stems or probe_stems())
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     try:
-        bundle_v0 = load_v0_bundle("clot_ml_v0")
+        bundle_v0 = load_v0_bundle("clot_ml_0")
         _ = load_temporal_v4_wound("clot_gnn_v5w")
     except Exception as exc:
         if verbose:
@@ -95,7 +95,7 @@ def deploy_f1_probe(model, device, *, stems=None, every: int = 25, verbose: bool
             d.v0_pred = pred[:, 1].contiguous()
             times = _times(d, every)
             S = build_sample(d, bio, flow="pred", variant="v4")
-            v0 = predict_clot_ml_v0(bundle_v0, d, times, flow="pred", sample=S)
+            v0 = predict_clot_ml_0(bundle_v0, d, times, flow="pred", sample=S)
             wall, off = eval_domains(S)
             wall = np.asarray(wall, dtype=bool); off = np.asarray(off, dtype=bool)
             sc = score_domains(v0["series"][times[-1]], gt_series(d, phys, times)[times[-1]],

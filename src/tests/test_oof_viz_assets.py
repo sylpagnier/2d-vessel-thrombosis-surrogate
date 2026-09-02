@@ -57,7 +57,7 @@ def test_oof_viz_generator_and_series_export_refuse_final_half():
     import inspect
 
     import scripts.eval_strict_temporal as temporal
-    import scripts.gen_clot_ml_v0_oof_viz_data as generator
+    import scripts.gen_clot_ml_0_oof_viz_data as generator
 
     exporter = inspect.getsource(temporal.main)
     assert "--save-oof-series" in exporter
@@ -82,11 +82,11 @@ def test_oof_viz_template_prioritizes_viewer_and_distributions():
 def test_wound_viz_mode_is_explicit_and_uses_lovo_dispatcher():
     import inspect
 
-    import scripts.gen_clot_ml_v0_oof_viz_data as generator
+    import scripts.gen_clot_ml_0_oof_viz_data as generator
 
     source = inspect.getsource(generator.main)
     payload = inspect.getsource(generator.build_wound_payload)
     assert "--wound" in source
-    assert "predict_clot_ml_v0" in payload
+    assert "predict_clot_ml_0" in payload
     assert "wound_rate_train" in payload
     assert "wound region" in payload

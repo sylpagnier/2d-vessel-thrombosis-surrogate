@@ -351,44 +351,6 @@ def test_zkin_is_leading_slice_of_features():
     assert torch.allclose(dropped[:, 3], feats[:, 3])
 
 
-def test_resolve_flow_uv_auto_coupling_override(monkeypatch):
-    """Trap F: the real deploy path (source=auto + coupling) returns the coupled field, else kine."""
-    monkeypatch.delenv("SPECIES_FLOW_FEATS_SOURCE", raising=False)  # default 'auto'
-    assert flow_feats_source() == "auto"
-    dev = torch.device("cpu")
-    data = _line_graph(dev)
-
-    import src.utils.kinematics_inference as ki
-    from src.inference.corrector_coupling import (
-        reset_coupled_flow_registry,
-        set_coupled_flow,
-    )
-
-    # kine base flow = constant 1.0 (clot-blind)
-    monkeypatch.setattr(ki, "predict_kinematics", lambda m, d: torch.ones(int(d.num_nodes), 3))
-
-    # coupling OFF -> kine field
-    monkeypatch.delenv("BIOCHEM_CORRECTOR_COUPLING", raising=False)
-    reset_coupled_flow_registry()
-    u, v = _resolve_flow_uv(data, object(), dev)
-    assert torch.allclose(u, torch.ones(4))
-
-    # coupling ON but registry empty -> falls back to kine
-    monkeypatch.setenv("BIOCHEM_CORRECTOR_COUPLING", "1")
-    reset_coupled_flow_registry()
-    u, v = _resolve_flow_uv(data, object(), dev)
-    assert torch.allclose(u, torch.ones(4))
-
-    # coupling ON + coupled field published -> override wins
-    coupled_u = torch.tensor([5.0, 6.0, 7.0, 8.0])
-    coupled_v = torch.tensor([-1.0, -2.0, -3.0, -4.0])
-    set_coupled_flow(data, coupled_u, coupled_v)
-    u, v = _resolve_flow_uv(data, object(), dev)
-    assert torch.allclose(u, coupled_u)
-    assert torch.allclose(v, coupled_v)
-    reset_coupled_flow_registry()
-
-
 def test_resolve_flow_uv_prefers_u0_pred_without_deq(monkeypatch):
     """Pack-build baseline UV must not trigger a second GINO-DEQ when u0_pred is present."""
     monkeypatch.delenv("SPECIES_FLOW_FEATS_SOURCE", raising=False)  # default auto

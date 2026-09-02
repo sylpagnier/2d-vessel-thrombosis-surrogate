@@ -618,8 +618,8 @@ def load_default(device=None) -> tuple[dict, str]:
 def predict_default_series(bundle: dict, kind: str, data, times, *, flow: str = "gt",
                            sample: dict | None = None) -> dict:
     if kind == "unified_v0":
-        from src.clot_ml.v0 import predict_clot_ml_v0
-        return predict_clot_ml_v0(bundle, data, times, flow=flow, sample=sample)
+        from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0
+        return predict_clot_ml_0(bundle, data, times, flow=flow, sample=sample)
     if kind == "temporal_v4_wound":
         return predict_temporal_v4_wound(bundle, data, times, flow=flow, sample=sample)
     if kind == "temporal_v4":

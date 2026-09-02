@@ -7,7 +7,7 @@ system is correctly identified.
 
 - Source data: `data/reference/comsol_calibration/patient007_calibration_{wall,domain}.txt`
   (COMSOL 6.4, `phase2_nowound_007.mph`, exported 2026-06-18).
-- Validator (archived launcher): `scripts/archive/validate_comsol_calibration.py`
+- Validator (archived, git only): `scripts/archive/validate_comsol_calibration.py` — see `scripts/archive/MANIFEST.md`
   → `outputs/reports/comsol_validation/patient007_validation.json` (local)
 - Model assumptions audited: `src/config.py` (`BiochemConfig`),
   `src/core_physics/biochem_physics_kernels.py` (`biochem_wall_residual`).

@@ -19,7 +19,7 @@ from src.model_nomenclature import (
     CLOT_TRIGGER_PHYSICS,
     FLOW_COUPLING,
     GELATION_BETA,
-    LOCAL_KINEMATIC_CORRECTOR,
+    FLOW_COUPLING,
     RGP_DEQ_KINE,
     SPECIES_GRAPHSAGE,
 )
@@ -95,8 +95,6 @@ COMPONENT_CLOT_TRIGGER_PHYSICS = CLOT_TRIGGER_PHYSICS.id
 COMPONENT_CLOT = CLOT_TRIGGER_PHYSICS.legacy_ids[0]  # clot_phi
 COMPONENT_FLOW_COUPLING = FLOW_COUPLING.id
 COMPONENT_FLOW = FLOW_COUPLING.id  # not implemented
-COMPONENT_LOCAL_KINEMATIC_CORRECTOR = LOCAL_KINEMATIC_CORRECTOR.id
-COMPONENT_LOCAL_CORRECTOR = LOCAL_KINEMATIC_CORRECTOR.legacy_ids[0]  # local_corrector
 
 GLOBAL_TRAIN_RECIPE: dict[str, str] = {
     "SPECIES_CONTINUOUS_GROWTH_ONLY_LOSS": "1",
@@ -166,7 +164,6 @@ DEPLOY_INFERENCE_ENV: dict[str, str] = {
     "SPECIES_SNAPSHOT_WALL_HOPS": "3",
     "CLOT_PHI_CEILING_HOPS": "3",
     "SPECIES_CLOSED_LOOP_COUPLING": "1",
-    "BIOCHEM_CORRECTOR_COUPLING": "1",
     "T0_R4_FLOW_SOURCE": "auto",
     "SPECIES_FLOW_FEATS_SOURCE": "auto",
 }
@@ -418,7 +415,6 @@ def build_deploy_configs(
     pf = _replace(base, **{k: v for k, v in pf_kw.items() if hasattr(base, k)})
     rt_kw["viscosity_calib"] = viscosity_calib
     rt_kw.setdefault("closed_loop_coupling", True)
-    rt_kw.setdefault("corrector_coupling", True)
     rt_kw.setdefault("deploy_faithful", True)
     rt_kw.setdefault("rollout_vel_source", "kinematics")
     rt = BiochemRuntimeConfig.from_kwargs(rt_kw)

@@ -184,13 +184,7 @@ def resolve_species_rollout_uv(
         coupled = get_coupled_uv(data, device)
         if coupled is not None:
             return coupled
-    from src.inference.corrector_coupling import corrector_coupling_enabled, get_coupled_flow
 
-    if corrector_coupling_enabled():
-        coupled = get_coupled_flow(data, device)
-        if coupled is not None:
-            return coupled
-            
     if hasattr(data, "u0_pred") and data.u0_pred is not None:
         return data.u0_pred.to(device=device, dtype=torch.float32), data.v0_pred.to(device=device, dtype=torch.float32)
         

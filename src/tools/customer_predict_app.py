@@ -1,4 +1,4 @@
-"""HemoRGP Customer Predict App (matplotlib desktop).
+"""Local FEM Solver Customer Predict App (matplotlib desktop).
 
 Warm, concise chrome + white graphics viewport:
   - left control rail
@@ -55,6 +55,8 @@ from src.tools.customer_predict_metrics import (
 from src.utils.paths import get_project_root
 from src.utils.plot_kinematics_fields import plot_wall_outline
 from src.utils.vessel_drag_editor import WallControlPointEditor
+from src.utils.wound_drag_editor import WoundRegionEditor
+from src.inference.customer_retrain_pipeline import CustomerRetrainPipeline
 
 # Default horizon: 8 h -> 30000 s (COMSOL / BiochemConfig.t_final).
 DEFAULT_HORIZON_H = 8.0
@@ -368,8 +370,17 @@ class PredictApp:
         )
 
         self.fig = plt.figure(figsize=(fig_w, fig_h), facecolor=C["bg"])
+
+        # App mode: which task the rail/workspace are configured for.
+        self.app_mode = "Clot Predictor"  # "Flow Simulator", "Clot Predictor", "Retrain Model"
+        self.flow_source = "RGP-DEQ"  # "RGP-DEQ", "Python FEM", "COMSOL"
+        self.show_anchors = False
+        self.wound_enabled = False
+        self.retrain_pipeline: CustomerRetrainPipeline | None = None
+        self.wound_editor: WoundRegionEditor | None = None
+
         try:
-            self.fig.canvas.manager.set_window_title("HemoRGP Predict")  # type: ignore[union-attr]
+            self.fig.canvas.manager.set_window_title("Local FEM Solver Unified App")  # type: ignore[union-attr]
         except Exception:
             pass
 
@@ -405,7 +416,7 @@ class PredictApp:
         # Header
         self.ax_header = self._add_panel([0.015, 0.925, 0.97, 0.055])
         self.ax_header.text(
-            0.018, 0.52, "HemoRGP", transform=self.ax_header.transAxes,
+            0.018, 0.52, "Local FEM Solver", transform=self.ax_header.transAxes,
             fontsize=15, fontweight="bold", color=C["accent"], va="center",
         )
         self.ax_header.text(
@@ -420,6 +431,22 @@ class PredictApp:
             0.985, 0.52, self.status, transform=self.ax_header.transAxes,
             fontsize=8.5, color=C["muted"], ha="right", va="center",
         )
+
+        # App mode tabs
+        self.ax_app_mode = self.fig.add_axes([0.35, 0.935, 0.35, 0.035])
+        self.ax_app_mode.set_facecolor(C["panel"])
+        self.radio_app_mode = RadioButtons(
+            self.ax_app_mode, ("Flow Simulator", "Clot Predictor", "Retrain Model"), active=1
+        )
+        _style_radio(self.radio_app_mode)
+        try:
+            for i, circle in enumerate(self.radio_app_mode.circles):
+                circle.center = (0.05 + i * 0.33, 0.5)
+            for i, label in enumerate(self.radio_app_mode.labels):
+                label.set_position((0.10 + i * 0.33, 0.5))
+        except Exception:
+            pass
+        self.radio_app_mode.on_clicked(self._on_app_mode)
 
         # Control rail
         self.ax_rail = self._add_panel([0.015, 0.075, 0.265, 0.835])
@@ -634,6 +661,20 @@ class PredictApp:
 
     # --- view mode --------------------------------------------------------------
 
+    def _on_app_mode(self, label: str) -> None:
+        self.app_mode = label
+        self._update_param_widgets_visibility()
+        self._invalidate_results()
+        self._refresh_preview()
+
+        if label == "Flow Simulator":
+            self._set_status("Flow Simulator: Predict kinematics and visualize anchors.", tone="accent")
+            self.radio_field.set_active(1)  # force Clot + Velocity for flow
+        elif label == "Retrain Model":
+            self._set_status("Retrain Model: Select a folder of .pt files and click Run.", tone="accent")
+        else:
+            self._set_status("Clot Predictor: Forecast biochem species over time.", tone="accent")
+
     def _set_view_mode(self, mode: ViewMode) -> None:
         self.view_mode = mode
         show_prev = mode == "preview"
@@ -676,7 +717,13 @@ class PredictApp:
             self.drag_editor = None
 
     def _update_param_widgets_visibility(self) -> None:
-        show = self.geom_mode == "Parametric"
+        show_geom = self.app_mode != "Retrain Model"
+        self.radio_mode.ax.set_visible(show_geom)
+        self.inbox_label.set_visible(show_geom)
+        self.btn_prev.ax.set_visible(show_geom)
+        self.btn_next.ax.set_visible(show_geom)
+
+        show = self.geom_mode == "Parametric" and show_geom
         for ax in self._param_axes:
             ax.set_visible(show)
         for ax in self._param_pathology_btns:
@@ -846,7 +893,7 @@ class PredictApp:
             initialdir=str(inbox),
             filetypes=[
                 ("Vessel geometries", "*.pt *.msh *.nas"),
-                ("HemoRGP graph (.pt)", "*.pt"),
+                ("Local FEM Solver graph (.pt)", "*.pt"),
                 ("Gmsh mesh (.msh)", "*.msh"),
                 ("Nastran (.nas)", "*.nas"),
                 ("All files", "*.*"),
@@ -1050,6 +1097,39 @@ class PredictApp:
     def _on_run(self, _event: Any) -> None:
         if self._busy:
             return
+
+        if self.app_mode == "Retrain Model":
+            if not self.inbox_files:
+                self._set_status("Please browse and select a folder with .pt files.", tone="err")
+                return
+            self._busy = True
+            self.btn_run.label.set_text("Retraining...")
+            self.btn_run.ax.set_facecolor(C["accent_dim"])
+            self.fig.canvas.draw_idle()
+            self.fig.canvas.flush_events()
+
+            data_dir = self.inbox_files[0].parent
+
+            def progress(msg: str) -> None:
+                self._set_status(msg, tone="accent")
+                self.fig.canvas.flush_events()
+
+            def log_print(msg: str) -> None:
+                print(msg, flush=True)
+
+            if self.retrain_pipeline is None:
+                self.retrain_pipeline = CustomerRetrainPipeline(require_cuda=self.require_cuda)
+
+            ok = self.retrain_pipeline.run(data_dir, progress, log_print)
+
+            self._busy = False
+            self.btn_run.label.set_text("Start Retrain")
+            self.btn_run.ax.set_facecolor(C["accent"])
+            self.fig.canvas.draw_idle()
+            if not ok:
+                self._set_status("Retrain failed. Check console for details.", tone="err")
+            return
+
         self._busy = True
         self.btn_run.label.set_text("Running...")
         self.btn_run.ax.set_facecolor(C["accent_dim"])
@@ -1152,7 +1232,7 @@ class PredictApp:
 
         fig, axes = plt.subplots(3, 1, figsize=(9.0, 8.0), sharex=True, facecolor=C["bg"])
         try:
-            fig.canvas.manager.set_window_title("HemoRGP Scientific metrics")  # type: ignore[union-attr]
+            fig.canvas.manager.set_window_title("Local FEM Solver Scientific metrics")  # type: ignore[union-attr]
         except Exception:
             pass
         ax0, ax1, ax2 = axes
@@ -1473,12 +1553,12 @@ def _log_startup_device(*, require_cuda: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="HemoRGP customer predict app")
+    ap = argparse.ArgumentParser(description="Local FEM Solver customer predict app")
     ap.add_argument("--cpu", action="store_true", help="Allow CPU (slow; CUDA recommended)")
     args = ap.parse_args(argv)
     require_cuda = not args.cpu
     inbox = ensure_inbox()
-    print("[i] HemoRGP Predict", flush=True)
+    print("[i] Local FEM Solver Predict", flush=True)
     print(f"[i] Geometries folder: {inbox}", flush=True)
     _log_startup_device(require_cuda=require_cuda)
     app = PredictApp(require_cuda=require_cuda)

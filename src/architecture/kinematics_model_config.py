@@ -63,6 +63,8 @@ def snapshot_rgp_deq_model_config(model: RGP_DEQ) -> dict[str, Any]:
         "bc_envelope": bool(getattr(model, "bc_envelope", False)),
         "fourier_learnable": bool(getattr(model, "fourier_learnable", False)),
         "shear_head": bool(getattr(model, "shear_head", False)),
+        "decoder_skip": bool(getattr(model, "decoder_skip", False)),
+        "residual_gain": bool(getattr(model, "residual_gain", False)),
         "num_global_tokens": 16,
         "phase": "kinematics",
     }
@@ -107,6 +109,42 @@ def infer_wss_fuse_from_state_dict(
     if in_features == int(latent_dim):
         return False
     return None
+
+
+def infer_decoder_skip_from_state_dict(
+    state_dict: Mapping[str, Any],
+    *,
+    latent_dim: int,
+) -> bool | None:
+    """True when the kinematics decoder was trained on ``[z*, x_enc]`` (``2 * latent_dim`` in).
+
+    Read from the weight rather than trusted from the manifest: the decoder width is the one
+    thing that makes a skip checkpoint physically incompatible with a non-skip rebuild, so it
+    has to be recoverable from the tensors themselves.
+    """
+    for key in ("kinematics_decoder.weight", "siren_decoder.net.0.weight"):
+        w = state_dict.get(key)
+        if w is None or not hasattr(w, "shape") or len(w.shape) != 2:
+            continue
+        # The SIREN takes the latent concatenated with 2 coordinates.
+        in_features = int(w.shape[1]) - (2 if key.startswith("siren_decoder") else 0)
+        if in_features == 2 * int(latent_dim):
+            return True
+        if in_features == int(latent_dim):
+            return False
+    return None
+
+
+def infer_residual_gain_from_state_dict(state_dict: Mapping[str, Any]) -> bool | None:
+    """True/False from the tensors; ``None`` only when there are no tensors to read.
+
+    The False case matters as much as the True one: a stale ``KINEMATICS_RESIDUAL_GAIN=1`` left
+    exported in a shell must not add a head that the checkpoint being loaded cannot fill.  An
+    EMPTY state dict is the fresh-model path, and there env is the right answer.
+    """
+    if not state_dict:
+        return None
+    return any(str(k).startswith("residual_gain_head.") for k in state_dict)
 
 
 def infer_fourier_learnable_from_state_dict(state_dict: Mapping[str, Any]) -> bool | None:
@@ -170,6 +208,18 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["bc_envelope"] = bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
         if "shear_head" not in ctor or ctor.get("shear_head") is None:
             ctor["shear_head"] = any(str(k).startswith("shear_decoder.") for k in state_dict)
+        # The tensors outrank the manifest for both of these: the decoder width and the presence
+        # of the gain head are what make a rebuild load or fail, so a stale manifest must not be
+        # able to describe a model the state dict cannot fill.
+        inferred_skip = infer_decoder_skip_from_state_dict(state_dict, latent_dim=latent)
+        if inferred_skip is not None:
+            ctor["decoder_skip"] = inferred_skip
+        elif "decoder_skip" not in ctor or ctor.get("decoder_skip") is None:
+            ctor["decoder_skip"] = bool(int(os.environ.get("KINEMATICS_DECODER_SKIP", "0")))
+        inferred_gain = infer_residual_gain_from_state_dict(state_dict)
+        ctor["residual_gain"] = bool(inferred_gain) if inferred_gain is not None else bool(
+            int(os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0"))
+        )
         return ctor
 
     if int(saved.get("schema", 0)) == KINEMATICS_MODEL_CONFIG_SCHEMA:
@@ -193,6 +243,10 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["bc_envelope"] = bool(saved["bc_envelope"])
         if "fourier_learnable" in saved:
             ctor["fourier_learnable"] = bool(saved["fourier_learnable"])
+        if "decoder_skip" in saved:
+            ctor["decoder_skip"] = bool(saved["decoder_skip"])
+        if "residual_gain" in saved:
+            ctor["residual_gain"] = bool(saved["residual_gain"])
         return _merge_kinematics_toggle_flags(ctor)
 
     inferred_siren = infer_use_siren_decoder_from_state_dict(state_dict)
@@ -247,6 +301,8 @@ def build_rgp_deq_from_ctor(phys_cfg: Any, ctor: Mapping[str, Any]) -> RGP_DEQ:
         bc_envelope=bool(ctor["bc_envelope"]) if "bc_envelope" in ctor else None,
         fourier_learnable=bool(ctor["fourier_learnable"]) if "fourier_learnable" in ctor else None,
         shear_head=bool(ctor["shear_head"]) if "shear_head" in ctor else True,
+        decoder_skip=bool(ctor["decoder_skip"]) if "decoder_skip" in ctor else None,
+        residual_gain=bool(ctor["residual_gain"]) if "residual_gain" in ctor else None,
     )
 
 

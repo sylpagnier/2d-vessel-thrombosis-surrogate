@@ -11,7 +11,7 @@ rgp_deq_kine              [frozen RGP-DEQ, Stage A]
   -> species_graphsage    [trained]  wall-band GraphSAGE (FI / Mat)
   -> gelation_beta        [trained]  global Mat scale
   -> clot_trigger_physics [equations] Carreau + gelation + nucleation
-  -> local_kinematic_corrector [optional] k-hop [dU, dV]
+  -> local_kinematic_corrector [deprecated, deleted 2026-09-01] k-hop [dU, dV]
 ```
 
 ## Artifact layout (local)

@@ -184,6 +184,27 @@ class VesselConfig:
         if "GMSH_SIZE_FACTOR" in os.environ:
             self.mesh_size_factor = float(os.environ["GMSH_SIZE_FACTOR"])
 
+        # --- Wall-variation sweep override (PILOT_COHORT_RUNBOOK.md s7.4) ---
+        # The `wall_noise_*` block below is the knob the deploy gate keys on, and closing it is
+        # an EMPIRICAL loop -- raise, generate ~20, read preflight's wall-shear regime check,
+        # repeat -- because the map from wall roughness to wall `dsrx` runs through meshing and
+        # the CFD solve and cannot be derived.  Two multipliers rather than ten fields keeps the
+        # sampler's SHAPE fixed and moves it as one dial, so a calibration run varies one thing.
+        # Read here, in the one place every construction site passes through, so a sweep does not
+        # depend on editing this file and forgetting to put it back.
+        freq_scale = float(os.environ.get("KINE_WALL_NOISE_FREQ_SCALE", "1.0"))
+        amp_scale = float(os.environ.get("KINE_WALL_NOISE_AMP_SCALE", "1.0"))
+        if freq_scale != 1.0 or amp_scale != 1.0:
+            for _f in ("wall_noise_freq_lo", "wall_noise_freq_hi",
+                       "wall_noise_freq2_lo", "wall_noise_freq2_hi",
+                       "wall_noise_freq_lo_pro", "wall_noise_freq_hi_pro",
+                       "wall_noise_freq2_lo_pro", "wall_noise_freq2_hi_pro"):
+                setattr(self, _f, getattr(self, _f) * freq_scale)
+            for _f in ("wall_noise_amp_frac", "wall_noise_amp_frac_pro"):
+                setattr(self, _f, getattr(self, _f) * amp_scale)
+        self.wall_noise_freq_scale = freq_scale
+        self.wall_noise_amp_scale = amp_scale
+
     mesh_size_factor: float = 0.75
     # [m] -- the size in the OPEN lumen; throats refine below it.
     # 0.90 mm, not 1.00: measured over 53 biochem anchor packs and 32 elevated synthetic ones,

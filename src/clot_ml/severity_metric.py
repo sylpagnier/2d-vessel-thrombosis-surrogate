@@ -23,7 +23,7 @@ true burden.**
 `tau_abs` says "a handful of nodes either way is not a real failure"; `rho` stops that
 grace from swallowing a small vessel whole (without it, predicting *nothing* on a 4-node
 vessel would score well, which is the empty-prediction hole in reverse).  Worked example at
-the defaults, `tau_abs = 5`, `rho = 0.25`:
+`tau_abs = 5`, `rho = 0.25` -- the v2 default is `tau_abs = 15`; the ORDERING is the point:
 
     n_gt =  15, found 10  ->  tau_eff = 3.75  ->  recall_eff = 10/11.25 = 0.889
     n_gt = 150, found 100 ->  tau_eff = 5.00  ->  recall_eff = 100/145  = 0.690
@@ -54,12 +54,12 @@ import scipy.sparse as sp
 class SeverityConfig:
     """All tolerances in NODES, except the two `rho` caps which are fractions."""
 
-    relax_hops: int = 2
-    beta: float = 0.5          # precision weight, as in the shipped score
-    shape_w: float = 0.5       # weight on dilation IoU vs detection
-    tau_abs: float = 5.0       # absolute miss grace
+    relax_hops: int = 4
+    beta: float = 1.0          # precision weight, as in the shipped score
+    shape_w: float = 0.2       # weight on dilation IoU vs detection
+    tau_abs: float = 15.0       # absolute miss grace
     rho: float = 0.25          # ... capped at this fraction of the true burden
-    tau_fp_abs: float = 2.0    # absolute false-positive grace
+    tau_fp_abs: float = 6.0    # absolute false-positive grace
     rho_fp: float = 0.15       # ... capped at this fraction of the prediction
     empty_gt_fp_tol: float = 8.0   # unchanged from the shipped score
 
@@ -67,7 +67,12 @@ class SeverityConfig:
         return asdict(self)
 
 
-LEGACY = SeverityConfig(tau_abs=0.0, rho=0.0, tau_fp_abs=0.0, rho_fp=0.0)
+#: The pre-v2 shipped score, recovered exactly by zeroing every grace and restoring the
+#: old shape/precision weighting -- this is what `deploy_clot_score` meant before v2.
+LEGACY = SeverityConfig(relax_hops=2, beta=0.5, shape_w=0.5,
+                        tau_abs=0.0, rho=0.0, tau_fp_abs=0.0, rho_fp=0.0)
+#: Deploy Score v2.  SINGLE SOURCE OF TRUTH for the tolerances: `clot_relaxed_metrics`
+#: reads this dataclass rather than carrying its own copy of the numbers.
 DEFAULT = SeverityConfig()
 
 
@@ -87,6 +92,26 @@ def _f_beta(p: float, r: float, beta: float) -> float:
     return 0.0 if den <= 0 else (1 + b2) * p * r / den
 
 
+def severity_from_counts(*, n_gt: int, n_pred: int, tp_rec: int, tp_prec: int,
+                         shape_iou: float, cfg: SeverityConfig = DEFAULT) -> float:
+    """The v2 severity score from ALREADY-RELAXED counts.
+
+    Single source of truth for the formula itself, so `severity_components` here and
+    `clot_relaxed_metrics.compute_clot_relaxed_metrics` cannot drift apart.  Callers are
+    responsible for computing `tp_rec` / `tp_prec` / `shape_iou` at `cfg.relax_hops`.
+    """
+    if int(n_gt) == 0:
+        return 1.0 / (1.0 + max(float(n_pred), 0.0) / max(cfg.empty_gt_fp_tol, 1e-6))
+    if int(n_pred) == 0:
+        return 0.0
+    tau = min(cfg.tau_abs, cfg.rho * float(n_gt))
+    rec = min(1.0, float(tp_rec) / max(float(n_gt) - tau, 1.0))
+    tau_p = min(cfg.tau_fp_abs, cfg.rho_fp * float(n_pred))
+    prec = min(1.0, float(tp_prec) / max(float(n_pred) - tau_p, 1.0))
+    detect = _f_beta(prec, rec, cfg.beta)
+    return cfg.shape_w * float(shape_iou) + (1.0 - cfg.shape_w) * detect
+
+
 def severity_components(pred: np.ndarray, gt: np.ndarray, D: sp.csr_matrix,
                         domain: np.ndarray | None = None,
                         cfg: SeverityConfig = DEFAULT) -> dict:
@@ -100,15 +125,18 @@ def severity_components(pred: np.ndarray, gt: np.ndarray, D: sp.csr_matrix,
                     shape=float("nan"), detect=float("nan"), n_gt=0, n_pred=n_p,
                     tp_rel=0, fn=0, fp=n_p, recall_eff=float("nan"),
                     prec_eff=float("nan"), empty_gt=True)
+    # NO re-masking of the dilated envelope by `domain`.  The reference implementation
+    # (`evaluate.domain_score` -> `compute_clot_relaxed_metrics`) restricts pred/gt to the
+    # domain and then dilates over the FULL graph, so the envelope is allowed to leave the
+    # domain.  Intersecting it back with `domain` here made this fast path disagree with the
+    # metric of record on domain-restricted calls -- which is exactly what
+    # `assert_matches_reference` and `test_fast_scorer_matches_the_canonical_deploy_score`
+    # exist to catch.
     gd = (D @ g.astype(np.int8)) > 0
-    if domain is not None:
-        gd = gd & domain
     if n_p == 0:
         return dict(score=0.0, shape=0.0, detect=0.0, n_gt=n_g, n_pred=0, tp_rel=0,
                     fn=n_g, fp=0, recall_eff=0.0, prec_eff=0.0, empty_gt=False)
     pd_ = (D @ p.astype(np.int8)) > 0
-    if domain is not None:
-        pd_ = pd_ & domain
     tp_r = int((g & pd_).sum())          # GT nodes with a prediction within relax_hops
     tp_p = int((p & gd).sum())           # predictions with GT within relax_hops
     fn, fp = n_g - tp_r, n_p - tp_p
@@ -122,7 +150,8 @@ def severity_components(pred: np.ndarray, gt: np.ndarray, D: sp.csr_matrix,
     inter = int((pd_ & gd).sum())
     union = int((pd_ | gd).sum())
     shape = 0.0 if union == 0 else inter / union
-    score = cfg.shape_w * shape + (1.0 - cfg.shape_w) * detect
+    score = severity_from_counts(n_gt=n_g, n_pred=n_p, tp_rec=tp_r, tp_prec=tp_p,
+                                 shape_iou=shape, cfg=cfg)
     return dict(score=score, shape=shape, detect=detect, n_gt=n_g, n_pred=n_p,
                 tp_rel=tp_r, fn=fn, fp=fp, recall_eff=rec, prec_eff=prec, empty_gt=False)
 
