@@ -1,0 +1,15 @@
+# Shell scripts MUST check out with LF, on every platform.
+#
+# Git for Windows sets `core.autocrlf=true`, so a repo with no .gitattributes checks these out
+# with CRLF.  bash then reads `set -u\r` as an invalid option and `launch.sh\r` as a missing
+# file, and the errors name neither the file nor the cause:
+#
+#   : invalid optionrun_D0_ablation.sh: line 12: set: -
+#   : No such file or directoryh.sh
+#
+# The blobs were always LF; it is the checkout that breaks them.  This cost a Stage-A launch on
+# the COMSOL box.  Applies to all 10 tracked .sh files, not just the Stage-A ones.
+*.sh text eol=lf
+
+# PowerShell launchers are Windows-native; leave them to the platform default.
+*.ps1 text

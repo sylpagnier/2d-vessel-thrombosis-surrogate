@@ -6,7 +6,16 @@ export SPECIES_PRIOR_SOURCE=analytic
 export KINEMATICS_ELEVATE_P2=1
 export KINEMATICS_COORD_MODE=centered
 export KINEMATICS_NORMALIZE_SHEAR_GRAD=1
-export KINEMATICS_LOSS_WEIGHTS=${KINEMATICS_LOSS_WEIGHTS:-outputs/kine_loss_weights_20260828.json}
+# In data/reference/ (tracked), NOT outputs/ (gitignored).  A missing file here is not an
+# error -- `_resolve_loss_weights` prints one WARN line and falls back to the historical
+# recipe -- so from outputs/ this ran s12's calibrated weights on the workstation and the
+# pre-calibration defaults on the COMSOL box, and only one line of a long log said so.
+export KINEMATICS_LOSS_WEIGHTS=${KINEMATICS_LOSS_WEIGHTS:-data/reference/kine_loss_weights_20260828.json}
+if [ ! -f "${KINEMATICS_LOSS_WEIGHTS}" ]; then
+  echo "[arm] FATAL: loss weights not found at ${KINEMATICS_LOSS_WEIGHTS}" >&2
+  echo "[arm]        the run would silently fall back to the pre-calibration defaults." >&2
+  exit 1
+fi
 export KINEMATICS_MAX_NODES=${KINEMATICS_MAX_NODES:-26000}
 export KINEMATICS_SELECT_MAX_GRAPHS=${KINEMATICS_SELECT_MAX_GRAPHS:-8}
 export KINEMATICS_SELECT_PATIENCE=${KINEMATICS_SELECT_PATIENCE:-8}
