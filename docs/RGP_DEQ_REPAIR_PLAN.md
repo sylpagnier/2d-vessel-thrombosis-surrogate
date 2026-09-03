@@ -2118,11 +2118,11 @@ and the arms still failed", and D0 below answers it directly.
 
 1. **Do not regenerate.**  The corpus passes.  If a cohort is ever regenerated, re-read this
    section first and leave `KINE_WALL_NOISE_*` at 1.0 unless preflight says otherwise.
-2. **Run D0** (`scratch/tune/run_D0_ablation.sh`) — C2's recipe on the corpus that is on disk,
+2. **Run D0** (`scripts/stage_a/run_D0_ablation.sh`) — C2's recipe on the corpus that is on disk,
    §17's flags OFF.  This is the control, and it is also the missing measurement from §17.5:
    if D0 alone clears the analytic prior's 32.5, the headline is the corpus and §17's urgency
    drops even though its mechanism still stands.
-3. **Run D1** (`scratch/tune/run_D1_shell.sh`) — identical plus `KINEMATICS_DECODER_SKIP=1` and
+3. **Run D1** (`scripts/stage_a/run_D1_shell.sh`) — identical plus `KINEMATICS_DECODER_SKIP=1` and
    `KINEMATICS_RESIDUAL_GAIN=1`.  Since both flags are exact no-ops at initialisation, D1 minus
    D0 is attributable to the added capacity and nothing else.
 4. Judge on gate union Jaccard as a fraction of ceiling, then `dsrxScale`.  Never on velocity

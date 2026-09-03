@@ -453,8 +453,8 @@ KINEMATICS_BAND_ON_CORNERS=1        # C2, the best recipe the synthetic corpus s
 
 Both new flags default OFF and are exact no-ops at initialisation, so the arm that separates
 §16.5's label ceiling from §17.1's architectural one is the same command with them dropped.
-The pair is `scratch/tune/run_D0_ablation.sh` (flags off, the control) and
-`scratch/tune/run_D1_shell.sh` (flags on).  **Run D0 first.**  The corpus on disk now passes the
+The pair is `scripts/stage_a/run_D0_ablation.sh` (flags off, the control) and
+`scripts/stage_a/run_D1_shell.sh` (flags on).  **Run D0 first.**  The corpus on disk now passes the
 wall-shear regime check the 2026-08-28 cohort failed (`RGP_DEQ_REPAIR_PLAN.md` §17.5), so a D1
 that beats the analytic prior could be the corpus, the flags, or both, and D0 is the only thing
 that tells them apart.
