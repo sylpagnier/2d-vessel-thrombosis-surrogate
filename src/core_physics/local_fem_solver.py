@@ -99,11 +99,58 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
     is_inlet = mask_inlet[skfem_to_target]
     is_outlet = mask_outlet[skfem_to_target]
 
-    def get_facets(node_mask):
-        return np.nonzero(np.all(node_mask[mesh.facets], axis=0))[0]
+    bfacets = mesh.boundary_facets()
+    n_boundary = int(bfacets.size)
+    P = mesh.p.T
+    fa, fb = P[mesh.facets[0, bfacets]], P[mesh.facets[1, bfacets]]
+    fmid = 0.5 * (fa + fb)
+    fh = np.linalg.norm(fb - fa, axis=1)
 
-    f_inlet, f_outlet = get_facets(is_inlet), get_facets(is_outlet)
-    n_boundary = int(mesh.boundary_facets().size)
+    def corner_facets(node_mask):
+        """Boundary facets whose BOTH corner vertices carry the tag."""
+        return bfacets[np.all(node_mask[mesh.facets], axis=0)[bfacets]]
+
+    def planar_facets(node_mask, name):
+        """Boundary facets lying on the plane the tagged nodes span, inside their extent.
+
+        The node tags come off COMSOL's own selections and are not always complete on a
+        quadratic mesh: `patient038` tags no two adjacent corners of its inlet at all (0
+        facets under the corner rule) and `patient048` tags 4 of its 21 outlet facets with
+        only one corner each, which silently handed those 4 to the no-slip wall.  An inlet
+        or outlet is a straight cut through the lumen, so the tagged nodes determine it
+        completely: fit the line through them and take every boundary facet whose midpoint
+        sits on it, within the tagged nodes' own along-line extent.
+
+        Returns ``None`` when the tag cannot support the fit -- fewer than two nodes, or
+        nodes that are not collinear -- so the caller falls back to the corner rule rather
+        than inventing a boundary.
+        """
+        pts = P[node_mask]
+        if pts.shape[0] < 2:
+            return None
+        c = pts.mean(axis=0)
+        _, sv, vt = np.linalg.svd(pts - c, full_matrices=False)
+        along, normal = vt[0], vt[1]
+        extent = float(np.abs((pts - c) @ along).max())
+        if extent <= 0.0:
+            return None
+        # collinearity guard: a curved or smeared selection is not a cut plane
+        if float(np.abs((pts - c) @ normal).max()) > 0.05 * extent:
+            return None
+        sel = (np.abs((fmid - c) @ normal) < 0.05 * fh) & (np.abs((fmid - c) @ along) <= extent)
+        got = bfacets[sel]
+        return got if got.size else None
+
+    f_inlet, f_outlet = corner_facets(is_inlet), corner_facets(is_outlet)
+    p_inlet, p_outlet = planar_facets(is_inlet, "inlet"), planar_facets(is_outlet, "outlet")
+    # The planar completion is only accepted when it CONTAINS what the node tags already
+    # agreed on -- it may add the facets a partial tag missed, never move one.
+    if p_inlet is not None and p_outlet is not None             and np.isin(f_inlet, p_inlet).all() and np.isin(f_outlet, p_outlet).all()             and not np.intersect1d(p_inlet, p_outlet).size:
+        if len(p_inlet) != len(f_inlet) or len(p_outlet) != len(f_outlet):
+            print("[i] local FEM: planar completion of the boundary tags: "
+                  "inlet %d->%d, outlet %d->%d facets"
+                  % (len(f_inlet), len(p_inlet), len(f_outlet), len(p_outlet)), flush=True)
+        f_inlet, f_outlet = p_inlet, p_outlet
     if min(len(f_inlet), len(f_outlet)) == 0:
         raise ValueError(
             f"local FEM: mesh {mesh_path!r} tagged inlet={len(f_inlet)} outlet={len(f_outlet)} "

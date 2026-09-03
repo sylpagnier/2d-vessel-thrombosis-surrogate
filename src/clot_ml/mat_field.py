@@ -103,29 +103,55 @@ def sample_time_indices(T: int, k: int = N_TIME_SAMPLES) -> np.ndarray:
     return idx
 
 
+#: Which physics field the learned residual sits on top of.  ``"chem"`` is the field the
+#: SHIPPED wound off-wall readout actually integrates (`v0.chemistry_mat_trajectory`: upwind
+#: AP renewal, `da_scale_auto`, washout, wound-rate blockage, no AP closure).  ``"ode"`` is
+#: the plain surface ODE v6 was first written against in 2026-08.  The base matters more than
+#: any hyper-parameter here: because `head_reg` is zero-init, an UNTRAINED field reproduces
+#: its base exactly, so choosing "chem" makes the untrained arm equal to what ships and every
+#: measured move attributable to the learned residual alone.
+MAT_BASES: tuple[str, ...] = ("chem", "ode")
+
+
 def build_mat_field_entry(data, bio_cfg, *, flow: str = "gt",
                           n_times: int = N_TIME_SAMPLES,
-                          wound_rate: tuple[float, float] | None = None) -> dict:
-    """One vessel's v6 training entry: the static v4 sample plus per-time ODE and GT ``Mat``.
+                          wound_rate: tuple[float, float] | None = None,
+                          mat_base: str = "chem",
+                          v0_cfg=None) -> dict:
+    """One vessel's v6 training entry: the static v4 sample plus per-time base and GT ``Mat``.
 
     ``wound_rate`` must be the SHIPPED artifact's fitted ``(G_pre, G_post)``, so the residual
     base the model corrects is exactly the field deploy would have used on its own; passing
     ``None`` on a wound pack would train against a quieter wound than deploy integrates
     (WOUND_PROGRESS 15).  Ignored on packs with no wound mask, where it is a structural no-op.
+
+    ``mat_base`` selects that field -- see :data:`MAT_BASES`.  ``v0_cfg`` is the shipped
+    :class:`~src.clot_ml.v0.ClotMlV0Config`; it is what carries ``da_scale_auto`` and the
+    washout flag, and it is REQUIRED for ``mat_base="chem"`` so the base cannot silently
+    drift from the artifact's own settings.
     """
     from src.clot_ml.locked import build_sample
-    from src.clot_ml.temporal import ode_trajectory
     from src.clot_ml.wound import has_wound
     from src.core_physics.clot_phi_simple import mat_si_for_gelation_from_log1p
     from src.core_physics.physics_lumen_model import first_corner_shell, topological_owner
 
+    if mat_base not in MAT_BASES:
+        raise ValueError(f"mat_base must be one of {MAT_BASES}, got {mat_base!r}")
     crit = float(bio_cfg.viscosity_mat_crit)
     S = build_sample(data, bio_cfg, flow=flow, variant="v4")
     T = int(data.y.shape[0])
     ti = sample_time_indices(T, n_times)
 
     wr = tuple(wound_rate) if (wound_rate is not None and has_wound(data)) else None
-    traj, _ = ode_trajectory(data, bio_cfg, flow=flow, wound_rate=wr)
+    if mat_base == "chem":
+        from src.clot_ml.v0 import ClotMlV0Config, chemistry_mat_trajectory
+
+        traj = chemistry_mat_trajectory(data, bio_cfg, v0_cfg or ClotMlV0Config(),
+                                        flow=flow, sample=S, wound_rate=wr)
+    else:
+        from src.clot_ml.temporal import ode_trajectory
+
+        traj, _ = ode_trajectory(data, bio_cfg, flow=flow, wound_rate=wr)
     traj = np.asarray(traj, dtype=np.float64)
 
     mi = data.y_channel_names.split(",").index("Mat_log1p_nd")
@@ -150,6 +176,7 @@ def build_mat_field_entry(data, bio_cfg, *, flow: str = "gt",
         town=town.astype(np.int64),
         t_idx=ti.astype(np.int64),
         T=np.int64(T),
+        mat_base=np.str_(mat_base),
         # per-time fields, log1p(Mat/crit); [K, N]
         ode_t=_log1p_crit(traj[ti], crit).astype(np.float32),
         gt_t=_log1p_crit(gmat[ti], crit).astype(np.float32),

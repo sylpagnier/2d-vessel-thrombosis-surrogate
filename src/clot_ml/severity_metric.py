@@ -75,6 +75,25 @@ LEGACY = SeverityConfig(relax_hops=2, beta=0.5, shape_w=0.5,
 #: reads this dataclass rather than carrying its own copy of the numbers.
 DEFAULT = SeverityConfig()
 
+# ---------------------------------------------------------------------------
+# PUBLICATION NAMES.  The manuscript calls this family the **Burden-Adjusted Thrombus
+# Concordance (BATC)** -- `severity` and `guiding` are internal history, and neither reads
+# as a metric name in an abstract.  The two published settings are one function:
+#
+#   BATC       the reported metric.  4-hop tolerance, F1 detection, 0.2 shape weight, and
+#              the burden-scaled absolute graces.  == `DEFAULT`.
+#   BATC_0     the unadjusted variant: every grace zeroed, 2-hop tolerance, F0.5, 0.5 shape
+#              weight.  This is the classical relaxed-overlap score the project used before
+#              v2 and it reproduces `evaluate.domain_score` EXACTLY (verified to 0.00e+00
+#              over 13 vessel-domains, 2026-09-03).  == `LEGACY`.
+#
+# These are aliases, not new objects: nothing pickled, promoted or manifested changes, and
+# `metric="severity"` / `"legacy"` stay valid on every CLI.  docs/DEPLOYCLOT.md 0.
+BATC = DEFAULT
+BATC_0 = LEGACY
+BATC_NAME = "Burden-Adjusted Thrombus Concordance"
+BATC_0_NAME = "Burden-Adjusted Thrombus Concordance, unadjusted"
+
 
 def dilation_operator(ei: np.ndarray, n: int, hops: int = 2) -> sp.csr_matrix:
     A = sp.coo_matrix((np.ones(ei.shape[1], np.int8), (ei[0], ei[1])), shape=(n, n)).tocsr()

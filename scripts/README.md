@@ -16,6 +16,24 @@ Supported launchers for **Local FEM Solver** (four active stacks). Retired ladde
 Utility `.ps1`: `_launcher_common.ps1`, `go_diag.ps1`, `kill_stale_python.ps1`, `install_torch_cuda.ps1`,
 `promote_kinematics_checkpoint.ps1`.
 
+## DeployClot -- the whole deploy-flow pipeline, end to end
+
+`go_deployclot.sh` runs every stage below in dependency order against `flow="fem"`, the local
+Carreau solve; each stage is idempotent and skips work already on disk, so a rerun resumes.
+See [`docs/DEPLOYCLOT.md`](../docs/DEPLOYCLOT.md).
+
+- `go_deployclot.sh` -- the runbook.
+- `diag_fem_flow_audit.py` -- what the local FEM solve costs per vessel, in the four
+  quantities the deposition gate consumes.
+- `build_temporal_transport.py` -- per-(node, time) transport channels, one directory per
+  flow source; the timing head is fitted against these and must not read another flow's.
+- `promote_clot_gnn_v4.py` -> `promote_clot_gnn_v4_temporal.py` ->
+  `promote_clot_gnn_v4_wound.py` -> `promote_clot_ml_0.py` -- the promotion chain: base
+  ensemble, timing head, wound complement, unified artifact.
+- `eval_wound_ab_pair.py` -- the matched A/B counterfactual, which scores the DIFFERENCE the
+  injury makes on a fixed geometry rather than the two vessels.
+- `build_deployclot_report.py` -- renders whatever is on disk into the validation report.
+
 ## deploy-clot (`clot_ml_0`) -- train, promote, eval
 
 - `promote_clot_ml_0.py` -- lock unified wounded/non-wounded stack (`kind: unified_v0`).

@@ -371,6 +371,14 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
     from src.config import BiochemConfig  # noqa: PLC0415
 
     temporal = bundle["temporal"]
+    # The committed-set spec, the ODE clock and the transport channels were all fitted
+    # against ONE t=0 flow.  Artifacts promoted before the field was recorded carry no
+    # `flow` key and are read as the historical `gt`; a mismatch is a warning rather than an
+    # error because the GT-fitted head is still the right comparison arm for a FEM run.
+    _fit_flow = str(temporal.get("flow", "gt"))
+    if _fit_flow != str(flow):
+        print("[WARN] temporal head was fitted on flow=%r and is being applied at flow=%r; "
+              "its cuts and clock describe the other field" % (_fit_flow, flow), flush=True)
     bio = BiochemConfig(phase="biochem")
     S = sample if sample is not None else build_sample(data, bio, flow=flow, variant="v4")
     wall, owner = S["wall"], S["owner"]
@@ -574,6 +582,13 @@ def predict_temporal_v4_wound(bundle: dict, data, times, *, flow: str = "gt",
         # wound reaches 17x, so no deeper ring clears its bar on any of the three wound
         # vessels (docs/WOUND_PROGRESS.md 16.4).
         lumen=str(w.get("lumen", "shell")),
+        # Resting-platelet renewal.  Travels on the WOUND artifact like every other wound
+        # scalar; absent (every artifact before 2026-09-03) means 0.0, which is the
+        # frozen-`rp` model bit-for-bit.  See docs/DEPLOYCLOT.md 5b for why it exists.
+        rp_C=float(w.get("rp_C", 0.0) or 0.0),
+        # Whether the wall-AP CONSUMPTION closure applies at the wound.  Absent (every
+        # artifact before 2026-09-03) means True, the shipped behaviour.
+        wound_ap_closure=bool(w.get("wound_ap_closure", True)),
     )
     comp = compose_with_v4(base, out, times)
     series = union_ungated_stall_series(data, bio, comp["series"], times, flow=flow,

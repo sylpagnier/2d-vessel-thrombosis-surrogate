@@ -1,0 +1,11 @@
+[project]
+name = "thrombus-ml-model"
+version = "0.1.0"
+description = "Vessel clot forecasting: research training/eval stack + the customer Predict UX."
+requires-python = ">=3.11"
+
+# This file is intentionally minimal. Its main job is to be a stable marker so
+# `src.utils.paths.get_project_root()` resolves correctly both in a normal git checkout and in
+# a packaged customer bundle that has no `.git` folder (see `scripts/build_customer_bundle.ps1`).
+# Dependency lists live in `requirements.txt` (full research stack) and
+# `requirements-customer.txt` (minimal CPU-only deploy stack for the Predict UX).

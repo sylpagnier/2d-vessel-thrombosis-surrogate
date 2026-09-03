@@ -19,7 +19,7 @@ if str(REPO) not in sys.path:
 from src.clot_ml.features import build_features, feature_matrix  # noqa: E402
 from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
-from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T, SEALED  # noqa: E402
 
 DIR = REPO / "data/processed/graphs_biochem_anchors"
 
@@ -35,6 +35,9 @@ def main() -> int:
     ap.add_argument("--only", default="",
                     help="comma-separated anchors, for resuming a partial rebuild or for "
                          "building a small cache to smoke-test the pipeline against")
+    ap.add_argument("--include-sealed", action="store_true",
+                    help="also cache WALL_COHORT_V2_GENERALIZATION (007/013/031/043). SEALED is spent once (docs/SEALED_SPLIT.md): caching it is not spending it, but "
+                         "training or selecting on it is -- keep it out of both.")
     args = ap.parse_args()
     out = Path(args.out or f"outputs/clot_ml_cache_{args.flow}")
     out.mkdir(parents=True, exist_ok=True)
@@ -45,6 +48,8 @@ def main() -> int:
     # about FALSE POSITIVES, and until they were cached nothing could be measured on them --
     # `SeverityScorer.score(..., empty_gt="score")` existed with no data to apply it to.
     todo = list(FIT) + list(DEV) + list(CLOT_FREE)
+    if args.include_sealed:
+        todo += [a for a in SEALED if a not in todo]
     only = [x.strip() for x in args.only.split(",") if x.strip()]
     if only:
         todo = [a for a in todo if a in only]

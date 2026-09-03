@@ -38,6 +38,7 @@ so the loop closes on the model's state rather than on the answer.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -53,6 +54,13 @@ PER_M2_TO_PER_CM2 = 1.0e-4
 #: Base constants for the two-regime gate. ``G_pre0 = 2`` is not tuned -- it is
 #: ``ungated (1) + the low-shear branch (1)``, the value the mechanism predicts, and it lands
 #: onset within +1 step of GT on both healthy-flow vessels. ``G_post0`` is fitted.
+#: Resting-platelet renewal coefficient, initial value for the fit.  The wall-AP closure
+#: ships `C = 62.42` against a consumption of `gate * k_as`; `k_as / k_rs = 12.16` in the
+#: config, so the same physical balance on the resting pool sits near `62.42 * 12 = 750`.
+#: That is an initialisation, not a claim -- `scripts/train_wound_rate.py` fits it
+#: leave-one-vessel-out alongside the two gate constants.
+RP_C0 = 750.0
+
 G_PRE0 = 2.0
 G_POST0 = 10.0
 #: Softness of the gelation switch, in units of ``Mat/crit``. Small enough to behave like the
@@ -196,9 +204,15 @@ class OdeConstants:
     slope: float
     ap_C: float
     ap_q: float
+    #: RESTING-platelet renewal coefficient, the same Damkohler balance the wall-AP closure
+    #: applies to `ap` (`src/core_physics/ap_closure.py`) but with `k_rs` as the consumption
+    #: constant.  ``0.0`` reproduces the frozen-`rp` model bit-for-bit, which is every
+    #: artifact promoted before 2026-09-03.  See `RP_C_DEFAULT` for why it exists.
+    rp_C: float = 0.0
 
     @classmethod
-    def from_cfg(cls, bio_cfg, da_scale: float, ap_closure) -> "OdeConstants":
+    def from_cfg(cls, bio_cfg, da_scale: float, ap_closure,
+                 rp_C: float = 0.0) -> "OdeConstants":
         return cls(
             k_rs=float(bio_cfg.k_rs) * M_TO_CM,
             k_as=float(bio_cfg.k_as) * M_TO_CM,
@@ -210,6 +224,7 @@ class OdeConstants:
             slope=float(bio_cfg.surface_time_gate_slope),
             ap_C=float(ap_closure.C),
             ap_q=float(ap_closure.q),
+            rp_C=float(rp_C),
         )
 
 
@@ -225,6 +240,7 @@ def mat_trajectory_torch(
     tau: float = SWITCH_TAU,
     ext_weight: torch.Tensor | None = None,
     reach: torch.Tensor | None = None,
+    rp_C: "torch.Tensor | float | None" = None,
 ) -> torch.Tensor:
     """``[T, N]`` ``Mat`` in COMSOL model units, differentiable in the two gate fields.
 
@@ -248,6 +264,11 @@ def mat_trajectory_torch(
     max of the node's own weight and its neighbourhood's. Both ``None`` reproduces the
     self-triggered model exactly.
     """
+    # `rp_C` overrides `C.rp_C` so the FIT can pass a live tensor (the coefficient is
+    # learned) while DEPLOY passes a plain float on the constants object.  Same value, two
+    # lifetimes.
+    rc = C.rp_C if rp_C is None else rp_C
+    rc_off = isinstance(rc, float) and rc == 0.0
     n = gate_pre.shape[0]
     dev, dt = gate_pre.device, gate_pre.dtype
     mas = torch.zeros(n, device=dev, dtype=dt)
@@ -265,7 +286,16 @@ def mat_trajectory_torch(
         sat = torch.clamp(1.0 - mas / C.minf, 0.0, 1.0)
         # static ap-closure kernel: consumption = g * k_as, x = consumption / sr^q
         ap_i = ap / (1.0 + C.ap_C * (g * C.k_as) / torch.pow(sr_f, C.ap_q))
-        dep = sat * (C.k_rs * rp + C.k_as * ap_i)
+        # THE SAME BALANCE ON THE RESTING POOL.  `rp` is the FEEDSTOCK -- `ap` is what the
+        # reaction produces, which is why `ap` accumulates in a dead zone while `rp` does
+        # not.  Measured 2026-09-03 over all six wounds (374 nodes): resting-platelet
+        # survival after one 150 s interval is 0.994 wherever wall shear exceeds 20 /s and
+        # 0.0000 below 5 /s, and it separates the wound nodes that ever clot from those that
+        # never do -- 100.0% of nodes with RP survival >= 0.90 clot against 67.0% below it.
+        # `rp_C = 0` reproduces the frozen-`rp` model bit-for-bit.
+        rp_i = (rp if rc_off
+                else rp / (1.0 + rc * (g * C.k_rs) / torch.pow(sr_f, C.ap_q)))
+        dep = sat * (C.k_rs * rp_i + C.k_as * ap_i)
         auto = (mas / C.minf) * C.k_aa * ap_i
         mas = mas + h * C.da * g * dep * step2t
         mat = mat + h * g * C.da * (dep + auto) * step2t
@@ -286,10 +316,18 @@ class WoundRateNet(nn.Module):
 
     def __init__(self, in_dim: int, hidden: int = 32, *,
                  g_pre0: float = G_PRE0, g_post0: float = G_POST0,
-                 max_resid: float = 1.5):
+                 max_resid: float = 1.5, fit_rp_C: bool = False,
+                 rp_C0: float = RP_C0):
         super().__init__()
         self.log_g_pre0 = nn.Parameter(torch.tensor(float(np.log(g_pre0))))
         self.log_g_post0 = nn.Parameter(torch.tensor(float(np.log(g_post0))))
+        # THE THIRD SCALAR, and it is a physical one: the resting-platelet renewal
+        # coefficient of the same Damkohler balance the wall-AP closure already applies to
+        # `ap`.  Held OUT of the model unless asked for, so the two-constant arm this has to
+        # beat stays exactly what it was.  `rp_C -> 0` recovers that arm continuously, which
+        # is what makes the comparison a nested one rather than two unrelated models.
+        self.log_rp_C = (nn.Parameter(torch.tensor(float(np.log(rp_C0))))
+                         if fit_rp_C else None)
         self.max_resid = float(max_resid)
         if hidden > 0:
             self.body = nn.Sequential(
@@ -302,6 +340,11 @@ class WoundRateNet(nn.Module):
             nn.init.zeros_(self.body[-1].bias)
         else:
             self.body = None
+
+    @property
+    def rp_C(self) -> float:
+        """Fitted resting-platelet renewal coefficient, or 0.0 when it is not in the model."""
+        return 0.0 if self.log_rp_C is None else float(torch.exp(self.log_rp_C.detach()))
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """``x`` is ``[N, F]`` normalised features -> ``(G_pre, G_post)`` each ``[N]``."""
@@ -532,13 +575,23 @@ def predict_wound_series(
     flow: str = "gt", off_att: float = 0.16, lag_frac: float = OFFWALL_LAG_FRAC,
     prepared: dict | None = None, trigger: str = "self", k_hops: int = TRIGGER_HOPS,
     trigger_gate_scale: float = 1.0, lumen: str = "shell",
-    base_onset: np.ndarray | None = None,
+    base_onset: np.ndarray | None = None, rp_C: float = 0.0,
+    wound_ap_closure: bool = True,
 ) -> dict:
     """``{mask, onset, mat, owned}`` for the wound and the shell it feeds.
 
     ``off_att`` is the off-wall attenuation: a shell node commits when its owning wound
     node's ``Mat`` reaches ``crit / off_att``. 0.16 is the cohort constant measured in
     PHASE7 12.5 (median ``Mat_off / Mat_owner``), not a fit on these three vessels.
+
+    ``rp_C`` is the resting-platelet renewal coefficient (:func:`mat_trajectory_torch`).
+    ``0.0``, the default, reproduces every artifact promoted before 2026-09-03 bit-for-bit.
+
+    ``wound_ap_closure=False`` drops the wall-AP CONSUMPTION closure at the wound, where it
+    has the wrong sign -- the closure models a gated wall depleting `AP`, and an ungated
+    wound is a net producer (docs/DEPLOYCLOT.md 5c).  Leave-one-vessel-out over six wounds it
+    takes onset MAE 9.2 -> 7.2 steps and recall 0.877 -> 1.000 at an unchanged curve L1, with
+    no new parameter.  ``True``, the default, is every artifact before 2026-09-03.
 
     ``lumen`` selects how the off-boundary nodes are decided:
       ``"shell"``      the shipped rule -- commit when the owner reaches ``crit/off_att``,
@@ -629,9 +682,11 @@ def predict_wound_series(
             rch = torch.tensor(reach_np.astype(np.float64))
         elif trigger != "self":
             raise ValueError(f"unknown trigger {trigger!r}")
+        _C = V["C"] if wound_ap_closure else dataclasses.replace(V["C"], ap_C=0.0)
         traj = mat_trajectory_torch(t=V["t"], gate_pre=gp, gate_post=gq,
                                     rp=V["rp"][idx], ap=V["ap"][idx], sr=V["sr"][idx],
-                                    C=V["C"], ext_weight=ext, reach=rch).numpy()
+                                    C=_C, ext_weight=ext, reach=rch,
+                                    rp_C=float(rp_C)).numpy()
         on_w = onset_from_traj(traj, crit)
         mask[idx] = traj[-1] >= crit
         onset[idx] = np.where(on_w < T, on_w, -1.0)
@@ -839,3 +894,55 @@ def wound_region_masks(data, *, k_hops: int = WOUND_REGION_HOPS
     hops = hop_distance(wnd, A, max_h=int(k_hops) + 1)
     region = hops <= int(k_hops)
     return region, region & ~solid, (~solid) & ~region
+
+
+# ---------------------------------------------------------------------------
+# which flow regime a wound sits in -- deploy-legal, t=0 flow only
+# ---------------------------------------------------------------------------
+#: Fraction of a wound's own nodes at which the RAW t=0 shear gate must fire before the wound
+#: counts as sitting in a STAGNATION zone rather than in flowing blood.  Measured, not tuned:
+#: the gate fires on 0.0% of the wound on `wound_patient001`-`005` and on 77.9% on `006`, so
+#: any cut strictly inside (0, 0.78) separates them and there is nothing here to fit.
+GATE_ON_STAGNANT = 0.50
+
+
+def wound_gate_on_fraction(data, bio_cfg, *, flow: str = "gt") -> float:
+    """Fraction of this pack's wound nodes where the RAW t=0 shear gate already fires.
+
+    THE PREMISE OF THE WHOLE WOUND BRANCH is an ungated patch inside a gated wall: the
+    injured segment deposits because `srf2` deletes the shear gates, and the surrounding
+    healthy wall does not because `srf1` keeps them.  This measures whether that premise
+    holds on a given vessel, from the t=0 velocity alone -- no labels, so it is legal at
+    deploy time as well as at promotion time.
+
+    **Read the raw gate from `t0_flow_fields`, never `deposition_gate(..., wound_source=True)`.**
+    That helper forces the gate to 1 on wound nodes *by construction*, because forcing it
+    there IS the wound law; reading it reports every wound as 100% gated, makes this test
+    vacuous, and silently disables any coverage requirement built on it.  That mistake
+    promoted one bad artifact on 2026-09-02 before the gate's own reporting caught it.
+
+    Measured on the six-vessel wound cohort, `flow="fem"`:
+
+        wound_patient001 / 002 / 003 / 004 / 005     0.0%     flowing
+        wound_patient006                            77.9%     stagnation
+
+    `wound_patient006` is the only vessel whose wound sits in a dead zone (wall shear p50
+    3.5 /s on the nodes that clot, 0.7 /s on the nodes that never do, against 127-146 /s
+    elsewhere).  There the two-regime constants under-predict wound `Mat` by 8.4x, because
+    they were fitted where species supply is never limiting -- see docs/DEPLOYCLOT.md 5b.
+    """
+    from src.core_physics.physics_wall_model import t0_flow_fields
+
+    from src.clot_ml.temporal import _flow_hops
+
+    w = wound_mask(data)
+    if not w.any():
+        return 0.0
+    f = t0_flow_fields(data, bio_cfg, hops=_flow_hops(flow), flow_source=flow)
+    return float((np.asarray(f.gate)[w] > 0).mean())
+
+
+def wound_flow_regime(data, bio_cfg, *, flow: str = "gt") -> tuple[str, float]:
+    """``("flowing" | "stagnation", gate_on_fraction)`` for this pack's wound."""
+    frac = wound_gate_on_fraction(data, bio_cfg, flow=flow)
+    return ("stagnation" if frac >= GATE_ON_STAGNANT else "flowing"), frac

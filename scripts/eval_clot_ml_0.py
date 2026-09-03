@@ -34,12 +34,13 @@ from src.clot_ml.locked import (  # noqa: E402
 from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0  # noqa: E402
 from src.clot_ml.wound import has_wound, solid_mask, wound_region_masks  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
+from src.biochem_gnn.wall_cohort_constants import WOUND_AB_PAIR, WOUND_COHORT  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, SEALED  # noqa: E402
 
 PACKS = REPO / "data/processed/graphs_biochem_anchors"
-DEFAULT_STEMS = (
-    "wound_patient001", "wound_patient002", "wound_patient003",
+DEFAULT_STEMS = tuple(WOUND_COHORT) + (
     "patient012", "patient020", "patient032", "patient041", "patient044",
+    WOUND_AB_PAIR[1],
 )
 
 
@@ -59,17 +60,31 @@ def _cohort_stems() -> list[str]:
             continue
         if (PACKS / f"{a}.pt").exists():
             out.append(a)
-    for s in ("wound_patient001", "wound_patient002", "wound_patient003"):
+    for s in WOUND_COHORT:
         if (PACKS / f"{s}.pt").exists() and s not in out:
             out.append(s)
     return out
 
 
 def _score_nowound(pred, gt, ei, S) -> dict:
+    """Both metrics, on the same mask, always.
+
+    `domain_score` (the DEPLOY metric) and `SeverityScorer` (what the strictly-nested CV
+    table reports) are different numbers for the same prediction -- systematically 0.19-0.22
+    apart off-wall on this cohort.  Reporting only the first is what let the SEALED read be
+    quoted against a cross-validated severity number and manufacture a 0.22 "off-wall gap"
+    that does not exist (docs/DEPLOYCLOT.md 22).  Emitting both costs one extra call and
+    makes the mismatch impossible to make again.
+    """
+    from src.clot_ml.severity_metric import DEFAULT, SeverityScorer
+
     wall, off = eval_domains(S)
+    vs = SeverityScorer(S["edge_index"], gt, len(S["wall"]), DEFAULT)
     return dict(
         wall=domain_score(pred, gt, ei, wall, wall),
         off=domain_score(pred, gt, ei, off, wall),
+        wall_sev=vs.score(pred & wall, wall),
+        off_sev=vs.score(pred & off, off),
     )
 
 
@@ -120,6 +135,7 @@ def _score_one(bundle_base, bundle_v0, stem: str, every: int, flow: str) -> dict
             row[f"v0_mot_{d}"] = v_mot.get(d, float("nan"))
     else:
         b_w, b_o, v_w, v_o = [], [], [], []
+        b_ws, b_os, v_ws, v_os = [], [], [], []
         for ti in times:
             gt = gts[ti]
             sb = _score_nowound(base["series"][ti], gt, ei, S)
@@ -128,6 +144,10 @@ def _score_one(bundle_base, bundle_v0, stem: str, every: int, flow: str) -> dict
             b_o.append(sb["off"])
             v_w.append(sv["wall"])
             v_o.append(sv["off"])
+            b_ws.append(sb["wall_sev"])
+            b_os.append(sb["off_sev"])
+            v_ws.append(sv["wall_sev"])
+            v_os.append(sv["off_sev"])
         row["base_fin_wall"] = b_w[-1]
         row["v0_fin_wall"] = v_w[-1]
         row["base_fin_off"] = b_o[-1]
@@ -136,6 +156,10 @@ def _score_one(bundle_base, bundle_v0, stem: str, every: int, flow: str) -> dict
         row["v0_mot_wall"] = float(np.nanmean(v_w))
         row["base_mot_off"] = float(np.nanmean(b_o))
         row["v0_mot_off"] = float(np.nanmean(v_o))
+        row["base_fin_wall_sev"] = b_ws[-1]
+        row["v0_fin_wall_sev"] = v_ws[-1]
+        row["base_fin_off_sev"] = b_os[-1]
+        row["v0_fin_off_sev"] = v_os[-1]
     return row
 
 
@@ -156,6 +180,9 @@ def main() -> int:
     ap.add_argument("--every", type=int, default=4,
                     help="subsample the time grid (1 = every frame)")
     ap.add_argument("--flow", default="gt")
+    ap.add_argument("--force-invalid", action="store_true",
+                    help="score an artifact stamped metrics_invalid anyway; the output is "
+                         "in-sample and must be labelled as such")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -173,6 +200,21 @@ def main() -> int:
     bundle_base = load_temporal_v4_wound(args.baseline)
     bundle_v0 = load_v0_bundle(args.v0)
 
+    # A production artifact trains on the whole corpus, SEALED included.  Every number this
+    # script could print for it would be in-sample, and an in-sample number that looks like
+    # the validated one is the single most publishable-looking mistake available here.
+    from src.clot_ml.v0 import metrics_invalid_reason
+
+    why = metrics_invalid_reason(bundle_v0)
+    if why and not args.force_invalid:
+        print(f"[ERR] {args.v0} must not be scored: {why}\n"
+              "      Score the validated sibling instead, or pass --force-invalid if you "
+              "genuinely want an in-sample sanity number and will label it as one.",
+              flush=True)
+        return 2
+    if why:
+        print(f"[!] IN-SAMPLE ONLY -- {args.v0}: {why}", flush=True)
+
     rows = []
     for stem in stems:
         if not (PACKS / f"{stem}.pt").exists():
@@ -181,7 +223,10 @@ def main() -> int:
         rows.append(_score_one(bundle_base, bundle_v0, stem, args.every, args.flow))
 
     print()
-    print("NON-WOUND (global wall / true-lumen off)")
+    print("NON-WOUND (global wall / true-lumen off) -- DEPLOY metric "
+          "(`evaluate.domain_score`); the severity metric the CV table reports is "
+          "`*_sev` in the saved JSON and runs 0.19-0.22 HIGHER off-wall. Do not "
+          "compare one against the other (docs/DEPLOYCLOT.md 22).")
     print(f"{'vessel':22s} {'B wall':>8s} {'v0 wall':>8s} {'dW':>7s} "
           f"{'B off':>8s} {'v0 off':>8s} {'dO':>7s}")
     nw = [r for r in rows if not r["wound"]]

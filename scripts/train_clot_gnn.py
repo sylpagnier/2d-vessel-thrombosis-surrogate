@@ -252,6 +252,24 @@ def train_one(train_anchors, cache, args, dev_t, seed=0):
                     logit, g["y"], pos_weight=pw)
                 loss = loss + args.reg_w * torch.nn.functional.smooth_l1_loss(
                     reg, g["mat_gt"])
+            # --- CLOT-FREE VESSEL WEIGHT -------------------------------------------------
+            # A clot-free vessel contributes ~10-20k all-negative off-wall nodes and nothing
+            # else.  Sixteen of them are 45% of the pool, so they carry roughly half the
+            # per-node BCE gradient while adding no information about WHERE the boundary of a
+            # thrombus sits -- which is the only thing the off-wall readout reads.
+            #
+            # MEASURED 2026-09-03 (DEPLOYCLOT.md 24): a gradient-boosted tree on the same 69
+            # features goes from P@n_gt 0.605 to 0.702 when these vessels are dropped from its
+            # training set -- from below the GNN to well above it.  Dropping them from the
+            # GNN's POOL instead makes it worse (0.637 -> 0.595), because `shape_w` wants the
+            # wider cohort for its running reference.  This knob separates the two: the vessel
+            # still trains, still updates the C0 reference, and still counts for the
+            # false-positive branch -- its GRADIENT is scaled.
+            #
+            # 1.0 reproduces the shipped objective exactly.
+            cfw = float(getattr(args, "clot_free_w", 1.0))
+            if cfw != 1.0 and g.get("empty_gt"):
+                loss = loss * cfw
             if use_metric:
                 p = torch.sigmoid(logit)
                 parts = []

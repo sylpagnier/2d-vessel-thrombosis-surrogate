@@ -60,3 +60,6 @@ Thumbs.db
 /scratch/
 /scratch_b64.json
 *.log
+
+# Build output (large binaries, never push)
+/dist/

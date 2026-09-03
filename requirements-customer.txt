@@ -1,0 +1,33 @@
+# Minimal deploy-only dependency set for the customer Predict UX
+# (src/tools/customer_predict_web.py), CPU-only. Built from tracing the tool's actual
+# reachable imports -- NOT the full research requirements.txt, which also pulls in
+# pandas/pytest that this tool never touches.
+#
+# `mph` (COMSOL/MATLAB bridge) and `pandas` are both imported eagerly by
+# `src/data_gen/__init__.py` (package-level `from ... import AnchorGenerator,
+# PatientDataExtractor`, neither of which this tool calls), so they have to be installed for
+# `import src...` to succeed at all -- even though the deploy path never uses either. `mph`
+# confirmed to import cleanly with no MATLAB/COMSOL installed or running (its own
+# dependencies are just `jpype1` + numpy, pure wheels; it only needs a live COMSOL session
+# when actually asked to start one, which this tool never does).
+#
+# torch is installed separately by the build script from the CPU wheel index
+# (https://download.pytorch.org/whl/cpu) -- listed here for reference, not for a plain
+# `pip install -r`, since that index has to be passed on the pip command line.
+numpy
+scipy
+torch
+torch-geometric
+meshio
+gmsh
+scikit-fem
+matplotlib
+tqdm
+mph
+pandas
+# outputs/clot_ml/locked/clot_gnn_v6/temporal.pkl unpickles sklearn model objects (the
+# temporal readout heads) -- needed to load it even though nothing calls sklearn directly.
+# PINNED, not latest: sklearn's pickle format is not stable across versions (the internal
+# Cython module layout changes), and the checkpoint was pickled under 1.8.0 -- installing
+# latest (1.9.0 as of writing) fails on load with a missing-submodule error.
+scikit-learn==1.8.0

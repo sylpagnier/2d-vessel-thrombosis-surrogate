@@ -90,6 +90,16 @@ HEAD = dict(max_iter=300, max_depth=5, learning_rate=0.07, l2_regularization=1.0
 
 TT = REPO / "outputs/temporal_transport"
 
+#: t=0 flow source for the ODE clock and the per-time transport channels.  Set by the
+#: promotion / evaluation entry point BEFORE `precompute`, the same way `USE_WAKE_ODE` is:
+#: the head is fitted against one clock and deploy must replay that same clock.
+FLOW: str = "gt"
+
+
+def _tt_dir() -> Path:
+    from scripts.build_temporal_transport import OUT_FOR_FLOW
+    return OUT_FOR_FLOW.get(FLOW, TT)
+
 
 def load_temporal_transport(anchor, times, crit):
     """Per-(node, time) physics channels; ``None`` when the cache has not been built.
@@ -98,7 +108,7 @@ def load_temporal_transport(anchor, times, crit):
     inputs the head gets besides the query time and the ODE's fired/not-fired bit, and the
     only time-varying input it has ever had OFF the wall.
     """
-    p = TT / f"{anchor}.npz"
+    p = _tt_dir() / f"{anchor}.npz"
     if not p.exists():
         return None
     z = np.load(p)
@@ -115,6 +125,11 @@ def precompute(pool, cache, n_times):
     for a in pool:
         S = cache[a]
         d = torch.load(PACKS / f"{a}.pt", map_location="cpu", weights_only=False)
+        if FLOW == "fem":
+            from src.clot_ml.v0 import solve_fem_into_pack
+            if not str(getattr(d, "graph_stem", "") or ""):
+                d.graph_stem = a
+            solve_fem_into_pack(d)
         T = int(d.y.shape[0])
         times = [int(round(x)) for x in np.linspace(0, T - 1, n_times)]
         gt = {ti: (gt_clot_phi_at_time(d, ti, phys, device=torch.device("cpu"))
@@ -122,7 +137,7 @@ def precompute(pool, cache, n_times):
         go = np.full(len(S["wall"]), T, dtype=int)          # GT onset index
         for ti in reversed(times):
             go[gt[ti]] = ti
-        traj, t = ode_trajectory(d, bio, flow="gt", wake=USE_WAKE_ODE, stall=USE_STALL_ODE)
+        traj, t = ode_trajectory(d, bio, flow=FLOW, wake=USE_WAKE_ODE, stall=USE_STALL_ODE)
         # The owner's crossing of c*crit, for several c.  Off-wall commits when
         # att*Mat_owner >= crit, i.e. when the owner reaches crit/att -- PHASE9 12.2 found
         # crit/att unreachable as a hard RULE because the ODE's Mat is biased low, but as

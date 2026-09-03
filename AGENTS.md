@@ -8,6 +8,7 @@ Short cheat sheet for agents and contributors. Full orientation: [docs/PROJECT_C
 |-------|-------|------|
 | **RGP-DEQ** (`rgp_deq_kine`) | `python -m src.bin.main train rgp-deq-kine` or `scripts/go_kinematics_production_allfix.ps1` | [docs/KINEMATICS_BEST_ARCHITECTURE.md](docs/KINEMATICS_BEST_ARCHITECTURE.md) |
 | **deploy-clot** (`clot_ml_0`) | `scripts/promote_clot_ml_0.py`, `scripts/eval_clot_ml_0.py` | [docs/WOUND_PROGRESS.md](docs/WOUND_PROGRESS.md) |
+| **DeployClot** (`clot_ml_0` on the local FEM solver) | `scripts/go_deployclot.sh` | [docs/DEPLOYCLOT.md](docs/DEPLOYCLOT.md) |
 | **biochem_gnn** (locked / customer) | `go_customer_predict.ps1`; training archived under `src/archive/mat_growth/` | [docs/BIOCHEM_GNN.md](docs/BIOCHEM_GNN.md) |
 | Mat-growth (reference) / local kinematic corrector (**deprecated — deleted 2026-09-01, not for publication**) | `src/archive/mat_growth/`, `src/archive/corrector_era/` | [docs/MAT_GROWTH.md](docs/MAT_GROWTH.md), [docs/LOCAL_KINEMATIC_CORRECTOR.md](docs/LOCAL_KINEMATIC_CORRECTOR.md) |
 
@@ -181,6 +182,28 @@ replace+depth readout — target met as an oracle. Frozen AP cannot be scaled th
 the next build is a time-varying wall AP (upwind renewal on the existing Damköhler
 closure) feeding the ODE, **not** another `Mat` GNN and not a species GNN as the first
 move.
+
+**SHIPPED 2026-09-03: the locked pointer is `DeployClot_0` (`kind: unified_v0`).**
+`data/reference/clot_gnn_locked.json` was moved after the one SEALED read, which is now
+**SPENT** -- `patient007/013/031/043` read once, wall **0.9572**, off-wall **0.6180**.
+**Quote 0.618, not the cross-validated 0.835, as deployable off-wall performance**: the wall
+generalises (SEALED is *above* CV) and the off-wall does not (0.217 below, three times the
+noise floor). Two physics fixes landed the same day and both are in the shipped artifact --
+the wall-AP consumption closure is OFF at wound nodes (it was a depletion model applied to a
+source; onset MAE 9.2 -> 7.2 steps, recall 0.877 -> 1.000, no new parameter) and
+`replace_scope` defaults to `wound_region` (far field 0.0817 -> 0.2448). See
+[docs/DEPLOYCLOT.md](docs/DEPLOYCLOT.md) 11-15.
+
+**DeployClot (2026-09-02) is `clot_ml_0` trained and evaluated on `flow="fem"`** -- the local
+Carreau solve, no COMSOL velocity in any input. It is what `clot_ml_v0`'s
+`release_status.cold_deploy: "blocked"` was waiting for. Read
+[docs/DEPLOYCLOT.md](docs/DEPLOYCLOT.md) before quoting any deploy number. Three things there
+change how the rest of this file should be read: the local FEM solver reproduces COMSOL's t=0
+field to **median rel L2 0.0064 and gate Jaccard 0.924** over all 54 packs (so `fem` keeps the
+GT stencil and unit gain, unlike `pred`); the cohort is now **FIT 29 / DEV 5 / CLOT_FREE 9 /
+SEALED 4 + 6 wounds**, with `patient047` the second non-SEALED aneurysm and `patient048` the
+no-wound half of the matched A/B pair with `wound_patient005`; and the wound source is **not**
+delayed relative to the healthy wall -- both switch on with `step2t` at ~12 s, measured two ways.
 
 **Unified stack: `clot_ml_0`** (`kind: unified_v0`, promote with
 `scripts/promote_clot_ml_0.py`) — one artifact for wounded and non-wounded vessels. Wall

@@ -33,10 +33,51 @@ LEGACY_NAMES = frozenset({"clot_ml_v0"})
 KIND = "unified_v0"
 
 
+#: The locked pointer.  Same file `src.clot_ml.locked` follows for the GNN generations.
+POINTER = REPO / "data/reference/clot_gnn_locked.json"
+
+
+def pointer_v0_name() -> str | None:
+    """The ``unified_v0`` artifact the locked pointer currently names, or ``None``.
+
+    Returns ``None`` rather than raising when the pointer is missing, unreadable, or names a
+    generation of a different kind, so an ordinary checkout without a promoted artifact keeps
+    working on the compiled-in default.
+    """
+    import json
+
+    try:
+        ptr = json.loads(POINTER.read_text())
+    except (OSError, ValueError):
+        return None
+    if ptr.get("kind") != KIND:
+        return None
+    n = str(ptr.get("name") or "").strip()
+    return n or None
+
+
 def resolve_clot_ml_name(name: str | None = None) -> str:
-    """Map legacy deploy-clot artifact names to the canonical ``clot_ml_0`` id."""
+    """Resolve an artifact id, following the locked POINTER for the canonical name.
+
+    ``clot_ml_0`` is not a directory on disk -- it is the NAME OF WHATEVER IS SHIPPED, and
+    every generation so far has lived under its own id (`clot_ml_v0`, `DeployClot_0`,
+    `DeployClot_1`).  Until 2026-09-03 this function ignored the pointer and returned the
+    compiled-in default, whose directory does not exist, so `_locked_root` fell through to
+    the `clot_ml_v0` legacy fallback.  The consequence was silent and total: **promoting and
+    repointing changed nothing for any caller that did not pass an explicit name** -- which
+    includes `locked.load_default` (it read the pointer for the KIND and then dropped the
+    name) and `CustomerDeployPipeline`, i.e. the shipped product, which asks for
+    ``clot_ml_0`` by that constant and was still being served a two-generation-old artifact
+    built on `clot_gnn_v6`.
+
+    An explicit id is always honoured verbatim, so pinned comparisons against a named past
+    generation are unaffected.
+    """
     n = (name or DEFAULT_NAME).strip()
-    if n in LEGACY_NAMES:
+    if n in LEGACY_NAMES or n == DEFAULT_NAME:
+        pointed = pointer_v0_name()
+        if pointed and (LOCKED / pointed).is_dir():
+            return pointed
         return DEFAULT_NAME
     return n
 
@@ -61,6 +102,20 @@ REPLACE_SCOPE_ALL_LUMEN = "all_lumen"
 REPLACE_SCOPE_WOUND_REGION = "wound_region"
 REPLACE_SCOPES = (REPLACE_SCOPE_ALL_LUMEN, REPLACE_SCOPE_WOUND_REGION)
 
+#: An attenuation is a survival fraction per hop; outside this the depth rule is degenerate
+#: (nothing ever commits, or a whole shell does regardless of `Mat`).
+ATT_CLIP = (0.05, 0.95)
+
+
+def shear_attenuation(sr: np.ndarray, wall: np.ndarray, att0: float, beta: float) -> np.ndarray:
+    """Per-node attenuation from local shear.  ``beta == 0`` is the constant, bit-for-bit."""
+    if not beta:
+        return np.full(np.shape(sr), float(att0), dtype=np.float64)
+    w = np.asarray(wall, dtype=bool)
+    ref = float(np.median(np.asarray(sr)[w])) if w.any() else float(np.median(sr))
+    ratio = max(ref, 1e-12) / np.maximum(np.asarray(sr, dtype=np.float64), 1e-12)
+    return np.clip(float(att0) * ratio ** float(beta), *ATT_CLIP)
+
 
 #: MLS stencil width per flow source.  GT is differentiated at the consumer's own hops=3;
 #: any RECONSTRUCTED field needs a wider stencil to keep its second derivative from being its
@@ -79,9 +134,35 @@ class ClotMlV0Config:
     washout: bool = True
     replace_att: float = REPLACE_ATT
     replace_depth: int = REPLACE_DEPTH
+    #: Shear exponent on the per-hop attenuation:
+    #: ``att_node = clip(replace_att * (sr_ref/sr_node)**att_beta, ATT_CLIP)`` with ``sr_ref``
+    #: the vessel's own median wall shear.  ``0.0`` is the cohort constant, bit-for-bit.
+    #:
+    #: The constant is standing in for TRANSPORT -- `Mat` is made at the surface and has to
+    #: survive convection to reach depth, so how far it gets is local to the flow.  Measured
+    #: leave-one-vessel-out over the six wounds (`scripts/diag_wound_offwall_attenuation.py`,
+    #: DEPLOYCLOT 18): the family `att_beta` in {0, .25, .5, 1} x `replace_depth` in {1,2,3}
+    #: returns held-out wound-lumen 0.8611 against the shipped 0.8375 and wound-region 0.9270
+    #: against 0.9044, with ALL SIX folds picking depth 1 and five of six picking 0.5.
+    #: Left at 0.0 here: the default is what unpromoted callers get, and moving it is an
+    #: artifact decision, made in a manifest.
+    att_beta: float = 0.0
     #: ``all_lumen`` reproduces the original v0 replacement.  ``wound_region`` gives
     #: chemistry the local wound lumen only and leaves the GNN's far-lumen verdict intact.
-    replace_scope: str = REPLACE_SCOPE_ALL_LUMEN
+    #:
+    #: DEFAULT CHANGED 2026-09-03, on the six-vessel wound cohort under deploy flow
+    #: (`scripts/eval_replace_scope.py`).  The two scopes are IDENTICAL on wall, wound region
+    #: and wound lumen -- 0.8866 / 0.8642 / 0.8285 either way, to four decimals -- and differ
+    #: only in the far field, where `all_lumen` reads 0.0817 against `wound_region`'s 0.2448.
+    #: `wound_patient004/005/006` go from exactly 0.0000 to 0.356 / 0.179 / 0.164; only
+    #: `wound_patient003` gives back 0.047.  All six leave-one-vessel-out folds pick
+    #: `wound_region`.  At n=3 there was no basis to choose and WOUND_PROGRESS 19 shipped
+    #: `all_lumen`; there is now.
+    #:
+    #: Artifacts promoted before this date carry `replace_scope` in their own manifest and are
+    #: unaffected -- `clot_ml_v0_chem_legacy`, which never recorded one, was pinned to
+    #: `all_lumen` explicitly on the same day so this default could move without changing it.
+    replace_scope: str = REPLACE_SCOPE_WOUND_REGION
     #: Path relative to repo root, or None.  Missing file = physics AP (the hook).
     ap_residual: str | None = None
 
@@ -114,6 +195,34 @@ def _replace_target(data, off: np.ndarray, scope: str) -> np.ndarray:
         _region, lumen, _far = wound_region_masks(data)
         return np.asarray(off, dtype=bool) & np.asarray(lumen, dtype=bool)
     raise ValueError(f"Unknown chemistry replacement scope {scope!r}; expected one of {REPLACE_SCOPES}")
+
+
+def metrics_invalid_reason(bundle: dict) -> str | None:
+    """Why this artifact must not be scored, or ``None`` if it may be.
+
+    A PRODUCTION artifact is trained with `--include-sealed`, i.e. on the whole corpus, so
+    nothing is held out and no number computed on any vessel is an estimate of anything.  The
+    stamp lands on the temporal_v4 manifest at the bottom of the chain, so this walks the
+    chain rather than looking at one level -- a unified_v0 wrapping a production base is just
+    as unscoreable as the base itself.
+
+    The two families are otherwise identical in shape, which is exactly why the boundary needs
+    a machine-checkable marker instead of a naming convention (docs/PUBLICATION_PLAN.md 12).
+    """
+    seen = []
+    node = bundle
+    for _ in range(4):
+        if not isinstance(node, dict):
+            break
+        man = node.get("manifest")
+        if isinstance(man, dict):
+            seen.append(man)
+        node = node.get("base")
+    for man in seen:
+        if man.get("metrics_invalid"):
+            return str(man.get("metrics_invalid_reason")
+                       or f"{man.get('name', '?')} is stamped metrics_invalid")
+    return None
 
 
 def load_v0_bundle(name: str | None = None, device=None) -> dict:
@@ -242,22 +351,34 @@ def replace_depth_mask(
     owner: np.ndarray,
     *,
     crit: float,
-    att: float,
+    att,
     depth: int,
 ) -> np.ndarray:
-    """Off-wall mask from owner ``Mat`` through ``att**d`` bars.  Solid is the caller's."""
+    """Off-wall mask from owner ``Mat`` through ``att**d`` bars.  Solid is the caller's.
+
+    ``att`` is a scalar attenuation per hop, or a PER-NODE array of them.  The per-node form
+    exists because the constant is standing in for transport: material made at the surface
+    reaches depth ``d`` against washout, so how far it gets is a local property of the flow,
+    not a cohort constant.  A scalar reproduces the shipped rule exactly.
+    """
     n = int(mat.shape[0])
     out = np.zeros(n, dtype=bool)
-    att = float(att)
     crit = float(crit)
     own = np.asarray(owner)
+    a = np.asarray(att, dtype=np.float64)
+    per_node = a.ndim > 0
+    if per_node and a.shape != (n,):
+        raise ValueError(f"per-node att must be [N={n}], got {a.shape}")
     for d in range(1, int(depth) + 1):
         if d - 1 >= len(shells):
             break
         valid = np.asarray(shells[d - 1], dtype=bool) & (own >= 0)
         if not valid.any():
             continue
-        bar = crit / max(att ** d, 1e-30)
+        if per_node:
+            bar = crit / np.maximum(a[valid] ** d, 1e-30)
+        else:
+            bar = crit / max(float(a) ** d, 1e-30)
         out[valid] = mat[own[valid]] >= bar
     return out
 
@@ -348,7 +469,7 @@ def solve_fem_into_pack(data) -> None:
 
 
 def predict_clot_ml_0(bundle, data, times, *, flow: str = "gt", sample=None,
-                      preflight: str = "warn") -> dict:
+                      preflight: str = "warn", mat_field=None) -> dict:
     """Unified inference.  No-wound packs are bit-identical to the base GNN.
 
     Wound packs keep the GNN on the healthy wall (and the wound complement on the injured
@@ -406,11 +527,21 @@ def predict_clot_ml_0(bundle, data, times, *, flow: str = "gt", sample=None,
 
     w = bundle["base"].get("wound") or {}
     wr = (float(w["g_pre"]), float(w["g_post"])) if "g_pre" in w else None
-    traj = chemistry_mat_trajectory(
-        data, bio, cfg, flow=flow, sample=S,
-        ap_residual=bundle.get("ap_residual"),
-        wound_rate=wr,
-    )
+    if mat_field is not None:
+        # `mat_field` substitutes a [T, N] SI `Mat` field for the chemistry integration and
+        # changes nothing else -- same shells, same owner map, same `att`/`depth`/`scope`,
+        # same monotone union.  That makes the learned-field arm an exact ablation of the one
+        # component WOUND_PROGRESS 16 localised the off-wall gap to, rather than a second
+        # pipeline that has to be argued to be comparable.
+        traj = np.asarray(mat_field, dtype=np.float64)
+        if traj.ndim != 2 or traj.shape[1] != int(data.num_nodes):
+            raise ValueError(f"mat_field must be [T, N={int(data.num_nodes)}], got {traj.shape}")
+    else:
+        traj = chemistry_mat_trajectory(
+            data, bio, cfg, flow=flow, sample=S,
+            ap_residual=bundle.get("ap_residual"),
+            wound_rate=wr,
+        )
     crit = float(bio.viscosity_mat_crit)
     solid = solid_mask(data)
     pos = np.asarray(S["pos"], dtype=np.float64)
@@ -423,6 +554,13 @@ def predict_clot_ml_0(bundle, data, times, *, flow: str = "gt", sample=None,
     grid = sorted({int(t) for t in times})
     T_raw = int(traj.shape[0])
     off = ~solid
+    att_field = float(cfg.replace_att)
+    if cfg.att_beta:
+        from src.core_physics.physics_wall_model import t0_flow_fields
+
+        _f = t0_flow_fields(data, bio, hops=_flow_hops(flow), flow_source=flow)
+        att_field = shear_attenuation(_f.sr, data.mask_wall.reshape(-1).bool().cpu().numpy(),
+                                      float(cfg.replace_att), float(cfg.att_beta))
     replace_target = _replace_target(data, off, cfg.replace_scope)
     prev = np.zeros(int(data.num_nodes), dtype=bool)
     series: dict[int, np.ndarray] = {}
@@ -431,7 +569,7 @@ def predict_clot_ml_0(bundle, data, times, *, flow: str = "gt", sample=None,
         fld = traj[int(np.clip(ti, 0, T_raw - 1))]
         chemistry_mask = replace_depth_mask(
             fld, shells, owner,
-            crit=crit, att=float(cfg.replace_att), depth=int(cfg.replace_depth),
+            crit=crit, att=att_field, depth=int(cfg.replace_depth),
         )
         m[replace_target] = chemistry_mask[replace_target]
         m = m | prev

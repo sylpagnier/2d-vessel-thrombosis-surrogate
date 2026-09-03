@@ -26,7 +26,7 @@ for p in (str(REPO), str(REPO / "scripts")):
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
 from src.clot_ml.geometry_splits import classes_for, describe, stratified_folds  # noqa: E402
 from src.core_physics.t0_device import require_cuda_device  # noqa: E402
-from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
 from train_clot_gnn import train_one  # noqa: E402
 
 OUT = REPO / "outputs/phase9_scores"
@@ -40,6 +40,9 @@ BASE = dict(epochs=80, dim=64, layers=4, drop=0.1, lr=3e-3, wd=1e-4, pos_weight=
             # `shape_w` constrains the field's SPREAD toward a running cohort reference,
             # leaving burden free.  Both 0/"l1" reproduce the shipped objective exactly.
             burden_agg="l1", burden_cvar_q=0.5, shape_w=0.0, burden_t_off=0.0,
+            # gradient weight on a CLOT-FREE vessel's whole loss; 1.0 = shipped objective.
+            # See train_clot_gnn.py for the measurement that motivates it.
+            clot_free_w=1.0,
             # what a CLOT-FREE vessel contributes to the metric term.  "none" = nothing (it
             # still trains on per-node BCE); "score" = the metric's false-positive branch.
             # `score` has NO measurable effect either way (MODEL_REVIEW 8f.4); "none" is
@@ -141,7 +144,15 @@ def main() -> int:
 
     dev_t = require_cuda_device()
     cache = attach_physics(load_cache(args.cache))
-    pool = [a for a in cache]
+    # SEALED IS NEVER IN THE POOL, whatever the cache holds.  The cache builders gained an
+    # `--include-sealed` flag on 2026-09-02 so the final read has features to run on; caching
+    # a sealed vessel is not spending it, but training or selecting on one is, and the pool
+    # used to be "whatever is in the directory".  Dropped here rather than at the call site so
+    # no launcher can forget (docs/SEALED_SPLIT.md).
+    dropped = sorted(a for a in cache if a in SEALED)
+    if dropped:
+        print("[i] SEALED excluded from the CV pool: %s" % ", ".join(dropped), flush=True)
+    pool = [a for a in cache if a not in SEALED]
     if args.pool == "carrying":
         pool = [a for a in pool if a not in CLOT_FREE]
     classes = classes_for(pool, PACKS)

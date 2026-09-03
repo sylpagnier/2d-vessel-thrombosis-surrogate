@@ -52,7 +52,10 @@ def test_the_historical_sealed_constant_is_frozen():
 
 
 def test_clot_free_vessels_are_their_own_category():
-    assert len(CLOT_FREE) == 8
+    # 9 since 2026-09-03: `patient038` joined on the corpus rebuild -- its GT `Mat` is
+    # identically zero at every frame (`outputs/mat_field_cache_fem/patient038.npz`, gtmax
+    # 0.00), so it is a clot-free vessel and not a FIT one that happens to score well.
+    assert len(CLOT_FREE) == 9
     assert CLOT_FREE == WALL_COHORT_V2_CLOT_FREE
     assert not (set(CLOT_FREE) & (set(FIT) | set(DEV) | set(SEALED)))
     for a in CLOT_FREE:

@@ -720,3 +720,108 @@ Reproduce: `scripts/publication/_run_flow_requirement_inputs.sh` then
 Fig 9 is **done**. Remaining from §10: the geometry/main sweeps (Fig 7), Tables 2 and 6, the
 SEALED run, and the two hand-drawn schematics. Also now due: **correct PUBLICATION_NOTES §2's
 correlation signs and its n=1 cliff sentence**, per the two boxes above.
+
+
+---
+
+## 12. The train / validate / test contract for the final artifact (2026-09-03)
+
+Written because the brief "train on all vessels with a proper validation set and maximise the
+deploy score on all vessels" contains a contradiction that would make the result
+unpublishable, and the resolution is worth stating once, precisely.
+
+**You cannot train on all 54 vessels and also report a score on them.** Every number would be
+in-sample. It would go up, it would mean nothing, and it is the first thing a reviewer checks.
+What is standard, defensible, and already this project's structure is a three-tier contract in
+which each tier answers exactly one question.
+
+| tier | vessels | decides | reports |
+|---|---|---|---|
+| **development pool** | 36 non-SEALED (27 clot-carrying + 9 clot-free) | every hyper-parameter and every readout scalar, selected **out-of-fold** in a geometry-stratified 5-fold | **the generalisation estimate — the number the paper leads with** |
+| **final fit** | the same 36, all of them | nothing; the method is already frozen | the shipped artifact's weights |
+| **held-out test** | SEALED 4 | nothing, ever | one confirmatory read, taken 2026-09-03 |
+| **wound cohort** | 6 wound vessels | the wound-specific scalars, leave-one-vessel-out | the wound estimate |
+
+Fitting the final artifact on all 36 after cross-validation is **not** leakage: the CV estimates
+the performance of the *procedure*, and the deployed model is that procedure run on all the
+data it was validated over. The leakage would be *reporting* the 36 as if held out, which this
+project does not do — `eval_expected_score_readout.py` selects every scalar on the out-of-fold
+scores of vessels outside the held-out fold, and `run_phase9_cv.py` drops SEALED from the pool
+programmatically so no launcher can forget.
+
+### 12.1 Two weaknesses that must be stated, not engineered around
+
+**The wound arm has no untouched vessel.** There are six wounds in existence and all six were
+used: the two-regime rate, `replace_depth`, `att_beta` and `replace_scope` were each selected
+leave-one-vessel-out. LOVO is an honest *estimate* and it is the right protocol at n=6, but it
+is not a held-out test, and the paper must not imply one. The single genuine counterfactual is
+the matched A/B pair (`wound_patient005` / `patient048` — same outline, remeshed, with and
+without the `sel1` selection), and it should carry more weight in the manuscript than its size
+suggests, precisely because it is the only wound evidence with a control.
+
+**SEALED is spent.** It was read once. Everything changed since is provably unreachable on a
+pack with no wound mask (asserted at promotion on three vessels, confirmed on six at
+`+0.0000`, pinned by `test_v0_is_the_base_gnn_on_a_nowound_pack`), and no SEALED vessel carries
+a wound — so that read still describes the current artifact without a second read. There will
+not be a second read. Any further tuning is a development-pool activity and must be reported
+as such.
+
+### 12.2 The headline is BATC, one metric, everywhere
+
+The metric is the **Burden-Adjusted Thrombus Concordance (BATC)** — defined in
+[DEPLOYCLOT.md](DEPLOYCLOT.md) §0, which is the text the Methods section should be built from.
+`severity` and `guiding` are internal names for its two settings and neither belongs in a
+manuscript; `severity_metric.BATC` / `BATC_0` are the published aliases.
+
+**Quote BATC.**  It is the score this project's whole lineage runs on — `eval_strict.py` and
+`eval_expected_score_readout.py` construct it directly and have never defaulted to anything
+else, so PHASE10's v3/v4 comparison, MODEL_REVIEW's ablations and every CV table are already
+BATC.  Switching the headline to the unadjusted BATC₀ would break the one continuous
+comparison the paper has, for a score that is stricter for reasons that do not apply here:
+2-hop tolerance is tight for a one-node-thick off-wall shell, F₀.₅ penalises recall when recall
+is the known failure mode, and an unadjusted rate distorts a cohort whose off-wall burden runs
+4 → 126 nodes.
+
+The lineage, all BATC, off-wall, strictly nested, identical protocol:
+
+| | off-wall |
+|---|---|
+| physics backbone | 0.4141 |
+| v3 | 0.7011 |
+| v4 (n=19, pre-repair — PHASE10) | 0.7366 |
+| v4 (n=36, post-repair) | 0.7078 |
+| **DeployClot, deploy-legal flow (n=36)** | **0.8358** |
+
+BATC₀ goes in a supplementary table, with the knob-by-knob decomposition of the 0.192 offset
+so a reader can convert between the two.  **Never quote one against the other** — §22 records
+what that cost.
+
+### 12.3 What actually makes this publishable — rank the contributions this way
+
+1. **Deploy-legal flow.** The entire pipeline — training, readout selection, evaluation — runs
+   without a ground-truth velocity field anywhere in the inputs. A local Carreau
+   Navier–Stokes solve on the vessel's own mesh reproduces COMSOL's `t=0` field to median
+   rel L2 **0.0064** over 54 packs. Most thrombosis-ML work presumes CFD is already available;
+   this is the contribution that makes the tool deployable rather than retrospective.
+2. **The C0 distributional constraint, with its mechanism.** A training-time penalty on the
+   field's within-domain *spread* makes the score cuttable by a single cohort constant:
+   off-wall **+0.1312** paired, CI [0.055, 0.215], P<0.001. The mechanism is shown, not
+   asserted — removing the per-vessel scale post hoc costs 0.13–0.30 off-wall (§20.1), so the
+   absolute level is carrying real burden information rather than nuisance.
+3. **The matched A/B counterfactual.** Same geometry with and without the injury, scored on the
+   *difference*. Rare in this literature.
+4. **The physics-informed wound complement.** The wall-AP closure is a consumption model and a
+   wound is a platelet *source*; deleting it at wound nodes costs no parameter and takes onset
+   MAE 9.2 → 7.2 and recall 0.877 → 1.000.
+5. **The negative results, as a section.** The readout ceiling measured four ways, the learned
+   `Mat` field, hysteresis and dilation, the flat learning curve. A paper that shows where its
+   own method stops is stronger than one that does not, and this one can bound the stopping
+   point quantitatively.
+
+### 12.4 What "maximise the deploy score" legitimately means here
+
+Only this: **choose the final configuration by cross-validation, then fit on all 36.** The
+levers still open at 2026-09-03 are a small config sweep (`clot_free_w`), not a new method —
+§20, §23 and §24 closed the readout and bounded the ranking. A sweep selected on the same folds
+it is reported on is mildly optimistic; the honest treatment is to report every arm of the
+sweep, not just the winner, so the reader can see the spread the selection was made over.

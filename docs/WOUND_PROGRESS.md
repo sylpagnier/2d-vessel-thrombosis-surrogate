@@ -1283,15 +1283,75 @@ more 003-like vessels exist.  v6 is not in this artifact.
    wake is worth **+0.0268 final / +0.0143 mean-over-time** on the wall ODE over 26 vessels
    but is fully absorbed by v5's head, which was trained on the wake-free clock (§14.4).
    This is the cheapest unbanked gain in the stack.
-5. **Replace the depth rule's form.** `0.16^k · Mat >= crit` is a magnitude threshold and the
-   physics is a growth front at 7.75% of horizon per hop (§14.2) — the rule cannot reach past
-   two shells even given perfect `Mat`. Needs per-node commitment, not shells, because GT
-   clot at depth is sparse (8% positive at hops 7–8). §16.5 bounds what this is worth: shell 1
-   alone caps 003 at 0.8667.
-6. **More wound simulations.** Every remaining limit is an n=3 limit, and §14.1(3) makes it
-   concrete: `wound_patient003` is the only vessel in the dataset that exhibits near-wall
-   platelet activation, so there is nothing to fit a selector against and the one candidate
-   feature is falsified.
+5. ~~**Replace the depth rule's form.**~~ **DONE 2026-09-03, and the diagnosis was backwards.**
+   The rule was not failing to reach; it was reaching one shell too far. Depths 2–5 are
+   bit-identical on all six wounds — past shell 2 the field never clears the bar — and the only
+   thing shell 2 does is add false positives on `wound_patient005` (0.9433 → 0.7979). What the
+   constant `att` *is* standing in for is TRANSPORT, so it is made local:
+   `att_node = clip(att0 * (sr_ref/sr_node)**beta, 0.05, 0.95)`, one scalar, `beta=0` the old
+   constant bit-for-bit. Leave-one-vessel-out over the six wounds: wound-lumen
+   **0.8375 → 0.8611**, wound-region **0.9044 → 0.9270**, all six folds picking depth 1 and five
+   of six picking `beta = 0.5`. Shipped as `DeployClot_1`.
+   [DEPLOYCLOT.md](DEPLOYCLOT.md) §18.
+6. ~~**More wound simulations.**~~ **Delivered 2026-09-02** — `wound_patient004/005/006`
+   take the wound cohort to **n=6**, and the leave-one-vessel-out fit now runs over all six
+   (`scripts/train_wound_rate.py --flow fem`, `WOUND_COHORT` in
+   `src/biochem_gnn/wall_cohort_constants.py`). §14.1(3)'s limit is unchanged in kind:
+   `wound_patient003` is still the only vessel exhibiting near-wall platelet activation.
 
-7. Commission the paired A/B run (§7) — same `.nas`, wound and no-wound.
-8. Re-measure §10.3 deploy-faithfully (predicted t=0 flow rather than GT t=0 flow).
+7. ~~Commission the paired A/B run (§7)~~ — **it exists.** `wound_patient005` and
+   `patient048` are the same outline, remeshed, with and without the `sel1` selection:
+   identical `d_bar` to 16 significant figures, median wall-node distance **0.0000**, and
+   exactly 58 of `patient048`'s nodes land on the 58 wound nodes. Scored by
+   `scripts/eval_wound_ab_pair.py`, which grades the DIFFERENCE — the clot the injury created
+   — rather than the two vessels. See [DEPLOYCLOT.md](DEPLOYCLOT.md) §4.
+
+8. ~~Re-measure §10.3 deploy-faithfully~~ — **done, and not with the surrogate.** The deploy
+   flow is the local Carreau FEM solve (`flow="fem"`), which reproduces COMSOL's t=0 field to
+   median rel L2 0.0064 and gate Jaccard 0.924 over all 54 packs — close enough that it keeps
+   the GT stencil and unit gain rather than the RGP-DEQ arm's fitted ×3.00 correction.
+   [DEPLOYCLOT.md](DEPLOYCLOT.md) §1.
+
+9. **SHIPPED 2026-09-03 — the wall-AP closure does not apply at a wound.** The closure is a
+   Damköhler balance for a *gated* wall reaction consuming `AP` faster than shear renews it.
+   A wound deletes the gate and is a net platelet **producer**: COMSOL has `AP` ending at
+   **10.3×** its initial value on `wound_patient003` where the closure predicts 0.96, and
+   suppressing it **5×** on `wound_patient006` where GT leaves it at 0.93. Dropping it at
+   wound nodes costs **no parameter** and, leave-one-vessel-out over six wounds, takes onset
+   MAE **9.2 → 7.2** steps and recall **0.877 → 1.000** at unchanged curve L1. It also lifts
+   `wound_patient006`'s promotion coverage **26% → 100%**.
+   [DEPLOYCLOT.md](DEPLOYCLOT.md) §11.
+
+10. **`replace_scope` now defaults to `wound_region`.** `all_lumen` was erasing a far-field
+   GNN verdict that was right: far field **0.0817 → 0.2448** over six wounds, identical on
+   wall / wound-region / wound-lumen, all six LOVO folds agreeing. [DEPLOYCLOT.md](DEPLOYCLOT.md) §10.
+
+11. **A resting-platelet renewal closure does NOT help — do not re-derive.** RP survival is a
+   near-perfect discriminator of which wound nodes clot (100% above 0.90 survival, 67% below),
+   but a closure that suppresses `rp` can only *lower* a rate that is already 8.4× too low on
+   the one stagnation-regime vessel. LOVO-identical to the two-constant arm; the optimiser
+   drives the coefficient to ~0. [DEPLOYCLOT.md](DEPLOYCLOT.md) §12.
+
+12. **The wound source is NOT time-delayed relative to the healthy wall.** Checked two ways
+   after it was proposed: within-pack onset extrapolation agrees to a few seconds on all six
+   vessels, and the wound/wall `Mat` ratio at the first stored frame sits on the no-delay
+   trend (1.00–1.03× on four vessels, above it on two) where a 100 s delay would put it 2.8×
+   below. [DEPLOYCLOT.md](DEPLOYCLOT.md) §3. Do not re-derive.
+
+13. **The learned `Mat` field (v6) does NOT beat the physics — do not re-derive.** Re-run
+   2026-09-03 on six wounds, deploy-legal FEM flow, leave-one-vessel-out, with the residual
+   base moved from the plain surface ODE onto the field that actually ships. At the old
+   readout it wins by +0.0100 wound-lumen; at the corrected readout of §18 it **loses by
+   0.0190** and is identical to the chemistry on five of six vessels. Its whole gain was
+   `wound_patient005`, where the residual made the field *smaller* so shell 2 stopped firing —
+   the depth fix, expressed as a magnitude. §17.2's 0.4755 → 0.9489 was measured against the
+   2026-08 v4w readout, which §17.1 replaced two days later; today's chemistry scores 0.9578 on
+   that same vessel, above the learned field's old number. The advantage was real and the
+   readout fix consumed it. [DEPLOYCLOT.md](DEPLOYCLOT.md) §19.
+
+14. **A second stagnation-regime wound is now the highest-value simulation to commission.**
+   Two separate effects measured on 2026-09-03 each live in exactly ONE vessel — the shear
+   modulation is worth +0.070 on `wound_patient006` and nothing elsewhere, and the depth
+   reduction is worth +0.145 on `wound_patient005` and nothing elsewhere — so a six-vessel
+   leave-one-out can only license them as a pair, and cannot license either alone. §14.1(3)'s
+   n=1 limit is unchanged in kind and now has a price attached to it.

@@ -16,6 +16,37 @@ WALL_COHORT_V2_VIZ_RELEASED: tuple[str, ...] = (
     "patient042",
 )
 
+#: 2026-09-02: the final synthetic corpus landed -- `patient045`-`patient048` (full horizon,
+#: clot-carrying) and `patient038` (full horizon, empty GT).  `patient047` is the SECOND
+#: non-SEALED aneurysm, which is what `src/clot_ml/geometry_splits.py` says the protocol was
+#: missing: with one, no split could train on an aneurysm and measure a different one.
+#: `patient048` is the no-wound half of the matched A/B pair whose wound half is
+#: `wound_patient005` -- same outline to 0.0000 median wall-node distance, remeshed.
+WALL_COHORT_V3_ADDED: tuple[str, ...] = (
+    "patient045",
+    "patient046",
+    "patient047",
+    "patient048",
+)
+
+#: The paired counterfactual: identical vessel outline, wound and no-wound.  Held for the
+#: A/B read; both halves are scored by the fold model that held `patient048` out, and no
+#: wound pack is ever in the GNN training pool, so neither half is in-sample.
+WOUND_AB_PAIR: tuple[str, str] = ("wound_patient005", "patient048")
+
+#: Every wound simulation, in run order.  T < `wall_cohort_splits.MIN_T` on all six, so they
+#: are NOT in the GNN training pool -- a truncated horizon is a different label quantity
+#: (docs/PHASE6_RESULTS.md 6.2).  They fit the wound complement (leave-one-vessel-out) and
+#: they are the unified artifact's held-out wound evaluation.
+WOUND_COHORT: tuple[str, ...] = (
+    "wound_patient001",
+    "wound_patient002",
+    "wound_patient003",
+    "wound_patient004",
+    "wound_patient005",
+    "wound_patient006",
+)
+
 WALL_COHORT_V2_TRAIN: tuple[str, ...] = (
     "patient003",
     "patient004",
@@ -43,7 +74,7 @@ WALL_COHORT_V2_TRAIN: tuple[str, ...] = (
     "patient040",
     "patient041",
     "patient044",
-) + WALL_COHORT_V2_VIZ_RELEASED
+) + WALL_COHORT_V2_VIZ_RELEASED + WALL_COHORT_V3_ADDED
 
 # FINAL_HALF only since 2026-08-22.
 WALL_COHORT_V2_GENERALIZATION: tuple[str, ...] = (
@@ -73,6 +104,7 @@ WALL_COHORT_V2_CLOT_FREE: tuple[str, ...] = (
     "patient030",
     "patient033",
     "patient034",
+    "patient038",
 )
 
 WALL_COHORT_V2_DEV: tuple[str, ...] = (

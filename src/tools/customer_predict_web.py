@@ -23,6 +23,7 @@ import threading
 import time
 import traceback
 import uuid
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -780,10 +781,16 @@ def main(argv: list[str] | None = None) -> int:
     ensure_inbox()
     _start_inference_worker(REQUIRE_CUDA)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"[i] Local FEM Solver web predict: http://{args.host}:{args.port}", flush=True)
+    url = f"http://{args.host}:{args.port}"
+    print(f"[i] Local FEM Solver web predict: {url}", flush=True)
     print(f"[i] Geometries folder: {ensure_inbox()}", flush=True)
     if args.cpu:
         print("[WARN] CPU mode (slow). CUDA is recommended.", flush=True)
+    # A double-click launcher (the packaged customer bundle's run.bat) has no terminal a
+    # non-technical user would think to read a URL from -- open the browser for them. Off the
+    # main thread so it can't delay serve_forever() below; harmless no-op if a browser can't
+    # be found (e.g. a headless dev box), since webbrowser.open() just returns False then.
+    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

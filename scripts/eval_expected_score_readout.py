@@ -45,14 +45,102 @@ from eval_strict import (  # noqa: E402
     FAMILIES, GRID, apply_adapt, load_scores, tune_adapt,
 )
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
+from src.clot_ml.calibration import apply_rule as cal_apply  # noqa: E402
+from src.clot_ml.calibration import rule_grid as cal_grid  # noqa: E402
 from src.clot_ml.geometry_splits import classes_for, is_priority  # noqa: E402
-from src.clot_ml.severity_metric import DEFAULT, SeverityScorer, soft_severity  # noqa: E402
+from src.clot_ml.severity_metric import (  # noqa: E402
+    DEFAULT, LEGACY, SeverityScorer, soft_severity,
+)
 from src.clot_ml.softmetric import dilation_operator, soft_dilate, to_torch_sparse  # noqa: E402
 
 PACKS = REPO / "data/processed/graphs_biochem_anchors"
 GAMMA = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
 KSCALE = [0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 2.0]
 N_PREFIX = 40          # log-spaced prefix lengths evaluated per vessel/domain
+
+
+#: Label-free per-vessel cut rules (`src/clot_ml/calibration.py`).  Each replaces the cohort
+#: CONSTANT with a quantity computed from this vessel's own score distribution, so a vessel
+#: whose field is uniformly shifted gets a correspondingly shifted cut for free.  They were
+#: written on 2026-08-26 and, until now, never run against the shipped readout -- only a unit
+#: test imported them.  `absolute` is omitted here because it IS `cohort_cut`, the control.
+CAL_RULES = ("quantile", "rel_max", "phys_anchored", "gap")
+
+
+def norm_rank(sc, d, phys):
+    """Empirical CDF of the score WITHIN the domain: the fully scale-free field.
+
+    Every vessel's normalised field is uniform on [0, 1], so a cohort cut becomes a
+    committed FRACTION.  Burden runs 11-313 nodes across this cohort and domain size runs
+    with it, so a fraction is not a constant count -- but it is the strongest assumption
+    here, and it is the one to beat.
+    """
+    v = np.asarray(sc, dtype=np.float64)
+    out = np.zeros_like(v)
+    idx = np.flatnonzero(d)
+    if idx.size == 0:
+        return out
+    order = idx[np.argsort(v[idx])]
+    out[order] = np.linspace(0.0, 1.0, idx.size)
+    return out
+
+
+def norm_relmax(sc, d, phys):
+    """``score / max(score)`` inside the domain -- keeps the field's SHAPE, drops its scale.
+
+    Weaker than `norm_rank`: a vessel with one sharp peak stays sharp, so the burden signal
+    in the field's shape survives the normalisation.
+    """
+    v = np.asarray(sc, dtype=np.float64)
+    idx = np.flatnonzero(d)
+    if idx.size == 0:
+        return np.zeros_like(v)
+    m = float(v[idx].max())
+    return v / m if m > 0 else np.zeros_like(v)
+
+
+def norm_physq(sc, d, phys):
+    """Rank CDF RE-CENTRED so the physics mask's own size sits at 0.5.
+
+    THE IDEA.  `docs/DEPLOYCLOT.md` 14 localised the off-wall deficit to cut PLACEMENT: the
+    ranking transfers (AUC 0.9964 on vessels never seen) while the cohort constant does not,
+    because each vessel's score SCALE is its own.  `PHASE9_ML` 4 killed budget rules that
+    predicted a COUNT from the physics mask.  This uses the same quantity as a LOCATION
+    instead: the backbone commits `n_p` nodes in this domain with zero free parameters, so
+    the quantile `1 - n_p/n_d` is a deploy-legal guess at where the boundary sits, and the
+    cohort then fits one scalar saying how far off the backbone systematically is.
+
+    A cohort cut of exactly 0.5 commits exactly the physics count; above 0.5 is stricter
+    than the backbone, below is looser, and the mapping is monotone so the RANKING -- the
+    part that transfers -- is untouched.
+    """
+    v = np.asarray(sc, dtype=np.float64)
+    idx = np.flatnonzero(d)
+    if idx.size == 0:
+        return np.zeros_like(v)
+    u = norm_rank(v, d, phys)
+    n_p = int((np.asarray(phys, dtype=bool) & d).sum())
+    q = 1.0 - float(np.clip(n_p, 1, idx.size - 1)) / float(idx.size)
+    q = float(np.clip(q, 1e-3, 1.0 - 1e-3))
+    out = np.zeros_like(v)
+    lo = u <= q
+    out[lo & d] = 0.5 * u[lo & d] / q
+    hi = (~lo) & d
+    out[hi] = 0.5 + 0.5 * (u[hi] - q) / (1.0 - q)
+    return out
+
+
+NORMS = {"rank": norm_rank, "relmax": norm_relmax, "physq": norm_physq}
+
+
+def oracle_cut_score(vs_a, sc_a, d):
+    """Best score any single cut reaches on THIS vessel -- the ceiling, never an arm."""
+    best = float("nan")
+    for t in GRID:
+        x = vs_a.score(d & (sc_a >= t), d)
+        if x == x and (best != best or x > best):
+            best = float(x)
+    return best
 
 
 def expected_curve(sc, dom, D_t, dev, gamma):
@@ -117,6 +205,15 @@ def main() -> int:
     sc = {a: sc_all[(fo[a], a)] for a in pool}
     vs = {a: SeverityScorer(cache[a]["edge_index"], cache[a]["y"] > 0.5,
                             len(cache[a]["wall"]), DEFAULT) for a in pool}
+    # The SAME masks under the `guiding` score -- `SeverityScorer(..., LEGACY)` reproduces
+    # `evaluate.domain_score` exactly (verified to 0.00e+00 over 13 vessel-domains), and
+    # `guiding` is what `species_continuous_clout_score_mode()` returns by default, so it is
+    # the metric `eval_clot_ml_0.py`, the SEALED read and every wound number are already on.
+    # Reporting both is what stops a severity number being quoted against a guiding one
+    # (docs/DEPLOYCLOT.md 22).  SELECTION is unchanged -- it stays on `vs` -- so this run is
+    # bit-identical in what it picks; only the reporting is wider.
+    vsg = {a: SeverityScorer(cache[a]["edge_index"], cache[a]["y"] > 0.5,
+                             len(cache[a]["wall"]), LEGACY) for a in pool}
     Dt = {a: to_torch_sparse(dilation_operator(cache[a]["edge_index"],
                                                len(cache[a]["wall"]), 2), dev) for a in pool}
     doms = {"wall": lambda S: S["wall"], "off": lambda S: ~S["wall"]}
@@ -149,9 +246,13 @@ def main() -> int:
         m[order[:k]] = True
         return m
 
-    ARMS = ["cohort_cut", "expected", "expected_tuned", "expected_reg", "expected_both",
-            "resid", "resid_adapt", "nested_pick"]
+    ARMS = (["cohort_cut", "expected", "expected_tuned", "expected_reg", "expected_both",
+             "resid", "resid_adapt"]
+            + ["cal_%s" % r for r in CAL_RULES]
+            + ["resid_%s" % n for n in NORMS]
+            + ["nested_pick", "oracle_cut"])
     rows = {r: {a: {} for a in pool} for r in ARMS}
+    rowsg = {r: {a: {} for a in pool} for r in ARMS}
     masks = {a: np.zeros(len(sc[a]), bool) for a in pool}
     for k, held in sorted(folds.items()):
         sel = [a for a in pool if a not in held]
@@ -209,6 +310,33 @@ def main() -> int:
                     lambda a: apply_adapt(cache[a], sc[a], "resid", th_r, d_of, b_r, med_r)
                     & d_of(cache[a])),
             }
+
+            # --- label-free per-vessel cut rules, one cohort scalar each, fitted in fold
+            for rname in CAL_RULES:
+                bq, bp = -1e9, float(cal_grid(rname)[0])
+                for pv in cal_grid(rname):
+                    v = [x for x in (vs[a].score(
+                        cal_apply(rname, sc[a], d_of(cache[a]), cache[a]["phys_mask"], pv),
+                        d_of(cache[a])) for a in sel) if x == x]
+                    q = float(np.mean(v)) if v else -1e9
+                    if q > bq:
+                        bq, bp = q, float(pv)
+                cands["cal_%s" % rname] = (bq, (lambda rn, pv: lambda a: cal_apply(
+                    rn, sc[a], d_of(cache[a]), cache[a]["phys_mask"], pv))(rname, bp))
+
+            # --- the SHIPPED resid readout, run on a per-vessel NORMALISED field.  The
+            # readout is unchanged; only the field it cuts is made scale-free, so this
+            # isolates "the cut is in the wrong place" from "the rule is the wrong shape".
+            for nname, nfn in NORMS.items():
+                nsc = {a: nfn(sc[a], d_of(cache[a]), cache[a]["phys_mask"]) for a in pool}
+                th_n = FAMILIES["resid"][0](cache, vs, sel, {a: nsc[a] for a in sel}, GRID)
+                cands["resid_%s" % nname] = (
+                    q_of((lambda ns, th: lambda a: vs[a].score(
+                        FAMILIES["resid"][1](cache[a], ns[a], th) & d_of(cache[a]),
+                        d_of(cache[a])))(nsc, th_n)),
+                    (lambda ns, th: lambda a: FAMILIES["resid"][1](cache[a], ns[a], th)
+                     & d_of(cache[a]))(nsc, th_n))
+
             pick = max(cands, key=lambda r: cands[r][0])
             for a in held:
                 d = d_of(cache[a])
@@ -220,24 +348,48 @@ def main() -> int:
                 rows["expected_both"][a][dk] = vs[a].score(cands["expected_both"][1](a), d)
                 rows["resid"][a][dk] = vs[a].score(cands["resid"][1](a), d)
                 rows["resid_adapt"][a][dk] = vs[a].score(cands["resid_adapt"][1](a), d)
+                for rname in CAL_RULES:
+                    rows["cal_%s" % rname][a][dk] = vs[a].score(
+                        cands["cal_%s" % rname][1](a), d)
+                for nname in NORMS:
+                    rows["resid_%s" % nname][a][dk] = vs[a].score(
+                        cands["resid_%s" % nname][1](a), d)
+                # the per-vessel ceiling: what the BEST single cut on this vessel reaches.
+                # Reported, never selected on -- it reads the held-out vessel's own label.
+                rows["oracle_cut"][a][dk] = oracle_cut_score(vs[a], sc[a], d)
+                for r in ARMS:
+                    if r in ("nested_pick", "oracle_cut", "expected"):
+                        continue
+                    rowsg[r][a][dk] = vsg[a].score(cands[r][1](a), d)
+                rowsg["expected"][a][dk] = vsg[a].score(
+                    mask_for(a, dk, d_of, 1.0, 1.0), d)
+                rowsg["oracle_cut"][a][dk] = max(
+                    (vsg[a].score(d & (sc[a] >= t), d) for t in GRID),
+                    key=lambda x: (x == x, x))
                 m_pick = cands[pick][1](a)
                 rows["nested_pick"][a][dk] = vs[a].score(m_pick, d)
+                rowsg["nested_pick"][a][dk] = vsg[a].score(m_pick, d)
                 masks[a] |= m_pick
             print("  fold %d %-4s cut=%.2f gamma=%.2f kscale=%.2f  pick=%s"
                   % (k, dk, t_cut, g_b, k_b, pick), flush=True)
 
     prio = [a for a in pool if is_priority(classes.get(a, ""))]
-    print("\nFINAL TIME POINT, strictly nested (tags=%s)\n" % args.tags)
-    print("%-16s | %9s %9s | %9s %9s" % ("arm", "wall", "off", "P wall", "P off"))
+    print("\nFINAL TIME POINT, strictly nested (tags=%s)" % args.tags)
+    print("`guiding` is the DEFAULT deploy score and the one every other evaluation in this "
+          "repo\nreports; `severity` is Deploy Score v2, more forgiving, and is what the "
+          "arms below were\nSELECTED on.  Quote guiding.  Do not mix them.\n")
+    print("%-18s | %-19s | %-19s" % ("", "GUIDING (deploy)", "severity (v2)"))
+    print("%-18s | %9s %9s | %9s %9s | %9s %9s"
+          % ("arm", "wall", "off", "wall", "off", "P wall", "P off"))
     for r in ARMS:
-        R = rows[r]
-        print("%-16s | %9.4f %9.4f | %9.4f %9.4f"
-              % (r, np.nanmean([R[a]["wall"] for a in pool]),
-                 np.nanmean([R[a]["off"] for a in pool]),
-                 np.nanmean([R[a]["wall"] for a in prio]),
-                 np.nanmean([R[a]["off"] for a in prio])))
+        R, G = rows[r], rowsg[r]
+        mg = lambda D, k, P=pool: np.nanmean([D[a][k] for a in P if k in D[a]])  # noqa: E731
+        print("%-18s | %9.4f %9.4f | %9.4f %9.4f | %9.4f %9.4f"
+              % (r, mg(G, "wall"), mg(G, "off"), mg(R, "wall"), mg(R, "off"),
+                 mg(G, "wall", prio), mg(G, "off", prio)))
     if args.save:
-        Path(args.save).write_text(json.dumps(rows, indent=2, default=float))
+        Path(args.save).write_text(json.dumps(
+            {"severity": rows, "guiding": rowsg}, indent=2, default=float))
         print("\nwrote %s" % args.save)
     if args.save_masks:
         np.savez_compressed(args.save_masks, **{a: masks[a] for a in pool})
