@@ -102,3 +102,10 @@ docs/PUBLICATION_PLAN.md
 docs/RGP_DEQ_REPAIR_PLAN.md
 docs/WALL_MODEL_PLAN.md
 docs/WOUND_PROGRESS.md
+
+# One-off analyses and dated run scripts: their findings are recorded in the docs,
+# and the scripts themselves are not reproducible surface for a reader (local only)
+scripts/go_overnight_*.sh
+scripts/eda_clot_physics.py
+scripts/probe_pocket_ranking.py
+scripts/validate_preflight.py

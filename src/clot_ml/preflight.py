@@ -25,8 +25,10 @@ FEM tracks ground truth closely; the learned surrogate empties the gate on 5 of 
 below are set just outside the GT/FEM envelope, so a vessel is flagged when its gate behaves
 unlike anything the model was fitted or validated against -- not merely when it is unusual.
 
-Reproduce the calibration: ``python scripts/publication/generate_flow_diagnostics.py --flow
-{gt,fem,pred}`` then ``python scripts/validate_preflight.py``.
+Reproduce the calibration inputs with ``python
+scripts/publication/generate_flow_diagnostics.py --flow {gt,fem,pred}``.  The one-off
+script that checked these thresholds against known failures is kept locally rather
+than published; its conclusion is the threshold values below.
 """
 from __future__ import annotations
 from src.utils.units import M_TO_CM
