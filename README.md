@@ -139,9 +139,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/go_research_sweep.
 python scripts/promote_clot_ml_0.py
 python scripts/eval_clot_ml_0.py --cohort
 
-# Diagnostic probes (see `list` for the full set)
-python -m src.tools.diagnostics list
-
 # Train the research flow arm
 python -m src.bin.main train rgp-deq-kine
 ```

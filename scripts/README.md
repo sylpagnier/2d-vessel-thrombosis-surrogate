@@ -10,10 +10,8 @@ Supported launchers for **Local FEM Solver** (four active stacks). Retired ladde
 | **deploy-clot** (`clot_ml_0`) | `promote_clot_ml_0.py`, `eval_clot_ml_0.py`, `run_phase9_cv.py`, `eval_strict*.py` | [`docs/SEALED_SPLIT.md`](../docs/SEALED_SPLIT.md) |
 | **RGP-DEQ** (Stage A flow) | `go_kinematics_production_allfix.ps1`, `run_kinematics_production.py`, `precache_rgp_deq.py` | `docs/KINEMATICS_BEST_ARCHITECTURE.md` |
 | **Research sweeps** | `go_research_sweep.ps1` / `run_research_sweep.py` | `docs/RESEARCH_SWEEPS.md` |
-| **Diagnostics** | `go_diag.ps1` / `python -m src.tools.diagnostics` | `src/tools/diagnostics/registry.py` |
 | **Customer / viz** | `go_customer_predict.ps1`, `go_customer_predict_web.ps1` | `docs/VIZ_STANDARD.md` |
 
-Utility `.ps1`: `_launcher_common.ps1`, `go_diag.ps1`, `kill_stale_python.ps1`, `install_torch_cuda.ps1`,
 `promote_kinematics_checkpoint.ps1`.
 
 ## DeployClot -- the whole deploy-flow pipeline, end to end
@@ -23,8 +21,6 @@ Carreau solve; each stage is idempotent and skips work already on disk, so a rer
 See [`docs/SEALED_SPLIT.md`](../docs/SEALED_SPLIT.md) and [`docs/BIOCHEM_GNN.md`](../docs/BIOCHEM_GNN.md).
 
 - `go_deployclot.sh` -- the runbook.
-- `python -m src.tools.diagnostics local-fem-accuracy` -- what the local FEM solve costs per
-  vessel, in the four quantities the deposition gate consumes.
 - `build_temporal_transport.py` -- per-(node, time) transport channels, one directory per
   flow source; the timing head is fitted against these and must not read another flow's.
 - `promote_clot_gnn_v4.py` -> `promote_clot_gnn_v4_temporal.py` ->
@@ -68,22 +64,6 @@ See [`docs/SEALED_SPLIT.md`](../docs/SEALED_SPLIT.md) and [`docs/BIOCHEM_GNN.md`
 - Presets / axis grids: `src/evaluation/research_sweep_presets.py`
 - Configs: `configs/research_sweeps/*.json` (legacy biochem: `configs/research_sweeps/legacy/`)
 - Shared launcher helpers: `_launcher_common.ps1` (all `go_*.ps1` delegate here)
-
-## Ad-hoc diagnostics
-
-Every supported probe is registered and runs through one entry point:
-
-```bash
-python -m src.tools.diagnostics list      # what is available
-python -m src.tools.diagnostics <slug>    # run one
-```
-
-- `go_diag.ps1` / `scripts/diag.py` are thin shims over that CLI.
-- Registry: `src/tools/diagnostics/registry.py`
-
-One-off `diag_*.py` / `diagnose_*.py` probes written against a single run are kept local
-rather than published; add a module under `src/tools/diagnostics/` and register it if a
-probe is worth keeping.
 
 ## Customer + visualization
 

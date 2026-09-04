@@ -8,7 +8,6 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 |------|-----|
 | `src/` | Library, training, tools, tests |
 | `scripts/` (active) + `scripts/README.md` | Supported launchers |
-| `scripts/archive/MANIFEST.md` | Deleted retired launchers (recover via git) |
 | `docs/` | Design and validation docs |
 | `docs/assets/` | Small README figures (tracked) |
 | `configs/` | Parametric sweep definitions |
@@ -30,6 +29,9 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 | `src/archive/`, `docs/archive/` | Retired code eras and archived notes |
 | `scripts/diag_*.py`, `scripts/diagnose_*.py` | One-off probes; the supported surface is `python -m src.tools.diagnostics` |
 | `AGENTS.md`, `.cursorrules`, `.cursorignore`, `scripts/git-hooks/` | Editor / assistant config |
+| `scripts/stage_a/`, `go_kinematics_stage_a_ladder.ps1`, `go_cv_seeds.sh`, `go_g_vs_fem.sh` | Architecture-exploration ladder: arm-by-arm experiments, not reproducible without local caches |
+| `src/tools/diagnostics/`, `scripts/diag.py`, `go_diag.ps1` | Forensic probes for specific past investigations. Live modules cite them in comments as provenance; the probes themselves stay local |
+| `scripts/archive/` | Catalogue of scripts deleted in earlier cleanups (git history has them) |
 
 ## Do not re-add
 
@@ -68,5 +70,5 @@ why: [`CUSTOMER_INSTALLER.md`](CUSTOMER_INSTALLER.md).
 ## Script surface
 
 - **Supported:** only what [`scripts/README.md`](../scripts/README.md) lists.
-- **Deleted archives:** inventory in [`scripts/archive/MANIFEST.md`](../scripts/archive/MANIFEST.md) (git history for recovery).
+- **Deleted archives:** recover any retired launcher from git history.
 - Prefer not adding one-off `analyze_*.py` / `_print_*.py` to the active `scripts/` root unless documented in that README.

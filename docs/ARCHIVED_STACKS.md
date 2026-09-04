@@ -1,10 +1,13 @@
 # Archived stacks and reference code
 
-This repo keeps four **active** surfaces. Retired launchers are inventoried in
-`scripts/archive/MANIFEST.md`; retired model eras are kept out of the published tree
-(see [PUBLISHING.md](PUBLISHING.md)) and recoverable from git history.
+This repo keeps four **active** surfaces. Retired launchers and model eras are
+kept out of the published tree (see [PUBLISHING.md](PUBLISHING.md)) and are
+recoverable from git history:
 
-Recover a deleted script: `git show <commit>:scripts/archive/<path>`.
+```bash
+git log --diff-filter=D --name-only -- scripts/    # what was removed, and when
+git show <commit>^:<path>                          # bring one back
+```
 
 ## Active stacks (use these)
 

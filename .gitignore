@@ -109,3 +109,29 @@ scripts/go_overnight_*.sh
 scripts/eda_clot_physics.py
 scripts/probe_pocket_ranking.py
 scripts/validate_preflight.py
+
+# Architecture-exploration ladder: arm-by-arm Stage-A experiments and one-off
+# comparisons. Their conclusions are in the code and the docs; the runs themselves
+# need local caches and are not reproducible surface for a reader. (local only)
+scripts/stage_a/
+scripts/go_kinematics_stage_a_ladder.ps1
+scripts/go_cv_seeds.sh
+scripts/go_g_vs_fem.sh
+
+# Investigation forensics: probes written to answer one past question about one
+# cohort ("why does wound_comsol003 miss its clot"). Live modules still cite them
+# in comments as provenance for a design choice. (local only)
+src/tools/diagnostics/
+scripts/diag.py
+scripts/go_diag.ps1
+
+# Catalogue of scripts deleted in earlier cleanups -- recoverable from git history
+scripts/archive/
+
+# Reference JSONs with no consumer: records of experiments whose stacks are gone
+data/reference/clot_baseline_lane_a.json
+data/reference/generalization_new_vessels.json
+data/reference/kine_loss_weights_20260828.json
+data/reference/mat_canonical_deploy.json
+data/reference/mat_compound_deploy.json
+data/reference/mat_wall_gen_baseline.json
