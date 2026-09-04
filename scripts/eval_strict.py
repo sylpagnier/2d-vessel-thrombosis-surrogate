@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -40,9 +39,6 @@ from src.clot_ml.strict_readout import (  # noqa: E402
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.data import (  # noqa: E402
     attach_physics, load_cache, wall_domain, off_domain,

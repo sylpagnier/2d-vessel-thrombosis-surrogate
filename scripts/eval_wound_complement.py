@@ -40,12 +40,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import sys
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from src.clot_ml.evaluate import domain_score, f1, gt_series, score_domains  # noqa: E402
 from src.clot_ml.locked import load_temporal_v4, predict_temporal_v4

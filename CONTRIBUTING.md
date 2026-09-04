@@ -7,7 +7,12 @@ issues, and questions are welcome.
 
 ```powershell
 pip install -r requirements.txt
+pip install -e .
 ```
+
+The editable install is what makes `import src...` and `import scripts...` work from
+any directory. Without it, running a script by path fails on the first `src` import --
+scripts no longer patch `sys.path` themselves.
 
 Bulk meshes, checkpoints, and COMSOL `.mph` files are not in this repository — see
 [`docs/PUBLISHING.md`](docs/PUBLISHING.md) for what's tracked vs. local-only, and the

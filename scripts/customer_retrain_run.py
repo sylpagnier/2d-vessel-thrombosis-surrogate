@@ -17,7 +17,6 @@ import argparse
 import json
 import random
 import shutil
-import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -31,9 +30,6 @@ from src.clot_ml.recipe import CUSTOMER_RETRAIN_EPOCHS, PROMOTION_EPOCHS, recipe
 from src.utils.paths import anchor_meshes_dir, anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.data import attach_physics  # noqa: E402
 from src.clot_ml.features import build_features, feature_matrix  # noqa: E402
@@ -43,7 +39,7 @@ from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import (  # noqa: E402
     CLOT_FREE, DEV, FIT, MIN_T, SEALED,
 )
-from train_clot_gnn import GRID, apply_readout, pick_readout, train_one  # noqa: E402
+from scripts.train_clot_gnn import GRID, apply_readout, pick_readout, train_one  # noqa: E402
 
 PROC_DIR = anchor_packs_dir()
 CANDIDATE_ROOT = REPO / "outputs/customer/retrain_candidates"

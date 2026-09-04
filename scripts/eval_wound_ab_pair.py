@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -44,10 +43,6 @@ from scipy.spatial import cKDTree
 
 from src.utils.paths import anchor_packs_dir, get_project_root
 
-REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.biochem_gnn.wall_cohort_constants import WOUND_AB_PAIR  # noqa: E402
 from src.clot_ml.severity_metric import DEFAULT, SeverityScorer  # noqa: E402

@@ -9,7 +9,6 @@ These tests use synthetic samples so they run without the cache or any checkpoin
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,12 +16,8 @@ import pytest
 
 from src.utils.paths import get_project_root
 
-REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-from eval_strict import apply_adapt, vessel_stat  # noqa: E402
+from scripts.eval_strict import apply_adapt, vessel_stat  # noqa: E402
 
 
 def _sample(n=40, seed=0):

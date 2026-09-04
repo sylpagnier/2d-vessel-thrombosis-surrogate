@@ -1,14 +1,7 @@
 """Generate Figure 3 & 4 data (clot_ml_0 strict OOF temporal + final)."""
-import sys
 import torch
 import pandas as pd
-from pathlib import Path
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from scripts.publication.config import CONFIG, DATA_DIR
 from scripts.publication.oof_data import (

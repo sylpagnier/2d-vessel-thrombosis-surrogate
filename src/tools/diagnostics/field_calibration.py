@@ -39,7 +39,7 @@ from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
 
 
 def oof_field(tags: list[str], cache: dict) -> dict:
-    from eval_strict import load_scores
+    from scripts.eval_strict import load_scores
 
     pool, folds, sc = load_scores(tags)
     fold_of = {a: k for k, held in folds.items() for a in held}

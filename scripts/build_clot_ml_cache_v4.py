@@ -36,12 +36,10 @@ new parameter.
 """
 from __future__ import annotations
 from src.utils.units import M_TO_CM
-from src.utils.paths import anchor_packs_dir
+from src.utils.paths import anchor_packs_dir, get_project_root
 
 import argparse
-import sys
 import time
-from pathlib import Path
 
 import numpy as np
 
@@ -49,11 +47,7 @@ from src.clot_ml import feature_fingerprint as _fp
 import torch
 from scipy.stats import spearmanr
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+REPO = get_project_root()
 
 from src.clot_ml.features_v4 import (  # noqa: E402
     horizon_for, indicator_physics, new_channels,

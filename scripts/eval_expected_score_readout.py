@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -40,11 +39,8 @@ from src.clot_ml.readouts import N_PREFIX, expected_curve  # noqa: E402
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-from eval_strict import (  # noqa: E402
+from scripts.eval_strict import (  # noqa: E402
     FAMILIES, GRID, apply_adapt, load_scores, tune_adapt,
 )
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,15 +21,12 @@ from src.clot_ml.recipe import CUSTOMER_RETRAIN_EPOCHS, PROMOTION_EPOCHS, recipe
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
 from src.clot_ml.geometry_splits import classes_for, describe, stratified_folds  # noqa: E402
 from src.core_physics.t0_device import require_cuda_device  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
-from train_clot_gnn import train_one  # noqa: E402
+from scripts.train_clot_gnn import train_one  # noqa: E402
 
 OUT = REPO / "outputs/phase9_scores"
 PACKS = anchor_packs_dir()

@@ -21,18 +21,12 @@ from __future__ import annotations
 from src.utils.paths import anchor_packs_dir
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import scipy.sparse as sp
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.mls_gradient import node_positions  # noqa: E402

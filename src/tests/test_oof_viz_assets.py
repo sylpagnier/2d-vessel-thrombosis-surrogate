@@ -34,7 +34,7 @@ def test_cv_fold_checkpoint_records_the_exact_exclusion(tmp_path):
 
 
 def test_strict_oof_masks_keep_domains_separate(monkeypatch):
-    import eval_strict_temporal as temporal
+    import scripts.eval_strict_temporal as temporal
 
     wall = np.array([True, True, False, False])
     V = {"v": {"S": {"wall": wall, "solid": wall, "owner": np.array([0, 1, 0, 0])},

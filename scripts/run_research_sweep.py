@@ -9,12 +9,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-_REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
 
 from src.evaluation.research_sweep_config import (  # noqa: E402
     DEFAULT_RESEARCH_MODEL,
@@ -24,7 +20,6 @@ from src.evaluation.research_sweep_config import (  # noqa: E402
     resolve_sweep_path,
 )
 from src.evaluation.research_sweep_runner import run_sweep  # noqa: E402
-
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 c = load_sweep_config(p)
                 print(
-                    f"  {c.get('id', p.stem):28s}  [{tag}]  {c.get('title', '')}",
+                    f"  {c.get('id', p.stem):28s}  {c.get('title', '')}",
                     flush=True,
                 )
             except Exception as exc:

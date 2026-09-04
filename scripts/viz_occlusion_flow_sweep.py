@@ -23,21 +23,16 @@ real fixed-flux inlet BC:
     python scripts/viz_occlusion_flow_sweep.py --stem comsol012 --fracs 0.2 0.4 0.6 0.8
 """
 from __future__ import annotations
-from src.utils.paths import anchor_packs_dir
+from src.utils.paths import anchor_packs_dir, get_project_root
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+REPO = get_project_root()
 
 from src.clot_ml.v0 import _resolve_anchor_mesh  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402

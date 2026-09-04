@@ -1,11 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "local-fem-solver"
 version = "0.1.0"
 description = "Vessel clot forecasting: research training/eval stack + the customer Predict UX."
 requires-python = ">=3.11"
 
-# This file is intentionally minimal. Its main job is to be a stable marker so
-# `src.utils.paths.get_project_root()` resolves correctly both in a normal git checkout and in
-# a packaged customer bundle that has no `.git` folder (see `scripts/build_customer_bundle.ps1`).
 # Dependency lists live in `requirements.txt` (full research stack) and
-# `requirements-customer.txt` (minimal CPU-only deploy stack for the Predict UX).
+# `requirements-customer.txt` (minimal CPU-only deploy stack for the Predict UX),
+# so a CUDA/CPU split stays possible without two package definitions.
+
+# `src` and `scripts` are imported by those names (`from src.clot_ml...`,
+# `from scripts.eval_strict import ...` in the tests), so both are packaged as-is
+# rather than renamed into a conventional single top-level package -- renaming
+# would touch every import in the tree for no functional gain.
+#
+# `namespaces = true` because `scripts/` deliberately has no `__init__.py`.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+namespaces = true
+
+# This file is also the marker `src.utils.paths.get_project_root()` walks up to
+# find, which is how the root resolves in a packaged customer bundle that has no
+# `.git` folder (see `scripts/build_customer_bundle.ps1`).

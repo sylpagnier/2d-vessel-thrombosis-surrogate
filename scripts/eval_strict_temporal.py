@@ -40,7 +40,6 @@ import os
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -51,9 +50,6 @@ from src.clot_ml.temporal import ANCHOR_LEVEL, OWNER_PRED, lag_features, node_fe
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: E402
 
@@ -257,7 +253,7 @@ def _candidate_mask_family(S, sc_by_arm, set_th):
     commits **nothing** off-wall (0.000 against 0.432) because its score is uniformly low
     there and the physics mask is the only thing separating its 120 off-wall nodes.
     """
-    from eval_strict import FAMILIES
+    from scripts.eval_strict import FAMILIES
     w = S["wall"]
     aw, fw, tw = set_th["wall"]
     ao, fo, to = set_th["off"]
@@ -475,7 +471,7 @@ def tune_set(cache, V, anchors, oofs):
     the final mask, the time cut answers *when*.  v3 tuned one joint grid over a plain cut
     only, which could not express the physics-conditioned readout at all.
     """
-    from eval_strict import FAMILIES, GRID
+    from scripts.eval_strict import FAMILIES, GRID
 
     vs = {a: SeverityScorer(cache[a]["edge_index"], cache[a]["y"] > 0.5,
                             len(cache[a]["wall"]), DEFAULT) for a in anchors}
@@ -699,7 +695,7 @@ def main() -> int:
     elif args.stall:
         USE_WAKE_ODE, USE_STALL_ODE = False, True
 
-    from eval_strict import load_scores
+    from scripts.eval_strict import load_scores
 
     cache = attach_physics(load_cache(args.cache))
     oofs, pool, folds = {}, None, None

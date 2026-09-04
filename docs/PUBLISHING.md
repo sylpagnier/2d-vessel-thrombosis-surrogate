@@ -39,7 +39,9 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 
 ## After clone
 
-1. `pip install -r requirements.txt` (venv recommended).
+1. `pip install -r requirements.txt` then `pip install -e .` (venv recommended).
+   The editable install is required: scripts import `src`/`scripts` by name and
+   no longer patch `sys.path`.
 2. Place COMSOL / graph data under `data/` and `comsol_models/` as needed.
 3. Optional: copy promoted checkpoints into `outputs/biochem/biochem_gnn/locked/` and `outputs/kinematics/` from your private artifact store.
 4. Use `data/reference/*.json` to see which runs are canonical.

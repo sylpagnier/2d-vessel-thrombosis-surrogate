@@ -6,6 +6,7 @@ Publication clot panels must use strict nested-CV masks from
 ``flow=pred`` surrogate flow (collapses wall scores).
 """
 from __future__ import annotations
+from src.utils.paths import get_project_root
 
 import json
 import subprocess
@@ -17,11 +18,7 @@ from typing import Any
 import numpy as np
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+REPO = get_project_root()
 
 from scripts.eval_wound_complement import gt_series
 from src.clot_ml.data import off_domain, wall_domain

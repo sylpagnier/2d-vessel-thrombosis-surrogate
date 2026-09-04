@@ -21,20 +21,16 @@ cases would leak and the reported gain would be fictional.
     python scripts/train_pi_wall_shear.py --corpus outputs/pi_corpus --epochs 400
 """
 from __future__ import annotations
+from src.utils.paths import get_project_root
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+REPO = get_project_root()
 
 from src.core_physics.wall_shear_attenuation import DELTA_MU_HALF_SI  # noqa: E402
 from src.core_physics.pi_wall_shear import (  # noqa: E402

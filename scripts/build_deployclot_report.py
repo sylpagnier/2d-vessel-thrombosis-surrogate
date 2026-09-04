@@ -7,21 +7,17 @@ failing, so the page is publishable at any point in the pipeline.
     python scripts/build_deployclot_report.py --out outputs/deployclot/report.html
 """
 from __future__ import annotations
+from src.utils.paths import get_project_root
 
 import argparse
 import html
 import json
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+REPO = get_project_root()
 
 from src.biochem_gnn.wall_cohort_constants import WALL_COHORT_V2_CLOT_FREE
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,13 +38,10 @@ import torch
 from src.utils.paths import anchor_packs_dir, clot_ml_locked_dir, get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-import eval_strict_temporal as ET  # noqa: E402
-from eval_expected_score_readout import GAMMA, KSCALE, expected_curve  # noqa: E402
-from eval_strict import (  # noqa: E402
+import scripts.eval_strict_temporal as ET  # noqa: E402
+from scripts.eval_expected_score_readout import GAMMA, KSCALE, expected_curve  # noqa: E402
+from scripts.eval_strict import (  # noqa: E402
     FAMILIES, GRID, apply_adapt, readout_resid, tune_adapt, tune_resid,
 )
 from src.clot_ml.geometry_splits import classes_for, eligible_pool, is_priority  # noqa: E402

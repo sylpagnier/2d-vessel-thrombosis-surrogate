@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -32,9 +31,6 @@ import torch
 from src.utils.paths import get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.data import (  # noqa: E402
     attach_physics, load_cache, off_domain, splits, wall_domain,

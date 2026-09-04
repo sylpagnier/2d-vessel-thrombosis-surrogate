@@ -10,15 +10,11 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import sys
 from pathlib import Path
 
 import torch
 from torch_geometric.loader import DataLoader
 
-_REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
 
 from src.architecture.kinematics_model_config import (
     build_gino_deq_from_ctor,

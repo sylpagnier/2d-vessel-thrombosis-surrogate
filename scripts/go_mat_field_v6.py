@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -43,9 +42,6 @@ import torch
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
-for _p in (str(REPO), str(REPO / "scripts")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 from src.biochem_gnn.wall_cohort_constants import WOUND_COHORT  # noqa: E402
 from src.clot_ml.mat_field import (  # noqa: E402
@@ -348,7 +344,7 @@ def cmd_eval(args) -> int:
     """
     import dataclasses
 
-    from eval_wound_complement import gt_series, score_domains
+    from scripts.eval_wound_complement import gt_series, score_domains
 
     from src.clot_ml.locked import build_sample
     from src.clot_ml.v0 import (

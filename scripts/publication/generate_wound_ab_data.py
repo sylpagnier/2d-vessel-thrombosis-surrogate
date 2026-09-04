@@ -14,16 +14,9 @@ either of these two). Treat this as an illustrative example, not a scored result
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from scripts.publication.config import CONFIG, DATA_DIR  # noqa: E402
 from scripts.publication.utils import get_pack_path  # noqa: E402

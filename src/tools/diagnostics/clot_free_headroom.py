@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
 
     oof = {}
     if args.tag:
-        from eval_strict import load_scores
+        from scripts.eval_strict import load_scores
         pool, folds, sc = load_scores(args.tag.split(","))
         fold_of = {a: k for k, held in folds.items() for a in held}
         oof = {a: sc[(fold_of[a], a)] for a in pool if a in cache}

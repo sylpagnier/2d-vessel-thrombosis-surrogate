@@ -24,10 +24,6 @@ import sys
 from pathlib import Path
 
 
-_REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
-
 # Must be set before train_kinematics_predictor import side effects.
 os.environ.setdefault("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "1")
 os.environ.setdefault("KINEMATICS_SKIP_LBFGS", "1")

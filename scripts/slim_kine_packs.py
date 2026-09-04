@@ -27,14 +27,8 @@ rebuilding what was dropped and comparing against the original.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 #: Pure functions of (edge_index, pos).  Rebuilt on load; on an elevated graph, rebuilt anyway.
 REBUILDABLE = ("G_x", "G_y", "V", "W", "M_inv")

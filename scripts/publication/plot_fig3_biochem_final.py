@@ -3,19 +3,12 @@
 3-panel per vessel: [Model] [GT] [Error map]
 Annotations included for wall/off-wall scores. No colorbar for phi.
 """
-import sys
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import pandas as pd
-from pathlib import Path
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from scripts.publication.config import CONFIG, DATA_DIR, FIG_DIR
 from scripts.publication.pub_style import (

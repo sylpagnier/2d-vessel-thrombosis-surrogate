@@ -125,6 +125,7 @@ Python 3.11–3.13. A CUDA GPU is recommended for training but not for inference
 
 ```bash
 pip install -r requirements.txt
+pip install -e .          # puts `src` and `scripts` on the path; no sys.path juggling
 pytest src/tests/
 ```
 

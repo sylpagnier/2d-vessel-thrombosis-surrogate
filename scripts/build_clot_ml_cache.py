@@ -6,7 +6,6 @@ from __future__ import annotations
 from src.utils.paths import anchor_packs_dir
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
@@ -15,11 +14,6 @@ import numpy as np
 from src.clot_ml import feature_fingerprint as _fp
 import torch
 
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from src.clot_ml.features import build_features, feature_matrix  # noqa: E402
 from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402

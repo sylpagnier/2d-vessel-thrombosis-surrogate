@@ -15,14 +15,12 @@ its dataset build.  Solve them all up front instead, and report which ones canno
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.data_gen.lib.legal_priors import (  # noqa: E402
     COL_U_PRIOR, COL_V_PRIOR, _fem_prior_cache_path, build_fem_priors,

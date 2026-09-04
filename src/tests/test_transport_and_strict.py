@@ -36,9 +36,6 @@ import pytest
 from src.utils.paths import get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.calibration import RULES, apply_rule, rule_grid  # noqa: E402
 from src.clot_ml.transport import (  # noqa: E402
@@ -138,7 +135,7 @@ def test_absolute_rule_reproduces_a_plain_threshold():
 
 def test_commit_by_final_makes_the_last_mask_equal_the_set():
     """The committed set IS the prediction of the final mask (docs/PHASE10_V4.md 3)."""
-    from eval_strict_temporal import series_masks
+    from scripts.eval_strict_temporal import series_masks
 
     rng = np.random.default_rng(2)
     n, T = 60, 7
@@ -153,7 +150,7 @@ def test_commit_by_final_makes_the_last_mask_equal_the_set():
 
 
 def test_commit_by_final_can_be_disabled():
-    from eval_strict_temporal import series_masks
+    from scripts.eval_strict_temporal import series_masks
 
     gm = np.ones(5, dtype=bool)
     P = np.zeros((3, 5))                              # nothing ever crosses

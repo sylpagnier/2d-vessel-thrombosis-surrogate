@@ -26,19 +26,14 @@ must not do.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
 
 from src.utils.paths import get_project_root
 
-REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-from eval_strict import FAMILIES, GRID, BoundScorer, load_scores  # noqa: E402
+from scripts.eval_strict import FAMILIES, GRID, BoundScorer, load_scores  # noqa: E402
 from src.clot_ml.data import (  # noqa: E402
     attach_physics, load_cache, off_domain, wall_domain,
 )

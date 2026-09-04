@@ -135,7 +135,7 @@ def test_repair_is_idempotent(stem):
         sys.path.insert(0, str(scripts))
     if not (PACKS / f"{stem}.pt").exists():
         pytest.skip(f"{stem} pack not present")
-    from repair_pack_wall_normals import report
+    from scripts.repair_pack_wall_normals import report
 
     r = report(stem)
     if not r["was_repaired"]:

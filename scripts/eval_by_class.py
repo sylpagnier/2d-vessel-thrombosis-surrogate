@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -18,9 +17,6 @@ import numpy as np
 from src.utils.paths import get_project_root
 
 REPO = get_project_root()
-for p in (str(REPO), str(REPO / "scripts")):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
 from src.clot_ml.geometry_splits import is_priority  # noqa: E402
@@ -75,7 +71,7 @@ def out_of_fold(cfg, cache, pool, folds, store):
 def physics_rows(cfg, cache, pool):
     from src.core_physics.physics_lumen_model import adjacency, grow_into_lumen
     from src.config import BiochemConfig
-    import predict_wall_clot as P
+    import scripts.predict_wall_clot as P
     bio = BiochemConfig(phase="biochem")
     rows = {}
     for a in pool:

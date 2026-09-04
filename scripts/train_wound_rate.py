@@ -30,14 +30,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import sys
 
 # Run directly (`python scripts/train_wound_rate.py`) needs the repo root importable.
-# Repo root by marker, not by depth: this file may move between
-# scripts/ and scripts/<subdir>/ without silently resolving one level off.
-REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
 
 from src.clot_ml.wound import (
     G_POST0, G_PRE0, RP_C0, WOUND_FEATURES, WoundRateNet, mat_trajectory_torch,
