@@ -54,7 +54,8 @@ from src.clot_ml.locked import (  # noqa: E402
     load_temporal_v4, predict_temporal_v4, predict_temporal_v4_wound,
 )
 from src.clot_ml.wound import (  # noqa: E402
-    G_POST0, G_PRE0, OFFWALL_LAG_FRAC, TRIGGER_HOPS, has_wound, wound_flow_regime,
+    G_POST0, G_PRE0, OFF_ATT_WOUND, OFFWALL_LAG_FRAC, TRIGGER_HOPS, has_wound,
+    wound_flow_regime,
 )
 from src.config import BiochemConfig  # noqa: E402
 
@@ -298,7 +299,7 @@ def main() -> int:
         wound=dict(
             g_pre=rate["g_pre"], g_post=rate["g_post"], rp_C=rate["rp_C"],
             wound_ap_closure=rate["wound_ap_closure"], rate_arm=str(args.rate_arm),
-            off_att=0.16, lag_frac=OFFWALL_LAG_FRAC,
+            off_att=OFF_ATT_WOUND, lag_frac=OFFWALL_LAG_FRAC,
             trigger="self", k_hops=TRIGGER_HOPS,
             defaults=dict(g_pre0=G_PRE0, g_post0=G_POST0),
             fitted_on=list(WOUND_STEMS),

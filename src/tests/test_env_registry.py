@@ -42,10 +42,16 @@ def _tracked_python() -> list[Path]:
     return [root / p for p in out.stdout.split() if (root / p).is_file()]
 
 
+#: These two files talk *about* the pattern -- the registry's docstring spells out
+#: `os.environ.get("SOME_KNOB", ...)` as the thing to stop doing, and this module
+#: carries the regexes. Scanning them matches prose, not configuration.
+_SELF_REFERENTIAL = {"test_env_registry.py", "env_registry.py"}
+
+
 def _env_names_in_tree() -> set[str]:
     names: set[str] = set()
     for path in _tracked_python():
-        if path.name == "test_env_registry.py":
+        if path.name in _SELF_REFERENTIAL:
             continue
         try:
             text = path.read_text(encoding="utf-8-sig")

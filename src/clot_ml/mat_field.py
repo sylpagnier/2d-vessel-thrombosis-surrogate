@@ -45,7 +45,11 @@ N_TIME_SAMPLES: int = 16
 #: The off-wall attenuation the shipped rule uses.  The classifier head predicts
 #: ``Mat >= crit / OFF_ATT`` -- i.e. exactly the question the readout asks, so no threshold
 #: has to be re-fitted downstream.
-OFF_ATT: float = 0.16
+#:
+#: Re-exported from :mod:`src.clot_ml.wound`, which owns the constant and its
+#: provenance.  It was previously a second literal 0.16 here, which is how the head
+#: and the rule it is meant to match could have drifted apart.
+from src.clot_ml.wound import OFF_ATT_WOUND as OFF_ATT  # noqa: E402
 
 #: Extra (time-varying) channels handed to ``ClotGNN.extra``:
 #: ``t/T``, the ODE's own ``log1p(Mat/crit)``, its owner's, and whether it has ignited.

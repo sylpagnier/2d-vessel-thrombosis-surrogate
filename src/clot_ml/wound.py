@@ -39,6 +39,15 @@ so the loop closes on the model's state rather than on the answer.
 from __future__ import annotations
 from src.utils.units import M_TO_CM
 
+#: Off-wall attenuation for the wound rule: a shell node commits when its owning
+#: wound node's ``Mat`` reaches ``crit / OFF_ATT_WOUND``.  0.16 is the cohort median
+#: of ``Mat_off / Mat_owner`` (PHASE7 12.5); the ratio spans 0.12-0.19 *within* a
+#: single vessel, so this is a cohort constant, not a per-vessel fit.
+#:
+#: NOTE: distinct from ``locked.ONSET_OFF_ATT`` (0.80), which attenuates the
+#: off-wall *onset time* constraint.  The two were both called ``OFF_ATT``.
+OFF_ATT_WOUND: float = 0.16
+
 import dataclasses
 from dataclasses import dataclass
 
@@ -573,7 +582,7 @@ def wound_shells(data, max_depth: int = 4) -> tuple[list, np.ndarray]:
 
 def predict_wound_series(
     data, bio_cfg, times, *, g_pre: float = G_PRE0, g_post: float = G_POST0,
-    flow: str = "gt", off_att: float = 0.16, lag_frac: float = OFFWALL_LAG_FRAC,
+    flow: str = "gt", off_att: float = OFF_ATT_WOUND, lag_frac: float = OFFWALL_LAG_FRAC,
     prepared: dict | None = None, trigger: str = "self", k_hops: int = TRIGGER_HOPS,
     trigger_gate_scale: float = 1.0, lumen: str = "shell",
     base_onset: np.ndarray | None = None, rp_C: float = 0.0,

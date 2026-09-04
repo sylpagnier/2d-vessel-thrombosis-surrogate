@@ -90,14 +90,16 @@ def predict_scores(ens: dict, sample: dict) -> np.ndarray:
 # Thresholds the locked readout was tuned at (docs/PHASE9_ML.md 8, per domain).
 THRESH_WALL, THRESH_OFF = 0.73, 0.92
 
-# Off-wall onset = the time the node's OWNER wall trajectory reaches ``crit / OFF_ATT``.
+# Off-wall onset = the time the node's OWNER wall trajectory reaches ``crit / ONSET_OFF_ATT``.
 # 0.80 means "just after its owner commits".  Chosen for a PHYSICAL reason, not a scored
 # one: an off-wall node cannot clot before the wall node feeding it, and freezing off-wall
 # at the final mask (the alternative) puts off-wall clot on screen at t=0 with an empty
 # wall, which is nonsense.  On score it is a wash -- the att sweep reads
 # 0.490 / 0.494 / 0.459 / 0.510 at 0.16 / 0.30 / 0.50 / 0.80 against frozen's 0.5015, all
 # inside noise -- so the constraint is doing the work, not a fit.
-OFF_ATT = 0.80
+#: Attenuation on the off-wall ONSET-TIME constraint.  Distinct from
+#: ``wound.OFF_ATT_WOUND`` (0.16), the wound commit rule -- both were ``OFF_ATT``.
+ONSET_OFF_ATT = 0.80
 
 
 def build_sample(data, bio_cfg=None, phys_cfg=None, *, flow: str = "gt",
@@ -157,7 +159,7 @@ def predict_clot_series(ens: dict, data, times, *, flow: str = "gt",
     traj, _ = ode_trajectory(data, bio, flow=flow)
     crit = float(bio.viscosity_mat_crit)
     onset = onset_from_ode(traj, mask, wall, S["pos"].astype(np.float64), crit,
-                           attenuation=OFF_ATT)
+                           attenuation=ONSET_OFF_ATT)
     return dict(score=score, mask=mask, onset=onset,
                 series=mask_series(onset, mask, times))
 

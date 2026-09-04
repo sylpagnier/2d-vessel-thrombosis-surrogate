@@ -186,8 +186,8 @@ def load_v0_bundle(name: str | None = None, device=None) -> dict:
 
 
 def _default_wound_block() -> dict:
-    from src.clot_ml.wound import G_POST0, G_PRE0, OFFWALL_LAG_FRAC, TRIGGER_HOPS
-    return dict(g_pre=G_PRE0, g_post=G_POST0, off_att=0.16,
+    from src.clot_ml.wound import G_POST0, G_PRE0, OFF_ATT_WOUND, OFFWALL_LAG_FRAC, TRIGGER_HOPS
+    return dict(g_pre=G_PRE0, g_post=G_POST0, off_att=OFF_ATT_WOUND,
                 lag_frac=OFFWALL_LAG_FRAC, trigger="self", k_hops=TRIGGER_HOPS)
 
 
