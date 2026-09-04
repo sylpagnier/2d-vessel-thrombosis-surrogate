@@ -51,7 +51,7 @@ G_PRE, G_POST = 1.98, 14.28
 
 
 def gt_final(data, phys) -> np.ndarray:
-    from src.core_physics.species_pushforward_continuous import resolve_deploy_eval_time_index
+    from src.core_physics.deploy_time_index import resolve_deploy_eval_time_index
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
 
     ti = resolve_deploy_eval_time_index(int(data.y.shape[0]))

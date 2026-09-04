@@ -362,16 +362,10 @@ class ActiveGrowthHuberLoss(nn.Module):
     ) -> None:
         """Report FP-branch selection to the loss accounting (s26 T4(c)).
 
-        Lazy import: `species_pushforward_continuous` imports THIS module, so a top-level
-        import here would be circular. Gated by `set_loss_accounting`, so it is silent
-        outside the training path and costs a dict lookup when off.
+        The sink these numbers were reported into lived in the species pushforward
+        trainer, which was retired along with that stack.  Nothing consumes them now,
+        so this is a no-op rather than a silent try/except that reads as if it might
+        still do something.
         """
-        try:
-            from src.core_physics.species_pushforward_continuous import record_loss_term
-        except Exception:
-            return
-        for ch, (n_fp, n_act, p_mx) in enumerate(zip(fp_n, active_n, pred_max)):
-            record_loss_term(f"diag_fp_nodes_ch{ch}", float(n_fp))
-            record_loss_term(f"diag_active_nodes_ch{ch}", float(n_act))
-            record_loss_term(f"diag_pred_max_ch{ch}", p_mx)
-        record_loss_term("diag_fp_thresh", float(max(self.fp_threshold, self.delta_threshold)))
+        del fp_n, active_n, pred_max
+        return

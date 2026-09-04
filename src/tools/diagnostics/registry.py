@@ -13,7 +13,6 @@ DIAGNOSTICS: dict[str, str] = {
     "field-calibration": "src.tools.diagnostics.field_calibration",
     "geometry-class-recal": "src.tools.diagnostics.geometry_class_recal",
     "local-fem-accuracy": "src.tools.diagnostics.local_fem_accuracy",
-    "lumen-001-vs-007": "src.tools.diagnostics.lumen_001_vs_007",
     "physics-gate-support": "src.tools.diagnostics.physics_gate_support",
     "prior-vs-model-gate": "src.tools.diagnostics.prior_vs_model_gate",
     "residual-head-audit": "src.tools.diagnostics.residual_head_audit",

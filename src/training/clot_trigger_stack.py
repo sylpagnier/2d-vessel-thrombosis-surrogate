@@ -737,56 +737,7 @@ def load_trigger_model(ckpt_path: Path, device: torch.device) -> tuple[nn.Module
     return model, cfg
 
 
-def load_teacher_for_trigger(device: torch.device, teacher_ckpt: Path | None = None):
-    """Load the GraphSAGE species pushforward bundle used to seed the clot trigger.
-
-    Pre-2026-06 this built a GNODE teacher; the trigger now rolls species via the
-    ``biochem_gnn`` GraphSAGE stack. The first return value is the species
-    bundle (named ``teacher`` for back-compat with the trigger eval/viz scripts).
-    """
-    from src.config import BiochemConfig, PhysicsConfig
-    from src.core_physics.species_gnn_clot_rollout import (
-        load_species_gnn_rollout_bundle,
-        species_gnn_rollout_ckpt,
-    )
-
-    phys_cfg = PhysicsConfig(phase="biochem")
-    bio_cfg = BiochemConfig(phase="biochem")
-    path = Path(teacher_ckpt) if teacher_ckpt else None
-    if path is None or not path.is_file():
-        from src.biochem_gnn.config import global_ckpt_path
-
-        path = global_ckpt_path()
-        if not path.is_file():
-            path = species_gnn_rollout_ckpt()
-    if not path.is_file():
-        raise FileNotFoundError(f"species GNN checkpoint not found: {path}")
-    bundle = load_species_gnn_rollout_bundle(path, device=device)
-    if bundle is None:
-        raise FileNotFoundError(f"failed to load species GNN bundle: {path}")
-    return bundle, bio_cfg, phys_cfg, path
-
-
 @torch.no_grad()
-def rollout_teacher_species_series(data, teacher, bio_cfg: BiochemConfig, device: torch.device) -> torch.Tensor:
-    """GraphSAGE species pushforward; returns ``(T, N, 16)`` on the ``data.y`` macro grid.
-
-    ``teacher`` is a ``SpeciesGnnRolloutBundle`` (see ``load_teacher_for_trigger``).
-    Only the species block (channels 4:16) is populated.
-    """
-    from src.config import PhysicsConfig
-    from src.core_physics.species_gnn_clot_rollout import (
-        prepare_species_gnn_rollout_static,
-        rollout_species_gnn_species_series,
-    )
-
-    phys_cfg = PhysicsConfig(phase="biochem")
-    static = prepare_species_gnn_rollout_static(data, device=device)
-    return rollout_species_gnn_species_series(
-        data, teacher, static, phys_cfg=phys_cfg, bio_cfg=bio_cfg, device=device,
-    )
-
-
 def build_clot_trigger_step_at_time(
     data,
     time_index: int,

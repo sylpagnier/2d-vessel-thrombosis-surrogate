@@ -177,7 +177,7 @@ def _mask_np(data, name: str) -> np.ndarray | None:
 
 def _hop_from_wall(data) -> np.ndarray | None:
     try:
-        from src.core_physics.species_pushforward_continuous import compute_hop_distances
+        from src.core_physics.graph_hops import compute_hop_distances
 
         wall_t = getattr(data, "mask_wall", None)
         ei = getattr(data, "edge_index", None)

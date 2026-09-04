@@ -210,7 +210,7 @@ class CustomerDeployPipeline:
 
         hop_from_wall: np.ndarray | None = None
         try:
-            from src.core_physics.species_pushforward_continuous import compute_hop_distances
+            from src.core_physics.graph_hops import compute_hop_distances
             from src.clot_ml.wound import solid_mask
 
             hop_from_wall = compute_hop_distances(
