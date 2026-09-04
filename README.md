@@ -1,5 +1,7 @@
 # Local FEM Solver
 
+[![Latest release](https://img.shields.io/github/v/release/sylpagnier/2d-vessel-thrombosis-surrogate?label=Predict%20app)](https://github.com/sylpagnier/2d-vessel-thrombosis-surrogate/releases/latest)
+
 Deployable **thrombosis surrogate** for parametric vessel studies: in-house non-Newtonian **FEM at t=0** + unified mesh-based **deploy-clot** (`clot_ml_0`) rollout (wounded and non-wounded vessels).
 
 **local-fem-solver** is mesh-agnostic SciML for vascular flow and clot formation. The publishable deploy path is geometry → local Carreau FEM (t=0) → **deploy-clot** (`clot_ml_0`). Learned flow (`rgp-deq-kine` / RGP-DEQ) remains in-repo as a research and ablation arm, not the default product stack.
@@ -37,7 +39,15 @@ python -m src.bin.main train rgp-deq-kine
 
 ---
 
-## Quick start
+## Try it now (no install)
+
+Download the latest **[Predict app release](https://github.com/sylpagnier/2d-vessel-thrombosis-surrogate/releases/latest)**, unzip, and double-click `run.bat`. It's a self-contained Windows bundle -- embedded Python, CPU-only PyTorch, the trained `clot_ml_0` checkpoints, and a seeded demo vessel are all inside, so there's nothing else to install and no GPU is required. A browser tab opens automatically once it's ready.
+
+This is the recommended path for anyone who just wants to run predictions, not modify the code -- a plain `git clone` of this repo does **not** include the checkpoints or demo geometry (see [`docs/PUBLISHING.md`](docs/PUBLISHING.md)).
+
+---
+
+## Quick start (development)
 
 ### Install
 

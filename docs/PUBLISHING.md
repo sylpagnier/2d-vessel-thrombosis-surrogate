@@ -40,6 +40,24 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 3. Optional: copy promoted checkpoints into `outputs/biochem/biochem_gnn/locked/` and `outputs/kinematics/` from your private artifact store.
 4. Use `data/reference/*.json` to see which runs are canonical.
 
+## Distributing the customer app
+
+Researchers who just want to *run* the app should never `git clone` -- the checkpoints and
+demo geometry it needs are gitignored on purpose (see above) and cloning the source repo
+buys nothing without them. Instead they should get the self-contained bundle from the
+repo's [GitHub Releases](https://github.com/sylpagnier/2d-vessel-thrombosis-surrogate/releases)
+page (see the root README's Quickstart).
+
+To cut a new release from a machine that has the checkpoints locally:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_bundle.ps1 -Version 1.1
+```
+
+This builds the zip (`scripts/build_customer_bundle.ps1`), then tags, pushes, and publishes
+it as a GitHub Release via the `gh` CLI -- one command, and none of the private artifacts it
+packages ever leave this machine or pass through CI.
+
 ## Script surface
 
 - **Supported:** only what [`scripts/README.md`](../scripts/README.md) lists.

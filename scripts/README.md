@@ -78,6 +78,8 @@ See [`docs/DEPLOYCLOT.md`](../docs/DEPLOYCLOT.md).
 
 - `go_customer_predict.ps1` -- desktop GUI
 - `go_customer_predict_web.ps1` -- local browser UI (CUDA inference server)
+- `build_customer_bundle.ps1` -- package the web UI into a self-contained Windows zip (embedded Python + CPU torch + checkpoints + demo vessel)
+- `release_bundle.ps1` -- build + tag + push + publish that zip as a GitHub Release (see [`docs/PUBLISHING.md`](../docs/PUBLISHING.md) for why the release, not `git clone`, ships the bundle)
 - `gen_offwall_temporal_data.py`, `build_offwall_temporal_artifact.py` -- zero-param physics viz template
 - `gen_clot_ml_0_oof_viz_data.py`, `build_clot_oof_temporal_artifact.py` -- learned-model OOF viz
 - `python -m src.evaluation.visualize_pipeline` -- steady-kin + deploy smoke
