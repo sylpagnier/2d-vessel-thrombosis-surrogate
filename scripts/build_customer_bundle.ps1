@@ -25,8 +25,9 @@ $ZipPath    = Join-Path $DistDir "$BundleName.zip"
 
 Write-Host "[i] Building $BundleName" -ForegroundColor Cyan
 
-if (Test-Path $BundleDir) { Remove-Item -Recurse -Force $BundleDir }
-if (Test-Path $ZipPath)   { Remove-Item -Force $ZipPath }
+if (Test-Path $BundleDir)  { Remove-Item -Recurse -Force $BundleDir }
+if (Test-Path $ZipPath)    { Remove-Item -Force $ZipPath }
+if (Test-Path $ScratchDir) { Remove-Item -Recurse -Force $ScratchDir }
 New-Item -ItemType Directory -Force -Path $ScratchDir | Out-Null
 New-Item -ItemType Directory -Force -Path $BundleDir  | Out-Null
 

@@ -11,7 +11,8 @@
 param(
     [Parameter(Mandatory = $true)][string] $Version,
     [string] $PythonVersion = "3.13.7",
-    [switch] $Yes
+    [switch] $Yes,
+    [switch] $AllowDirty
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +31,15 @@ $Tag = "v$Version"
 $existingTag = git tag --list $Tag
 if ($existingTag) {
     throw "Tag $Tag already exists locally. Pick a new -Version, or delete the tag first if this was a mistake."
+}
+
+# build_customer_bundle.ps1 copies src/ and scripts/ straight from the working tree, not from
+# git -- an uncommitted or untracked change would ship in the zip while tag $Tag's history
+# shows something else, so a researcher's bug report against "v$Version" wouldn't reproduce
+# against the v$Version source. Require a clean tree (pass -AllowDirty to override deliberately).
+$dirty = git status --porcelain
+if ($dirty -and -not $AllowDirty) {
+    throw "Working tree has uncommitted/untracked changes -- the bundle would not match tag ${Tag}:`n$dirty`n`nCommit (or stash) first, or pass -AllowDirty to ship the working tree as-is anyway."
 }
 
 # --- Build --------------------------------------------------------------------------------
@@ -56,14 +66,32 @@ if (-not $Yes) {
     }
 }
 
-# --- Tag + push -----------------------------------------------------------------------------
+# --- Tag + push + release, with rollback on any failure -------------------------------------
+# Each step below undoes everything staged so far before rethrowing, so a failure anywhere
+# leaves no half-published tag behind -- re-running this script after fixing the problem
+# always starts clean instead of hitting the "tag already exists" guard above.
 git tag -a $Tag -m "Local FEM Solver Predict $Tag"
-git push origin $Tag
+if ($LASTEXITCODE -ne 0) { throw "git tag failed." }
 
-# --- Release ----------------------------------------------------------------------------------
-gh release create $Tag $ZipPath `
-    --title "Local FEM Solver Predict $Tag" `
-    --generate-notes
-if ($LASTEXITCODE -ne 0) { throw "gh release create failed (tag $Tag was already pushed -- fix the issue and re-run 'gh release create' by hand rather than re-running this script)." }
+try {
+    git push origin $Tag
+    if ($LASTEXITCODE -ne 0) { throw "git push origin $Tag failed." }
+} catch {
+    Write-Host "[ERR] Push failed -- deleting local tag $Tag so you can re-run cleanly." -ForegroundColor Red
+    git tag -d $Tag | Out-Null
+    throw
+}
+
+try {
+    gh release create $Tag $ZipPath `
+        --title "Local FEM Solver Predict $Tag" `
+        --generate-notes
+    if ($LASTEXITCODE -ne 0) { throw "gh release create failed." }
+} catch {
+    Write-Host "[ERR] Release publish failed -- deleting tag $Tag (local + remote) so you can re-run cleanly." -ForegroundColor Red
+    git push origin --delete $Tag 2>$null
+    git tag -d $Tag | Out-Null
+    throw
+}
 
 Write-Host "[OK] Published $Tag" -ForegroundColor Green

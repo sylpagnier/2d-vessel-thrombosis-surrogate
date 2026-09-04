@@ -117,3 +117,7 @@ comsol_models/         LOCAL -- COMSOL sources (gitignored)
 | [`docs/README.md`](docs/README.md) | Full documentation index |
 
 Contributor / agent shortcuts: [`AGENTS.md`](AGENTS.md).
+
+## License
+
+[MIT](LICENSE).
