@@ -171,8 +171,9 @@ def _fmt(x) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--v0", default="clot_ml_0")
-    ap.add_argument("--baseline", default="clot_gnn_v5w",
+    ap.add_argument("--v0", default=None,
+                    help="unified_v0 artifact; default follows the locked pointer")
+    ap.add_argument("--baseline", default=None,
                     help="pinned past baseline; not the locked pointer")
     ap.add_argument("--stems", nargs="*", default=None)
     ap.add_argument("--cohort", action="store_true",

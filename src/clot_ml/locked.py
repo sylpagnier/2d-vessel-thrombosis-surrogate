@@ -278,8 +278,11 @@ def load_temporal_v4(name: str | None = None) -> dict:
     (15) rather than a threshold rule.  The pickle holds only plain sklearn estimators, not
     a wrapper class, so it does not depend on any script module at unpickle time.
     """
-    ptr = json.loads(POINTER.read_text())
-    root = REPO / (ptr["path"] if name is None else f"outputs/clot_ml/locked/{name}")
+    # `name=None` means the BASE role, resolved from the pointer's manifest chain.  It used
+    # to mean `ptr["path"]`, which is the UNIFIED artifact -- a different kind entirely.
+    from src.clot_ml.artifacts import BASE, root as artifact_root
+
+    root = artifact_root(name, BASE)
     manifest = json.loads((root / "manifest.json").read_text())
     ens = load_ensemble(name=manifest["name"])
     with (root / manifest["temporal_file"]).open("rb") as fh:
@@ -482,8 +485,13 @@ def load_temporal_v4_wound(name: str | None = None) -> dict:
     is the wall law with the shear gates deleted, which v4 has no channel for: 100% of wound
     nodes clot and the t=0 gate fires on 0% of them.
     """
-    ptr = json.loads(POINTER.read_text())
-    root = REPO / (ptr["path"] if name is None else f"outputs/clot_ml/locked/{name}")
+    # `name=None` means the WOUND role.  It used to resolve to `ptr["path"]`, i.e. the
+    # unified_v0 artifact, whose manifest has no "wound" key -- so the default path raised
+    # KeyError and every caller was forced to name a baseline explicitly, which is how
+    # `eval_clot_ml_0.py --baseline` came to sit two generations stale.
+    from src.clot_ml.artifacts import WOUND, root as artifact_root
+
+    root = artifact_root(name, WOUND)
     manifest = json.loads((root / "manifest.json").read_text())
     base = load_temporal_v4(name=manifest["base_model"])
     _assert_wound_alias_integrity(manifest, base)

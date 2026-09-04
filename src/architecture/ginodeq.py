@@ -277,6 +277,7 @@ class RGP_DEQ(nn.Module):
         use_width_priors: bool = False,
         wss_fuse: Optional[bool] = None,
         bc_envelope: Optional[bool] = None,
+        bc_lambda: Optional[float] = None,
         fourier_learnable: Optional[bool] = None,
         shear_head: bool = True,
         decoder_skip: Optional[bool] = None,
@@ -315,7 +316,16 @@ class RGP_DEQ(nn.Module):
             if bc_envelope is not None
             else bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
         )
-        self.bc_lambda = float(os.environ.get("KINEMATICS_BC_LAMBDA", "10.0"))
+        # Snapshotted alongside `bc_envelope`, not read from the environment at load time.
+        # It sets the SHAPE of the hard BC -- `u = prior + (1 - exp(-bc_lambda*sdf)) * r` -- so
+        # a model trained at one value and rebuilt at another is a different function of the
+        # same weights, silently.  As an env-only knob it was never written into the checkpoint
+        # config, so every reload snapped back to 10.0 however the run was launched.
+        self.bc_lambda = float(
+            bc_lambda
+            if bc_lambda is not None
+            else os.environ.get("KINEMATICS_BC_LAMBDA", "10.0")
+        )
         self.wss_fuse = (
             bool(wss_fuse)
             if wss_fuse is not None

@@ -160,7 +160,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", default="dc_fem_c0")
     ap.add_argument("--cache", default="v5_fem")
-    ap.add_argument("--model", default="DeployClot_1")
+    ap.add_argument("--model", default=None)
     ap.add_argument("--out", default="outputs/deployclot/offwall_score_geography.json")
     ap.add_argument("--viz-out", default="outputs/deployclot/offwall_viz.json")
     ap.add_argument("--viz-stems", nargs="*",

@@ -457,7 +457,7 @@ def main() -> int:
     def common(p):
         p.add_argument("--flow", default="fem", choices=["gt", "fem"])
         p.add_argument("--mat-base", default="chem", choices=["chem", "ode"])
-        p.add_argument("--artifact", default="DeployClot_0")
+        p.add_argument("--artifact", default=None)
 
     c = sub.add_parser("cache")
     common(c)

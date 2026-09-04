@@ -28,69 +28,16 @@ import torch
 
 REPO = Path(__file__).resolve().parents[2]
 LOCKED = REPO / "outputs" / "clot_ml" / "locked"
-DEFAULT_NAME = "clot_ml_0"
-LEGACY_NAMES = frozenset({"clot_ml_v0"})
+#: Artifact identity lives in ONE place now -- see `src.clot_ml.artifacts` for why.  These
+#: are re-exported so the many existing importers of `v0.DEFAULT_NAME` / `resolve_clot_ml_name`
+#: keep working; new code should import from `artifacts` directly.
+from src.clot_ml.artifacts import (  # noqa: E402
+    DEFAULT_NAME, LEGACY_NAMES, LOCKED as _ARTIFACTS_LOCKED, POINTER,
+    pointer_name as pointer_v0_name, resolve as resolve_clot_ml_name, root as _locked_root,
+)
+
+LOCKED = _ARTIFACTS_LOCKED
 KIND = "unified_v0"
-
-
-#: The locked pointer.  Same file `src.clot_ml.locked` follows for the GNN generations.
-POINTER = REPO / "data/reference/clot_gnn_locked.json"
-
-
-def pointer_v0_name() -> str | None:
-    """The ``unified_v0`` artifact the locked pointer currently names, or ``None``.
-
-    Returns ``None`` rather than raising when the pointer is missing, unreadable, or names a
-    generation of a different kind, so an ordinary checkout without a promoted artifact keeps
-    working on the compiled-in default.
-    """
-    import json
-
-    try:
-        ptr = json.loads(POINTER.read_text())
-    except (OSError, ValueError):
-        return None
-    if ptr.get("kind") != KIND:
-        return None
-    n = str(ptr.get("name") or "").strip()
-    return n or None
-
-
-def resolve_clot_ml_name(name: str | None = None) -> str:
-    """Resolve an artifact id, following the locked POINTER for the canonical name.
-
-    ``clot_ml_0`` is not a directory on disk -- it is the NAME OF WHATEVER IS SHIPPED, and
-    every generation so far has lived under its own id (`clot_ml_v0`, `DeployClot_0`,
-    `DeployClot_1`).  Until 2026-09-03 this function ignored the pointer and returned the
-    compiled-in default, whose directory does not exist, so `_locked_root` fell through to
-    the `clot_ml_v0` legacy fallback.  The consequence was silent and total: **promoting and
-    repointing changed nothing for any caller that did not pass an explicit name** -- which
-    includes `locked.load_default` (it read the pointer for the KIND and then dropped the
-    name) and `CustomerDeployPipeline`, i.e. the shipped product, which asks for
-    ``clot_ml_0`` by that constant and was still being served a two-generation-old artifact
-    built on `clot_gnn_v6`.
-
-    An explicit id is always honoured verbatim, so pinned comparisons against a named past
-    generation are unaffected.
-    """
-    n = (name or DEFAULT_NAME).strip()
-    if n in LEGACY_NAMES or n == DEFAULT_NAME:
-        pointed = pointer_v0_name()
-        if pointed and (LOCKED / pointed).is_dir():
-            return pointed
-        return DEFAULT_NAME
-    return n
-
-
-def _locked_root(name: str | None = None) -> Path:
-    """Resolve on-disk locked artifact directory (canonical name, then legacy fallback)."""
-    canonical = resolve_clot_ml_name(name)
-    root = LOCKED / canonical
-    if root.is_dir():
-        return root
-    if canonical == DEFAULT_NAME and (legacy := LOCKED / "clot_ml_v0").is_dir():
-        return legacy
-    return root
 
 #: COMSOL's own Damkohler split (docs/WOUND_PROGRESS.md 18.2).  Not an 003 fit.
 DA_SCALE_AUTO = 123.0

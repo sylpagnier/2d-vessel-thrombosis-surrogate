@@ -462,7 +462,10 @@ class LegacySpeciesDeployPipeline:
 # Customer deploy uses the locked ``clot_ml_0`` unified stack.
 DEFAULT_CUSTOMER_CLOT_MODEL = "clot_ml_0"
 DEFAULT_CUSTOMER_FLOW = "fem"
-_LOCKED_CUSTOMER_CLOT_MODEL = "clot_ml_0"
+# Role, not a name: the product follows the locked pointer like everything else.
+# This was a literal, which is how the shipped UI ended up served by a
+# two-generation-old artifact for an entire sweep campaign (DEPLOYCLOT.md 21).
+_LOCKED_CUSTOMER_CLOT_MODEL = "clot_ml_0"   # alias; resolved via clot_ml.artifacts
 
 
 class CustomerDeployPipeline:

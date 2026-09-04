@@ -1637,3 +1637,47 @@ Onset timing, regenerated on the new archive: **median lag +0.0 steps, 34.3% ear
 on-time / 26.1% late**, over 2,995 matched pairs across 27 vessels. The documented figure was
 19% / 45% / 36% -- "a real but mild late bias". **That bias is gone**; the distribution is now
 centred and very slightly early-leaning. Fig 12's caption must be rewritten, not reused.
+
+## 29. Artifact identity, centralised — `src/clot_ml/artifacts.py`
+
+Identity used to live in about twenty places: `DEFAULT_NAME` in `v0.py`,
+`_LOCKED_CUSTOMER_CLOT_MODEL` in the customer pipeline, `clot_ml_model` in the publication
+config, a `BASE`/`DEFAULT_BASE` in three promotion scripts, and an `argparse` default in a
+dozen more. **They drifted, because nothing made them agree.** On 2026-09-04 the shipped stack
+was `DeployClot2_0` while `eval_clot_ml_0.py --baseline` still defaulted to `clot_gnn_v5w`,
+two generations back, and the customer UI had been served the legacy `clot_ml_v0` stub for an
+entire sweep campaign (§21, §26).
+
+Code no longer names artifacts. A caller asks for a **role** and the registry answers from the
+locked pointer:
+
+| role | kind | currently |
+|---|---|---|
+| `UNIFIED` | `unified_v0` | `DeployClot2_0` |
+| `WOUND` | `temporal_v4_wound` | `DeployClot2_w` |
+| `BASE` | `temporal_v4` | `DeployClot2` |
+
+**The chain is derived, not listed.** A `unified_v0` manifest names its `base_model`, which
+names its own. Walking it means the three roles cannot disagree, and a new generation needs no
+edit here — only a promotion. Repointing now changes every consumer at once, which is what a
+pointer was always supposed to mean.
+
+**Explicit names always win.** `resolve("DeployClot_0")` returns exactly that; the pinned
+comparisons that make the ablation tables readable are never retargeted.
+
+### 29.1 A latent bug this exposed
+
+`load_temporal_v4(None)` and `load_temporal_v4_wound(None)` both fell back to `ptr["path"]` —
+the **unified** artifact, a different kind. So `load_temporal_v4_wound(None)` read a
+`unified_v0` manifest and raised `KeyError` on `"wound"`. The default was unusable, which is
+precisely why every caller named a baseline explicitly, and why those literals were free to go
+stale. Both loaders now resolve their own role.
+
+### 29.2 Net effect
+
+`v0.py` and `locked.py` lose 66 lines and gain 21. Nine `argparse` defaults naming
+one-to-three-generation-old artifacts become `None`, i.e. "ask the registry". `v0` re-exports
+`DEFAULT_NAME` / `resolve_clot_ml_name` / `pointer_v0_name` for its existing importers, pinned
+by a test asserting they are the registry's own objects and have not forked.
+
+**To ship a new generation: promote with `--repoint`. Nothing else changes.**

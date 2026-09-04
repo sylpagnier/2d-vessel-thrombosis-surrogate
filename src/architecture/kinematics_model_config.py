@@ -61,6 +61,7 @@ def snapshot_rgp_deq_model_config(model: RGP_DEQ) -> dict[str, Any]:
         "use_width_priors": bool(model.use_width_priors),
         "wss_fuse": bool(getattr(model, "wss_fuse", False)),
         "bc_envelope": bool(getattr(model, "bc_envelope", False)),
+        "bc_lambda": float(getattr(model, "bc_lambda", 10.0)),
         "fourier_learnable": bool(getattr(model, "fourier_learnable", False)),
         "shear_head": bool(getattr(model, "shear_head", False)),
         "decoder_skip": bool(getattr(model, "decoder_skip", False)),
@@ -206,6 +207,8 @@ def resolve_rgp_deq_ctor_kwargs(
             )
         if "bc_envelope" not in ctor or ctor.get("bc_envelope") is None:
             ctor["bc_envelope"] = bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
+        if ctor.get("bc_lambda") is None:
+            ctor["bc_lambda"] = float(os.environ.get("KINEMATICS_BC_LAMBDA", "10.0"))
         if "shear_head" not in ctor or ctor.get("shear_head") is None:
             ctor["shear_head"] = any(str(k).startswith("shear_decoder.") for k in state_dict)
         # The tensors outrank the manifest for both of these: the decoder width and the presence
@@ -241,6 +244,8 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["wss_fuse"] = bool(saved["wss_fuse"])
         if "bc_envelope" in saved:
             ctor["bc_envelope"] = bool(saved["bc_envelope"])
+        if "bc_lambda" in saved:
+            ctor["bc_lambda"] = float(saved["bc_lambda"])
         if "fourier_learnable" in saved:
             ctor["fourier_learnable"] = bool(saved["fourier_learnable"])
         if "decoder_skip" in saved:
@@ -299,6 +304,7 @@ def build_rgp_deq_from_ctor(phys_cfg: Any, ctor: Mapping[str, Any]) -> RGP_DEQ:
         use_width_priors=bool(ctor.get("use_width_priors", True)),
         wss_fuse=bool(ctor["wss_fuse"]) if "wss_fuse" in ctor else None,
         bc_envelope=bool(ctor["bc_envelope"]) if "bc_envelope" in ctor else None,
+        bc_lambda=float(ctor["bc_lambda"]) if ctor.get("bc_lambda") is not None else None,
         fourier_learnable=bool(ctor["fourier_learnable"]) if "fourier_learnable" in ctor else None,
         shear_head=bool(ctor["shear_head"]) if "shear_head" in ctor else True,
         decoder_skip=bool(ctor["decoder_skip"]) if "decoder_skip" in ctor else None,

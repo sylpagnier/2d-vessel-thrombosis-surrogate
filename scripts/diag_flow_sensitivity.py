@@ -50,8 +50,8 @@ def main() -> int:
     ap.add_argument("--alphas", default="0,0.05,0.1,0.2,0.35,0.5,0.75,1.0")
     ap.add_argument("--source", default="pred", choices=("pred", "fem"))
     ap.add_argument("--every", type=int, default=4)
-    ap.add_argument("--v0", default="clot_ml_0")
-    ap.add_argument("--baseline", default="clot_gnn_v5w")
+    ap.add_argument("--v0", default=None)
+    ap.add_argument("--baseline", default=None)
     ap.add_argument("--out", default="outputs/runs/flow_sensitivity.json")
     a = ap.parse_args()
 

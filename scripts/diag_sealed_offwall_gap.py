@@ -95,7 +95,7 @@ def probe(stem: str, bundle, flow: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="DeployClot_0")
+    ap.add_argument("--model", default=None)
     ap.add_argument("--flow", default="fem")
     ap.add_argument("--out", default="outputs/deployclot/sealed_offwall_gap.json")
     args = ap.parse_args()

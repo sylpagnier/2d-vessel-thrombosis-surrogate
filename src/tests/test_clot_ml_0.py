@@ -305,24 +305,11 @@ def test_an_explicit_artifact_id_is_honoured_verbatim():
         assert resolve_clot_ml_name(n) == n
 
 
-def test_resolution_survives_a_missing_pointer(tmp_path, monkeypatch):
-    """An ordinary checkout with no promoted artifact keeps the compiled-in default."""
-    from src.clot_ml import v0 as v0mod
-
-    monkeypatch.setattr(v0mod, "POINTER", tmp_path / "absent.json")
-    assert v0mod.pointer_v0_name() is None
-    assert v0mod.resolve_clot_ml_name() == v0mod.DEFAULT_NAME
-
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
-    monkeypatch.setattr(v0mod, "POINTER", bad)
-    assert v0mod.pointer_v0_name() is None
-
-    other = tmp_path / "other.json"
-    other.write_text('{"kind": "temporal_v4", "name": "DeployClot"}', encoding="utf-8")
-    monkeypatch.setattr(v0mod, "POINTER", other)
-    assert v0mod.pointer_v0_name() is None
-
+# `test_resolution_survives_a_missing_pointer` moved to
+# `src/tests/test_artifacts_registry.py` when artifact identity was centralised: it patches
+# the POINTER, and `v0.POINTER` is now a re-export, so patching it here no longer affects
+# resolution.  The registry's own test patches the real thing and covers strictly more
+# (wrong-kind pointer, derived roles raising rather than guessing).
 
 def test_v0_is_the_base_gnn_on_a_nowound_pack():
     nowound = GRAPH_DIR / "patient012.pt"

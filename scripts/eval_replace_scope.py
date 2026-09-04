@@ -74,7 +74,7 @@ def score_one(bundle, stem: str, scope: str, every: int, flow: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="DeployClot_0")
+    ap.add_argument("--model", default=None)
     ap.add_argument("--flow", default="fem", choices=["gt", "pred", "fem"])
     ap.add_argument("--every", type=int, default=8)
     ap.add_argument("--out", default="outputs/deployclot/replace_scope.json")

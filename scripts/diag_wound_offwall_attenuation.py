@@ -154,7 +154,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--flow", default="fem", choices=["gt", "fem"])
     ap.add_argument("--every", type=int, default=8)
-    ap.add_argument("--artifact", default="DeployClot_0")
+    ap.add_argument("--artifact", default=None)
     ap.add_argument("--stems", nargs="*")
     ap.add_argument("--key", default="w_lum",
                     help="domain the LOVO pick optimises")

@@ -88,7 +88,7 @@ def _agree(pred: np.ndarray, gt: np.ndarray) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="clot_ml_0")
+    ap.add_argument("--model", default=None)
     ap.add_argument("--flow", default="fem", choices=["gt", "pred", "fem"])
     ap.add_argument("--every", type=int, default=4, help="time-grid stride for the rollout")
     ap.add_argument("--wound", default=WOUND_AB_PAIR[0])
