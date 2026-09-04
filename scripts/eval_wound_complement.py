@@ -47,7 +47,7 @@ REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml"
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from src.clot_ml.evaluate import domain_score, f1  # noqa: E402
+from src.clot_ml.evaluate import domain_score, f1, gt_series, score_domains  # noqa: E402
 from src.clot_ml.locked import load_temporal_v4, predict_temporal_v4
 from src.clot_ml.wound import (
     G_POST0, G_PRE0, WOUND_REGION_HOPS, compose_with_v4, predict_wound_series, prepare_vessel,
@@ -61,21 +61,6 @@ WOUND_STEMS = ("wound_comsol001", "wound_comsol002", "wound_comsol003")
 #: Column order. ``wnd`` sits between the two domains it is confused with, so the table
 #: itself shows it is not the score.
 DOM = ("wall", "wnd", "w_reg", "w_lum", "far", "full")
-
-
-def gt_series(data, phys, times) -> dict:
-    from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
-
-    return {int(ti): gt_clot_phi_at_time(data, int(ti), phys).numpy() > 0.5 for ti in times}
-
-
-def score_domains(pred: np.ndarray, gt: np.ndarray, ei, wall_for_hops: np.ndarray,
-                  domains: dict) -> dict:
-    out = {}
-    for name, dom in domains.items():
-        out[name] = domain_score(pred, gt, ei, dom, wall_for_hops)
-        out[name + "_f1"] = f1(pred & dom, gt & dom)
-    return out
 
 
 def mean_over_time(series: dict, gts: dict, ei, wall_for_hops, domains: dict) -> dict:

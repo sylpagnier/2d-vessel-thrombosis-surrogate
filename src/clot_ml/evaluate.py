@@ -83,3 +83,34 @@ def banner(tag: str, s: dict) -> str:
     f, d = s["fit"], s["dev"]
     return ("%-26s | FIT wall %.4f off %.4f full %.4f | DEV wall %.4f off %.4f full %.4f"
             % (tag, f["wall"], f["off"], f["full"], d["wall"], d["off"], d["full"]))
+
+
+# --- helpers the deploy probe and the eval scripts share -------------------------
+# These lived in `scripts/eval_clot_ml_0.py` and `scripts/eval_wound_complement.py`,
+# which meant `src/utils/kinematics_deploy_probe.py` imported from a script.
+
+
+def time_grid(data, every: int) -> list[int]:
+    """Evaluation time indices: every ``every`` steps, always including the last."""
+    n_times = int(data.y.shape[0])
+    grid = list(range(0, n_times, max(int(every), 1)))
+    if grid[-1] != n_times - 1:
+        grid.append(n_times - 1)
+    return grid
+
+
+def gt_series(data, phys, times) -> dict:
+    """Ground-truth clot mask at each requested time index."""
+    from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
+
+    return {int(ti): gt_clot_phi_at_time(data, int(ti), phys).numpy() > 0.5 for ti in times}
+
+
+def score_domains(pred: np.ndarray, gt: np.ndarray, ei, wall_for_hops: np.ndarray,
+                  domains: dict) -> dict:
+    """Per-domain relaxed score plus strict F1."""
+    out = {}
+    for name, dom in domains.items():
+        out[name] = domain_score(pred, gt, ei, dom, wall_for_hops)
+        out[name + "_f1"] = f1(pred & dom, gt & dom)
+    return out

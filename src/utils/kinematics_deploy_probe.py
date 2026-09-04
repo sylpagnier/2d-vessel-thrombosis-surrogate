@@ -54,9 +54,10 @@ def deploy_f1_probe(model, device, *, stems=None, every: int = 25, verbose: bool
     try:
         from pathlib import Path
 
-        from scripts.eval_clot_ml_0 import PACKS, _times
-        from scripts.eval_wound_complement import gt_series, score_domains
         from src.clot_ml.data import eval_domains
+        from src.clot_ml.evaluate import gt_series, score_domains
+        from src.clot_ml.evaluate import time_grid as _times
+        from src.utils.paths import anchor_packs_dir as _packs_dir
         from src.clot_ml.locked import build_sample, load_temporal_v4_wound
         from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0
         from src.config import BiochemConfig, PhysicsConfig
@@ -80,7 +81,7 @@ def deploy_f1_probe(model, device, *, stems=None, every: int = 25, verbose: bool
     model.eval()
     out: dict[str, float] = {}
     for stem in stems:
-        p = Path(PACKS) / f"{stem}.pt"
+        p = Path(_packs_dir()) / f"{stem}.pt"
         if not p.is_file():
             continue
         try:

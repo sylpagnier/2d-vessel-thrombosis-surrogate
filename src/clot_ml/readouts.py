@@ -229,3 +229,37 @@ def tune_separable(name, bench, scores, anchors):
 
 def apply(name, S, score, p):
     return REGISTRY[name][0](S, score, p)
+
+
+import torch  # noqa: E402
+
+from src.clot_ml.severity_metric import DEFAULT, soft_severity  # noqa: E402
+from src.clot_ml.softmetric import soft_dilate  # noqa: E402
+
+# --- expected-score prefix curve -------------------------------------------------
+# Moved out of `scripts/eval_expected_score_readout.py`: `clot_ml.locked` reads the
+# shipped committed set through it, so the library cannot depend on a script for it.
+
+#: log-spaced prefix lengths evaluated per vessel/domain
+N_PREFIX = 40
+
+
+def expected_curve(sc, dom, D_t, dev, gamma):
+    """-> (ks, expected score at each prefix length) for one vessel/domain."""
+    d = torch.tensor(np.asarray(dom, np.float32), device=dev)
+    p_raw = np.clip(np.asarray(sc, np.float64), 1e-6, 1 - 1e-6) ** gamma
+    p = torch.tensor(p_raw.astype(np.float32), device=dev)
+    gt_dil = soft_dilate(p * d, D_t).detach()
+    idx = np.argsort(-np.asarray(sc)[np.asarray(dom, bool)])
+    order = np.flatnonzero(np.asarray(dom, bool))[idx]
+    n = len(order)
+    if n < 4:
+        return np.array([0]), np.array([0.0])
+    ks = np.unique(np.clip(np.geomspace(1, n, N_PREFIX).astype(int), 1, n))
+    vals = []
+    for k in ks:
+        m = np.zeros(len(sc), np.float32)
+        m[order[:k]] = 1.0
+        v = soft_severity(torch.tensor(m, device=dev), p, D_t, d, gt_dil, DEFAULT)
+        vals.append(float(v) if v is not None else -1e9)
+    return ks, np.asarray(vals)

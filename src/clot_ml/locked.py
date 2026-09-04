@@ -76,7 +76,7 @@ def sample_for_ensemble(ens: dict, data, bio_cfg=None, phys_cfg=None, *,
 @torch.no_grad()
 def predict_scores(ens: dict, sample: dict) -> np.ndarray:
     """Mean per-node probability over the ensemble.  ``sample`` is a clot-ml cache entry."""
-    from scripts.train_clot_gnn import build_graph, rollout  # noqa: PLC0415
+    from src.clot_ml.gnn import build_graph, rollout  # noqa: PLC0415
 
     out = None
     for m in ens["members"]:
@@ -172,7 +172,7 @@ def predict_mat(ens: dict, sample: dict) -> np.ndarray:
     backbone's own ``Mat``) but has never been the readout -- the deploy score uses the
     classifier.  It is the natural place to read the magnitude field from.
     """
-    from scripts.train_clot_gnn import build_graph, rollout  # noqa: PLC0415
+    from src.clot_ml.gnn import build_graph, rollout  # noqa: PLC0415
 
     out = None
     for m in ens["members"]:
@@ -243,8 +243,8 @@ def load_temporal_v4(name: str | None = None) -> dict:
 
 def _committed_set_v4(S: dict, sc: np.ndarray, temporal: dict) -> np.ndarray:
     """Apply the shipped wall + off-wall committed-set specs to one vessel's scores."""
-    from scripts.eval_expected_score_readout import expected_curve  # noqa: PLC0415
-    from scripts.eval_strict import apply_adapt, readout_resid  # noqa: PLC0415
+    from src.clot_ml.readouts import expected_curve  # noqa: PLC0415
+    from src.clot_ml.strict_readout import apply_adapt, readout_resid  # noqa: PLC0415
     from src.clot_ml.softmetric import dilation_operator, to_torch_sparse  # noqa: PLC0415
 
     def apply_spec(spec, dom_of):
@@ -313,7 +313,7 @@ def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
     time-resolved transport field (mat_adv_t) is solved fresh for exactly these times, so
     unlike a precomputed cache this is not restricted to any fixed grid density.
     """
-    from scripts.eval_strict_temporal import (  # noqa: PLC0415
+    from src.clot_ml.temporal import (  # noqa: PLC0415
         lag_features, node_features, ode_wall_series, offwall_by_learned_lag, series_masks,
         time_block,
     )

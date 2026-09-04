@@ -47,12 +47,7 @@ DEFAULT_STEMS = tuple(WOUND_COHORT) + (
 )
 
 
-def _times(data, every: int) -> list[int]:
-    T = int(data.y.shape[0])
-    grid = list(range(0, T, max(int(every), 1)))
-    if grid[-1] != T - 1:
-        grid.append(T - 1)
-    return grid
+from src.clot_ml.evaluate import time_grid as _times  # noqa: E402
 
 
 def _cohort_stems() -> list[str]:

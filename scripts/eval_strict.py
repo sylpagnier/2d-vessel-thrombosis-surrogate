@@ -34,6 +34,9 @@ from pathlib import Path
 
 import numpy as np
 
+from src.clot_ml.strict_readout import (  # noqa: E402
+    ADAPT_STAT, N_PARAMS, apply_adapt, readout_plain, readout_resid, vessel_stat,
+)
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
@@ -97,27 +100,6 @@ class BoundScorer:
 # ---------------------------------------------------------------------------
 # readouts.  Both families are offered and the choice is made INSIDE the fold.
 # ---------------------------------------------------------------------------
-def readout_plain(S, sc, th):
-    """One cut per domain."""
-    tw, to = th
-    w = S["wall"]
-    return (w & (sc >= tw)) | (~w & (sc >= to))
-
-
-def readout_resid(S, sc, th):
-    """Separate cuts for keeping a physics-positive node and adding a physics-negative one.
-
-    Wall error is two opposite failure modes (PHASE7 10.3: weak-separation false positives
-    on 018/019/025 against ungated false negatives on 012/028) and one cut cannot serve
-    both.  This is the readout `train_clot_gnn.py` already uses; it is offered here so the
-    comparison between feature sets is not confounded by the readout family.
-    """
-    kw, aw, ko, ao = th
-    w, ph = S["wall"], S["phys_mask"]
-    return ((w & ph & (sc >= kw)) | (w & ~ph & (sc >= aw))
-            | (~w & ph & (sc >= ko)) | (~w & ~ph & (sc >= ao)))
-
-
 def tune_plain(cache, vs, anchors, sc, grid):
     out = []
     for dom_of in (wall_domain, off_domain):
@@ -152,6 +134,8 @@ def tune_resid(cache, vs, anchors, sc, grid):
     return tuple(out)
 
 
+#: family name -> (tuner, readout).  The readouts are library functions now;
+#: only the tuners are script-level, because they search rather than apply.
 FAMILIES = {"plain": (tune_plain, readout_plain), "resid": (tune_resid, readout_resid)}
 
 
@@ -188,22 +172,7 @@ FAMILIES = {"plain": (tune_plain, readout_plain), "resid": (tune_resid, readout_
 #: domain) is used rather than a tail quantile because it is the most robust of the four
 #: measured, and because `scripts/eval_fusion_calib.py` found q90/mean/physfrac all move the
 #: score the same way while q99 does not -- a tail statistic is the fragile choice at n=19.
-ADAPT_STAT = "mean"
 B_GRID = np.round(np.linspace(-1.2, 1.2, 13), 3)
-
-
-def vessel_stat(S, sc, dom, name=ADAPT_STAT):
-    d = np.asarray(dom, dtype=bool)
-    v = np.asarray(sc, dtype=np.float64)[d]
-    if v.size == 0:
-        return 0.0
-    if name == "mean":
-        return float(v.mean())
-    if name == "q90":
-        return float(np.quantile(v, 0.90))
-    if name == "physfrac":
-        return float((S["phys_mask"] & d).sum() / max(d.sum(), 1))
-    raise ValueError(name)
 
 
 def tune_adapt(cache, vs, anchors, sc, family, th, dom_of, return_support=False):
@@ -244,25 +213,7 @@ def tune_adapt(cache, vs, anchors, sc, family, th, dom_of, return_support=False)
     return best[1], med, lo, hi
 
 
-def apply_adapt(S, sc, family, th, dom_of, b, med, lo=None, hi=None):
-    """Perturb the cohort cut by the fitted slope on this vessel's own statistic.
-
-    ``lo``/``hi`` bound the statistic to the support `tune_adapt` fitted over.  Inside that
-    support clamping is an EXACT no-op -- verified bit-identical on all 19 pool vessels by
-    `scripts/eval_adapt_clamp.py`, under both the geometry-stratified partition and one that
-    deliberately holds the extremes out -- so it cannot flatter anything the cohort measures.
-    Outside it, the cut is held at the most extreme perturbation the fit actually saw rather
-    than continuing a line no labelled vessel supports.  Both default to ``None``, which
-    reproduces the unbounded behaviour exactly.
-    """
-    stat = vessel_stat(S, sc, dom_of(S))
-    if lo is not None and hi is not None:
-        stat = float(min(max(stat, float(lo)), float(hi)))
-    off = b * (stat - med)
-    return FAMILIES[family][1](S, sc, tuple(np.clip(np.array(th) + off, 0.02, 0.98)))
-
 #: free scalars per domain, per family -- `resid` has twice `plain`'s
-N_PARAMS = {"plain": 1, "resid": 2}
 
 
 def pick_family(cache, vs, anchors, sc, grid, dom_of, inner=3, seed=0):

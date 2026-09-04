@@ -206,3 +206,181 @@ def union_ungated_stall_series(data, bio_cfg, series: dict, times, *, flow: str 
         out[key] = np.asarray(out[key]) | (ung & (np.asarray(traj)[ti_c] >= crit))
     return out
 
+
+
+# --- strict-CV temporal features -------------------------------------------------
+# Moved out of `scripts/eval_strict_temporal.py`. `clot_ml.locked.predict_temporal_v4`
+# builds its features with these, so a promoted temporal artifact cannot be scored
+# without them -- they are library code that happened to live in a script.
+
+#: The owner-onset contour level the ODE wall series is read at, held in a
+#: one-element list so callers can retune it in place.  `scripts/eval_strict_temporal.py`
+#: sweeps it per fold and writes `ANCHOR_LEVEL[0]`; `ode_wall_series` reads it.
+#: Shared mutable state, kept beside its reader rather than in a script.
+ANCHOR_LEVEL = [1.0]
+
+#: Per-anchor predicted owner-onset, keyed by anchor stem.  The timing head is fed the
+#: MODEL's estimate of when a node's owner commits rather than the ODE's, which is biased
+#: low (PHASE9 12.2: "crit/att is simply unreachable").  Populated by the caller before
+#: `time_block` runs -- `scripts/eval_strict_temporal.py` fills it per fold.  Shared
+#: mutable state, which is not lovely, but it lives with its reader now instead of being
+#: a global in a script the library imported.
+OWNER_PRED: dict = {}
+
+
+def lag_features(V, a, oofs):
+    """Node features for the lag regression, plus the PHYSICS' own predicted lag.
+
+    The transport solve already answers the question the lag model is asking.  For each node
+    it gives the grid step at which the advected field crosses `crit`, and for that node's
+    owner the step at which the wall ODE does; their difference is the lag the physics
+    predicts, with no fitting at all.  Handing the regression that residual target is much
+    easier than making it rediscover the boundary-layer filling time from static features.
+    """
+    X = node_features(V, a, oofs)
+    v, S = V[a], V[a]["S"]
+    if v["tt"] is None:
+        return X
+    thr = float(np.log(2.0))
+    n_t = len(v["times"])
+
+    def first_cross(F):
+        hot = F >= thr
+        return np.where(hot.any(0), hot.argmax(0), n_t).astype(np.float32)
+
+    t_adv = first_cross(v["tt"]["mat_adv_t"])          # when transport says THIS node fires
+    t_own = first_cross(v["tt"]["mat_self_t"])[S["owner"]]   # ... and when its owner does
+    return np.concatenate([X, t_adv[:, None], t_own[:, None],
+                           (t_adv - t_own)[:, None]], axis=1)
+
+
+def node_features(V, a, oofs):
+    """Static per-node block: the cached features, the t=0 rate, the ODE onset, and EVERY
+    arm's out-of-fold score as its own column (the head can weigh them itself)."""
+    v, S = V[a], V[a]["S"]
+    cols = [S["X"], np.log1p(np.maximum(v["r0"], 0))[:, None], (v["oon"] / v["T"])[:, None]]
+    cols += [oofs[arm][a][:, None] for arm in sorted(oofs)]
+    return np.concatenate(cols, axis=1)
+
+
+def ode_wall_series(V, a, gm, n_t):
+    """Wall commit series taken from the ODE's own crossing -- the physics anchor."""
+    v, S = V[a], V[a]["S"]
+    oi = np.searchsorted(np.asarray(v["times"]), v["oon_c"][ANCHOR_LEVEL[0]], side="left")
+    M = np.zeros((n_t, len(S["wall"])), dtype=bool)
+    for j in range(n_t):
+        M[j] = gm & S["wall"] & (oi <= j)
+    return M
+
+
+def offwall_by_learned_lag(M_wall, gm, owner, wall, lag_per_node, commit_final=True,
+                           times=None, horizon=None):
+    """As :func:`offwall_by_lag` but with a per-node lag instead of a cohort constant.
+
+    ``times``/``horizon`` switch the lag from WHOLE GRID STEPS to a continuous fraction of
+    the run.  The quantised form is why refining the regression was measured EXACTLY neutral
+    to four decimals: the lag is rounded to one of eleven steps, so a better prediction never
+    crosses a step boundary and the mask does not change.  Continuous lags are added to the
+    owner's commit TIME and compared against the real grid times, so a predicted 0.36 T and a
+    0.44 T land on different steps where 4-vs-4 steps could not.
+    """
+    T, N = M_wall.shape
+    won = np.full(N, T, dtype=int)
+    for j in range(T - 1, -1, -1):
+        won[M_wall[j]] = j
+    if times is None or horizon is None:
+        on_idx = np.clip(won[owner] + np.rint(lag_per_node).astype(int), 0, T)
+        M = np.zeros((T, N), dtype=bool)
+        for j in range(T):
+            M[j] = gm & ~wall & (on_idx <= j)
+    else:
+        tt = np.asarray(times, dtype=float)
+        big = float(tt[-1]) + 10.0 * float(horizon)
+        own_t = np.where(won[owner] < T, tt[np.clip(won[owner], 0, T - 1)], big)
+        on_t = own_t + np.asarray(lag_per_node, dtype=float) * float(horizon)
+        M = np.zeros((T, N), dtype=bool)
+        for j in range(T):
+            M[j] = gm & ~wall & (on_t <= tt[j])
+    if commit_final:
+        M[-1] = gm & ~wall
+    return np.maximum.accumulate(M, axis=0)
+
+
+def series_masks(gm, P, th, commit_final=True, owner=None, wall=None):
+    """Committed mask at each time, with the two constraints the production law implies.
+
+    MONOTONE: `P` is already a cumulative maximum, so a node never un-clots -- `J0_Mat >= 0`
+    and there is no sink (PHASE7 12.1 measured wall `Mat` to be the exact time-integral of
+    its own nodal derivative, rank 0.999).
+
+    COMMIT BY THE END: every node in the committed set is clot at the last timestep.  This
+    is a coherence constraint, not a new model -- the set *is* the prediction of the final
+    mask, so a node that is in the set but still below the time cut at `t_final` is the
+    readout contradicting itself.  v3 had no such constraint and paid for it: its extra
+    probability filter DELETES correct nodes at the last step, which is exactly why the
+    time-conditioned arm reads FINAL off-wall 0.6514 against the frozen set's 0.7075 on
+    the same set.  With this, the final mask equals the set by construction, so the
+    temporal arm can no longer lose to frozen at `t_final`.
+
+    Whether to enforce it is chosen per domain inside the fold, because the probability
+    filter is not purely a cost: on the wall it also removes low-confidence set members and
+    measured +0.014 FINAL there, while off-wall it deletes real clot and costs -0.064.
+
+    OWNER PRECEDENCE: an off-wall node is fed by its nearest wall node -- PHASE7 3.1
+    measured that an off-wall GT node's owner is itself GT-committed **99.9%** of the time,
+    and PHASE7 1.1 says why (the wall flux is the only source, `Mat` is advected from it).
+    So an off-wall node cannot be clot before its owner is.  `src/clot_ml/locked.py`'s
+    shipped `enforce_owner_and_monotone` applies this and the strict evaluator did not.
+    """
+    M = gm[None, :] & (P >= th)
+    if commit_final:
+        M[-1] = gm
+    M = np.maximum.accumulate(M, axis=0)
+    if owner is not None and wall is not None:
+        keep = np.zeros(M.shape[1], dtype=bool)
+        for j in range(M.shape[0]):
+            m = M[j] | keep
+            m &= (wall | m[owner])
+            M[j] = m
+            keep = m
+    return M
+
+
+def time_block(V, a, j, sel=None):
+    """The per-(node, time) columns for grid index ``j``, optionally on a node subset.
+
+    v3 had two: the normalised query time and the ODE's fired/not-fired bit.  The rest are
+    the time-resolved physics of `scripts/build_temporal_transport.py` -- the node's own
+    ODE `Mat(t)`, its owner's, and the advected off-wall field `mat_adv(t)`, all as
+    continuous log values.  The advected channel is the first time-varying quantity the
+    head has ever been given off the wall.
+    """
+    v = V[a]
+    ti = v["times"][j]
+    idx = slice(None) if sel is None else np.asarray(sel, dtype=bool)
+    ode_now = (v["oon"][idx] <= ti).astype(np.float32).reshape(-1, 1)
+    cols = [np.full((len(ode_now), 1), ti / v["T"], dtype=np.float32), ode_now]
+    if v["tt"] is not None:
+        for k in ("mat_self_t", "mat_owner_t", "mat_adv_t"):
+            cols.append(v["tt"][k][j][idx].reshape(-1, 1))
+    # --- the OWNER'S OWN PREDICTED STATE ----------------------------------------------
+    # The head sees `mat_owner_t`, the owner's ODE `Mat(t)` -- but the ODE is biased low,
+    # which is exactly why PHASE9 12.2's owner-threshold timing rule collapsed ("crit/att is
+    # simply unreachable").  The MODEL's estimate of when the owner commits is much better
+    # than the ODE's, and it is available: run the head once, read off the wall onsets, feed
+    # them back.  This is the timing analogue of the `log_mat_owner` channel.
+    if a in OWNER_PRED:
+        op = OWNER_PRED[a]
+        cols.append(op[j][idx].reshape(-1, 1))
+        cols.append(op[-1][idx].reshape(-1, 1))
+    # --- the PER-VESSEL PHYSICS CLOCK -------------------------------------------------
+    # `ti / T` is a wall-clock fraction and says nothing about how far THIS vessel has got.
+    # PHASE9 13.5 measured exactly this: replacing the ODE's per-vessel onset histogram with
+    # a pooled cohort growth curve costs -0.081 wall, and concluded "the ODE's contribution
+    # is not its ordering -- it is its per-vessel time CALIBRATION".  13.6/13.9 then showed a
+    # known per-vessel schedule is worth +0.036 wall / +0.125 off over the ODE's.  These two
+    # scalars are the deployable form of that calibration: how far along its OWN growth this
+    # vessel is at `ti`, by the ODE and by the advected field, broadcast to every node.
+    for c in v["clock"]:
+        cols.append(np.full((len(ode_now), 1), c[j], dtype=np.float32))
+    return np.concatenate(cols, axis=1)

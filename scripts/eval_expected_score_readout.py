@@ -36,6 +36,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from src.clot_ml.readouts import N_PREFIX, expected_curve  # noqa: E402
 from src.utils.paths import anchor_packs_dir, get_project_root
 
 REPO = get_project_root()
@@ -143,27 +144,6 @@ def oracle_cut_score(vs_a, sc_a, d):
         if x == x and (best != best or x > best):
             best = float(x)
     return best
-
-
-def expected_curve(sc, dom, D_t, dev, gamma):
-    """-> (ks, expected score at each prefix length) for one vessel/domain."""
-    d = torch.tensor(np.asarray(dom, np.float32), device=dev)
-    p_raw = np.clip(np.asarray(sc, np.float64), 1e-6, 1 - 1e-6) ** gamma
-    p = torch.tensor(p_raw.astype(np.float32), device=dev)
-    gt_dil = soft_dilate(p * d, D_t).detach()
-    idx = np.argsort(-np.asarray(sc)[np.asarray(dom, bool)])
-    order = np.flatnonzero(np.asarray(dom, bool))[idx]
-    n = len(order)
-    if n < 4:
-        return np.array([0]), np.array([0.0])
-    ks = np.unique(np.clip(np.geomspace(1, n, N_PREFIX).astype(int), 1, n))
-    vals = []
-    for k in ks:
-        m = np.zeros(len(sc), np.float32)
-        m[order[:k]] = 1.0
-        v = soft_severity(torch.tensor(m, device=dev), p, D_t, d, gt_dil, DEFAULT)
-        vals.append(float(v) if v is not None else -1e9)
-    return ks, np.asarray(vals)
 
 
 def rank01(x, d):

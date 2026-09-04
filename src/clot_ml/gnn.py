@@ -132,3 +132,66 @@ def to_device(S: dict, mu: np.ndarray, sd: np.ndarray, dev: torch.device) -> dic
         # predate the geometry union fall back to `wall`.
         solid=t(np.asarray(S.get("solid", S["wall"])).astype(np.float32)),
         n=int(len(S["wall"])))
+
+
+# --- graph assembly and refinement rollout ---------------------------------------
+# Moved out of `scripts/train_clot_gnn.py`: `clot_ml.locked` builds and rolls the
+# locked ensemble with these, so the library depended on a training script to score
+# a promoted model.  Both are unchanged.
+
+import numpy as np  # noqa: E402
+
+from src.clot_ml.recurrent import (  # noqa: E402
+    advective_operators, feedback_channels, feedback_channels_advective, neighbour_operator,
+)
+from src.clot_ml.softmetric import (  # noqa: E402
+    dilation_operator, soft_dilate, to_torch_sparse,
+)
+
+
+def to_weighted_sparse(M, dev_t):
+    """Like ``to_torch_sparse`` but KEEPS the values -- upwind weights are not indicators."""
+    C = M.tocoo()
+    idx = torch.tensor(np.stack([C.row, C.col]), dtype=torch.long, device=dev_t)
+    val = torch.tensor(C.data, dtype=torch.float32, device=dev_t)
+    return torch.sparse_coo_tensor(idx, val, M.shape).coalesce()
+
+
+def build_graph(S, mu, sd, dev_t, *, need_soft=False, need_fb=False, adv_fb=False):
+    g = to_device(S, mu, sd, dev_t)
+    g["phys"] = torch.tensor(S["phys_mask"].astype(np.float32), device=dev_t)
+    if need_fb:
+        g["At"] = to_torch_sparse(neighbour_operator(S["edge_index"], len(S["wall"])), dev_t)
+        g["owner"] = torch.tensor(S["owner"].astype(np.int64), device=dev_t)
+        if adv_fb:
+            Wu, Wd = advective_operators(S["pos"], S["edge_index"], S["u"], S["v"])
+            g["Wup"] = to_weighted_sparse(Wu, dev_t)
+            g["Wdn"] = to_weighted_sparse(Wd, dev_t)
+    if need_soft:
+        D = dilation_operator(S["edge_index"], len(S["wall"]), 2)
+        g["D"] = to_torch_sparse(D, dev_t)
+        g["gt_dil"] = soft_dilate(g["y"], g["D"]).detach()
+    # TRUE LUMEN, matching `src/clot_ml/data.off_domain`: `1 - solid`, not `1 - wall`.
+    g["off"] = 1.0 - g["solid"]
+    return g
+
+
+def rollout(model, g, rounds, adv_fb=False):
+    """K shared-weight refinement rounds; round 0 occlusion is the physics mask."""
+    if rounds <= 1:
+        return model(g["x"], g["ei"], g["ea"], g["w_up"], g["w_dn"], g["mat_phys"])
+    p = g["phys"].clone()
+    R = int(rounds)
+    for k in range(R):
+        extra = (feedback_channels_advective(p, g["At"], g["Wup"], g["Wdn"],
+                                            g["owner"])
+                 if adv_fb else feedback_channels(p, g["At"], g["owner"]))
+        logit, reg = model(g["x"], g["ei"], g["ea"], g["w_up"], g["w_dn"], g["mat_phys"],
+                           extra=extra)
+        # truncated BPTT: only the last round carries gradient, so peak memory is one
+        # round's activations rather than R (a 4 GB card cannot hold R=3 at dim 96).
+        if k < R - 1:
+            p = torch.sigmoid(logit).detach()
+        else:
+            p = torch.sigmoid(logit)
+    return logit, reg
