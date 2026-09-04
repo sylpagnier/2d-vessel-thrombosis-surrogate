@@ -19,6 +19,7 @@ silently reintroduce a non-differentiating "gradient".
 """
 
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import numpy as np
 import pytest
@@ -107,7 +108,7 @@ import torch  # noqa: E402
 
 def _anchor():
     from pathlib import Path
-    paths = sorted(Path("data/processed/graphs_biochem_anchors").glob("comsol0*.pt"))
+    paths = sorted(anchor_packs_dir().glob("comsol0*.pt"))
     if not paths:
         pytest.skip("no biochem anchor graphs")
     return torch.load(str(paths[0]), map_location="cpu", weights_only=False)

@@ -25,6 +25,7 @@ Usage:
     python scripts/repair_wound_pack_geometry.py
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import shutil
@@ -42,7 +43,7 @@ if str(REPO) not in sys.path:
 
 from src.data_gen.lib.pack_repair import rebuild_x, write_x  # noqa: E402
 
-DEFAULT_DIR = Path("data/processed/graphs_biochem_anchors")
+DEFAULT_DIR = anchor_packs_dir()
 SIDECAR_DIR = Path("data/raw/biochem_anchors")
 
 

@@ -18,6 +18,7 @@ things are genuinely new here, both worth stating plainly:
      about physical thrombus-extension timing.
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import json
 import sys
@@ -49,7 +50,7 @@ from scripts.predict_wall_clot import (  # noqa: E402
     predict_wall_onset,
 )
 
-DIR = Path("data/processed/graphs_biochem_anchors")
+DIR = anchor_packs_dir()
 VESSELS = [
     ("comsol012", "gt"),
     ("comsol044", "gt"),

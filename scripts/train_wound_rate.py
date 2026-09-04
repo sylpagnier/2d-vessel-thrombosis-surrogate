@@ -20,6 +20,7 @@ Usage:
     python scripts/train_wound_rate.py --epochs 400 --hidden 32
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import dataclasses
@@ -52,7 +53,7 @@ torch.set_num_threads(1)
 from src.biochem_gnn.wall_cohort_constants import WOUND_COHORT
 from src.config import BiochemConfig
 
-GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
+GRAPH_DIR = anchor_packs_dir()
 OUT_DIR = Path("outputs/clot_ml/wound_rate")
 #: Every wound simulation on disk.  Was a hardcoded three until 2026-09-02; the list now
 #: lives with the rest of the cohort so a new wound run enters every fit that uses it.

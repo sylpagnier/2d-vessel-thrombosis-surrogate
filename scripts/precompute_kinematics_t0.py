@@ -1,4 +1,5 @@
 import torch
+from src.utils.paths import anchor_packs_dir
 import sys
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def main():
     
     for anchor in anchors:
         print(f"Precomputing {anchor}...")
-        graph_path = f"data/processed/graphs_biochem_anchors/{anchor}.pt"
+        graph_path = str(anchor_packs_dir() / f"{anchor}.pt")
         data = torch.load(graph_path, weights_only=False).to(device)
         
         from pathlib import Path

@@ -8,6 +8,7 @@ The properties that must not drift:
 * on a pack with no wound the predictor is the base GNN (promotion gate, skip if missing).
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from src.clot_ml.v0 import (
 )
 from src.core_physics.physics_lumen_model import solid_boundary_shells
 
-GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
+GRAPH_DIR = anchor_packs_dir()
 LOCKED = Path("outputs/clot_ml/locked")
 
 

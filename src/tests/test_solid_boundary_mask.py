@@ -8,6 +8,7 @@ wound with them.
 """
 
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import numpy as np
 import torch
@@ -65,7 +66,7 @@ def test_repaired_wound_packs_encode_the_wound_as_wall():
     """End-to-end: on-disk wound packs must carry SDF 0 on the injured segment."""
     from pathlib import Path
 
-    root = Path("data/processed/graphs_biochem_anchors")
+    root = anchor_packs_dir()
     packs = sorted(root.glob("wound_comsol*.pt"))
     if not packs:
         import pytest
@@ -122,7 +123,7 @@ def test_clot_ml_features_encode_the_wound_as_boundary():
     """
     from pathlib import Path
 
-    root = Path("data/processed/graphs_biochem_anchors")
+    root = anchor_packs_dir()
     p = root / "wound_comsol001.pt"
     if not p.exists():
         import pytest

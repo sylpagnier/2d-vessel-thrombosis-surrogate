@@ -5,6 +5,7 @@ the wound's ungated prefactor is not rewritten; stall=False on the ODE is the sh
 clock.
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import numpy as np
 import pytest
@@ -206,7 +207,7 @@ def test_ode_trajectory_rejects_wake_and_stall_together():
 def _load_pack(stem: str):
     from pathlib import Path
 
-    p = Path("data/processed/graphs_biochem_anchors") / f"{stem}.pt"
+    p = anchor_packs_dir() / f"{stem}.pt"
     if not p.exists():
         pytest.skip(f"{stem} not on disk")
     return torch.load(p, map_location="cpu", weights_only=False)

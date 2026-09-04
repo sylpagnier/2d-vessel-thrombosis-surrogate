@@ -1,6 +1,7 @@
 """COMSOL gel-scaled Carreau (spf.mu) physics oracle."""
 
 import os
+from src.utils.paths import anchor_packs_dir
 
 import pytest
 import torch
@@ -16,7 +17,7 @@ from src.core_physics.clot_phi_simple import (
 
 @pytest.fixture
 def anchor_graph():
-    paths = list(__import__("pathlib").Path("data/processed/graphs_biochem_anchors").glob("comsol*.pt"))
+    paths = list(anchor_packs_dir().glob("comsol*.pt"))
     if not paths:
         pytest.skip("no biochem anchor graphs")
     return torch.load(str(paths[0]), map_location="cpu", weights_only=False)
@@ -93,7 +94,7 @@ def test_comsol_sr_sidecar_reproduces_gt_mu():
     from pathlib import Path
 
     sidecar = Path("data/processed/cfd_results_biochem_diag/comsol007_sr.pt")
-    graph_path = Path("data/processed/graphs_biochem_anchors/comsol007.pt")
+    graph_path = anchor_packs_dir() / "comsol007.pt"
     if not sidecar.is_file() or not graph_path.is_file():
         pytest.skip("comsol007 sr sidecar / graph not available")
     os.environ["CLOT_PHI_PHYSICS_MU_BASE"] = "comsol_carreau"

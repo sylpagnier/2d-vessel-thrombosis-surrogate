@@ -31,6 +31,7 @@ Usage:
     python scripts/eval_wound_complement.py --stems wound_comsol001
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -54,7 +55,7 @@ from src.clot_ml.wound import (
 )
 from src.config import BiochemConfig, PhysicsConfig
 
-GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
+GRAPH_DIR = anchor_packs_dir()
 LOVO = Path("outputs/clot_ml/wound_rate/lovo.json")
 WOUND_STEMS = ("wound_comsol001", "wound_comsol002", "wound_comsol003")
 #: Column order. ``wnd`` sits between the two domains it is confused with, so the table

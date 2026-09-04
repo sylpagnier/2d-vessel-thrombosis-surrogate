@@ -29,6 +29,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
+from src.utils.paths import anchor_packs_dir  # noqa: E402
 from src.core_physics.physics_wall_model import t0_flow_fields  # noqa: E402
 
 # Fit on WALL_COHORT_V2_TRAIN, arm A. Stencil is per flow arm: a noisier field needs a
@@ -180,8 +181,10 @@ def main() -> int:
     ap.add_argument("--temporal", action="store_true",
                     help="also emit the growth CURVE (onset time per node, AP closure on)")
     args = ap.parse_args()
-    path = Path(args.pack) if args.pack else Path(
-        f"data/processed/graphs_biochem_anchors/{args.anchor}.pt")
+    # `--pack` is a user-typed path (CWD-relative, as expected of a CLI argument);
+    # the `--anchor` fallback is an internal derivation and must resolve against the
+    # repo, not wherever the script happens to be invoked from.
+    path = Path(args.pack) if args.pack else anchor_packs_dir() / f"{args.anchor}.pt"
     if not path.exists():
         print(f"[ERR] no pack at {path}")
         return 1

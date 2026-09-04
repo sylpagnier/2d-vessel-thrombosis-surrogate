@@ -12,6 +12,7 @@ Three things must hold, in decreasing order of how badly a regression would hurt
    must reproduce GT clot on the injured segment without any fitted quantity.
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from src.clot_ml.wound import (
 )
 from src.config import BiochemConfig
 
-GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
+GRAPH_DIR = anchor_packs_dir()
 WOUND = "wound_comsol001"
 NOWOUND = "comsol012"
 

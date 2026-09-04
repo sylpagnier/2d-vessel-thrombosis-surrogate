@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from src.utils.paths import get_project_root
 
 import numpy as np
 import pytest
@@ -19,7 +18,7 @@ from src.utils.kinematics_inference import (
     load_kinematics_predictor,
     resolve_kinematics_checkpoint,
 )
-from src.utils.paths import resolve_checkpoint
+from src.utils.paths import get_project_root, resolve_checkpoint
 
 _REPO = get_project_root()
 def _gmsh_available() -> bool:

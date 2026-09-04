@@ -11,6 +11,7 @@ Everything here is deploy-legal under the Phase-3 bandaid: node positions, conne
 Usage:  python scripts/step0_cohort_gates.py [--out outputs/step0_cohort_gates.json]
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import glob
@@ -114,10 +115,10 @@ def main() -> int:
     args = ap.parse_args()
     bio = BiochemConfig(phase="biochem")
     if args.anchors.strip():
-        paths = [f"data/processed/graphs_biochem_anchors/{a.strip()}.pt"
+        paths = [str(anchor_packs_dir() / f"{a.strip()}.pt")
                  for a in args.anchors.split(",") if a.strip()]
     else:
-        paths = sorted(glob.glob("data/processed/graphs_biochem_anchors/comsol*.pt"))
+        paths = sorted(str(p) for p in anchor_packs_dir().glob("comsol*.pt"))
     rows = []
     print("%12s %6s %6s %7s %6s | %6s %6s %6s | %6s %6s %6s | %6s %6s"
           % ("vessel", "band", "wall", "commit", "onwall", "P", "R", "F1", "wP", "wR", "wF1",
