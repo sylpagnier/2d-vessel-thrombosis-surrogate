@@ -22,7 +22,6 @@ line without translation:
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap
 
 import argparse
 import json
@@ -61,7 +60,6 @@ def _agg(rows, key):
 
 
 def main(argv=None):
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", action="append", default=[],

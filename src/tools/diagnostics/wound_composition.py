@@ -28,7 +28,7 @@ it, on the three quantities that decide whether it matters:
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir, repo_root
+from src.tools.diagnostics._common import biochem_packs_dir, repo_root
 
 import sys
 from pathlib import Path
@@ -60,7 +60,6 @@ def gt_final(data, phys) -> np.ndarray:
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
     bundle = load_temporal_v4("clot_gnn_v4")
 

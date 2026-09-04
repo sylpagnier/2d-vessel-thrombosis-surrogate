@@ -25,7 +25,6 @@ and not only on a cohort mean that the +/-0.074 floor may swallow:
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap
 
 import argparse
 import sys
@@ -91,7 +90,6 @@ def report(name: str, st: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", required=True)
     ap.add_argument("--cache", default="v5")

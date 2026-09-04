@@ -30,7 +30,7 @@ zero means new channels will not help and the ceiling is elsewhere.
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir
+from src.tools.diagnostics._common import biochem_packs_dir, wall_band
 
 import argparse
 import json
@@ -58,17 +58,6 @@ def _corr(a, b):
     if a.size < 3 or a.std() < 1e-14 or b.std() < 1e-14:
         return NAN
     return float(np.corrcoef(a, b)[0, 1])
-
-
-def _wall_band(data, hops=3):
-    n = int(data.num_nodes)
-    row, col = data.edge_index
-    band = data.mask_wall.reshape(-1).bool().clone()
-    for _ in range(hops):
-        acc = torch.zeros(n, dtype=torch.bool)
-        acc.index_put_((row,), band[col], accumulate=False)
-        band = band | acc
-    return band.numpy()
 
 
 def _features(data, uv_fem):
@@ -140,7 +129,6 @@ def _ridge_lovo(X_by_v, y_by_v, alpha=1.0):
 
 
 def main(argv=None):
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stems", nargs="*", default=None)
@@ -173,7 +161,7 @@ def main(argv=None):
         y = data.y[0, :, 0:2].numpy().astype(np.float64)
         e = np.linalg.norm(y - uv, axis=1)
         feats = _features(data, uv)
-        sel = _wall_band(data) if args.band_only else np.ones(len(e), dtype=bool)
+        sel = wall_band(data) if args.band_only else np.ones(len(e), dtype=bool)
         for k in INDICATORS:
             per_corr[k].append(_corr(feats[k][sel], e[sel]))
         X_by_v[stem] = np.stack([feats[k][sel] for k in INDICATORS], 1)

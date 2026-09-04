@@ -47,6 +47,16 @@ WOUND_COHORT: tuple[str, ...] = (
     "wound_comsol006",
 )
 
+#: The three vessels the wound complement was validated leave-one-vessel-out on
+#: (``wound_lovo.n_vessels = 3`` in the locked ``clot_ml_0`` manifest).  The two
+#: gate scalars are refit on all of :data:`WOUND_COHORT`; only the LOVO evidence
+#: is restricted to these.
+#:
+#: This lived as a bare tuple in ``scripts/eval_wound_complement.py`` while the
+#: three promotion scripts used the full cohort, so nothing connected the two and
+#: the difference read as a mistake rather than a decision.
+WOUND_LOVO_COHORT: tuple[str, ...] = WOUND_COHORT[:3]
+
 WALL_COHORT_V2_TRAIN: tuple[str, ...] = (
     "comsol003",
     "comsol004",

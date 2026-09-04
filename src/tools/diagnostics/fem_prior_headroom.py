@@ -27,7 +27,7 @@ velocity, which a customer vessel does not have.  If the two diverge, the headro
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir
+from src.tools.diagnostics._common import biochem_packs_dir, gt_inlet, wall_band
 
 import argparse
 import contextlib
@@ -71,29 +71,6 @@ def _jaccard(a, b):
     return float((a & b).sum() / u) if u else NAN
 
 
-def _wall_band(data, hops=3):
-    n = int(data.num_nodes)
-    row, col = data.edge_index
-    band = data.mask_wall.reshape(-1).bool().clone()
-    for _ in range(hops):
-        acc = torch.zeros(n, dtype=torch.bool)
-        acc.index_put_((row,), band[col], accumulate=False)
-        band = band | acc
-    return band.numpy()
-
-
-def _gt_inlet(data):
-    if bool(getattr(data, "research_synthetic", False)):
-        return None
-    y = getattr(data, "y", None)
-    if y is None or not torch.is_tensor(y) or y.numel() == 0 or y.shape[1] == 0:
-        return None
-    cand = y[0, :, 0:2].detach().cpu().numpy()
-    if np.isfinite(cand).all() and float(np.abs(cand).max()) > 0.0:
-        return cand
-    return None
-
-
 def _solve_fem(data, mesh_path, legal):
     """FEM velocity, non-dimensional, seeded with the analytic prior (same fixed point, fewer iters)."""
     from src.core_physics.local_fem_solver import solve_local_t0_flow
@@ -103,7 +80,7 @@ def _solve_fem(data, mesh_path, legal):
     with contextlib.redirect_stdout(io.StringIO()):
         u_dim = solve_local_t0_flow(
             mesh_path, data, PhysicsConfig(), max_iters=300, tol=1e-9,
-            u_gt_inlet_nd=(None if legal else _gt_inlet(data)),
+            u_gt_inlet_nd=(None if legal else gt_inlet(data)),
             u_init_nd=seed, verbose=True,
         )
     if isinstance(u_dim, torch.Tensor):
@@ -249,7 +226,7 @@ def _score_one(stem, arms, hops, gain):
     g = data.y[0, :, 0:2].numpy().astype(np.float64)
     sdf = data.x[:, NodeFeat.SDF].reshape(-1).numpy().astype(np.float64)
     wall = np.asarray(data.mask_wall.reshape(-1).bool().numpy())
-    band = _wall_band(data, hops=3)
+    band = wall_band(data, hops=3)
     ei = data.edge_index.numpy()
     mesh_path = _resolve_anchor_mesh(data)
 
@@ -294,7 +271,6 @@ def _med(rows, key):
 
 
 def main(argv=None):
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stems", nargs="*", default=None)

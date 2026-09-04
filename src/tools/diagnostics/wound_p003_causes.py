@@ -17,7 +17,7 @@ Four blocks, in the order the argument runs:
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir, repo_root
+from src.tools.diagnostics._common import biochem_packs_dir, repo_root
 
 import argparse
 import json
@@ -183,7 +183,6 @@ def block_species(bio):
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="clot_gnn_v5",
                     help="baseline artifact whose temporal head supplies the v4/v5 arm")

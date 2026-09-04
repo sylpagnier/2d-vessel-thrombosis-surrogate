@@ -24,7 +24,7 @@ changes the answer is a bug, not a speedup.
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir
+from src.tools.diagnostics._common import biochem_packs_dir, gt_inlet
 
 import argparse
 import contextlib
@@ -56,19 +56,6 @@ def _cohort_stems() -> list[str]:
     return out
 
 
-def _gt_inlet(data):
-    """The inlet Dirichlet `solve_fem_into_pack` would use, replicated so every arm shares it."""
-    if bool(getattr(data, "research_synthetic", False)):
-        return None
-    y = getattr(data, "y", None)
-    if y is None or not torch.is_tensor(y) or y.numel() == 0 or y.shape[1] == 0:
-        return None
-    cand = y[0, :, 0:2].detach().cpu().numpy()
-    if np.isfinite(cand).all() and float(np.abs(cand).max()) > 0.0:
-        return cand
-    return None
-
-
 def _deq_field(data):
     u0 = getattr(data, "u0_pred", None)
     v0 = getattr(data, "v0_pred", None)
@@ -98,7 +85,7 @@ def _run_arm(mesh_path, data, u_init, damping):
     with contextlib.redirect_stdout(buf):
         u_dim = solve_local_t0_flow(
             mesh_path, data, PhysicsConfig(), max_iters=300, tol=1e-9,
-            u_gt_inlet_nd=_gt_inlet(data), damping=damping, u_init_nd=u_init, verbose=True,
+            u_gt_inlet_nd=gt_inlet(data), damping=damping, u_init_nd=u_init, verbose=True,
         )
     secs = time.perf_counter() - t0
     log = buf.getvalue()
@@ -175,7 +162,6 @@ def _med(rows, key):
 
 
 def main(argv=None):
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stems", nargs="*", default=None)

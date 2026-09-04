@@ -30,7 +30,7 @@ a rel-L2 improvement that does not move the gate is not worth having.
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap
+from src.tools.diagnostics._common import wall_band
 
 import argparse
 import json
@@ -57,17 +57,6 @@ def _corr(a, b):
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def _wall_band(data, hops=3):
-    n = int(data.num_nodes)
-    row, col = data.edge_index
-    band = data.mask_wall.reshape(-1).bool().clone()
-    for _ in range(hops):
-        acc = torch.zeros(n, dtype=torch.bool)
-        acc.index_put_((row,), band[col], accumulate=False)
-        band = band | acc
-    return band.numpy()
-
-
 def _score_gate(uv, graph, gain):
     from src.utils.kinematics_selection import wall_shear_selection_metrics
 
@@ -75,7 +64,6 @@ def _score_gate(uv, graph, gain):
 
 
 def main(argv=None):
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ckpt", required=True)
@@ -114,7 +102,7 @@ def main(argv=None):
 
         delta = pred - prior          # everything the model contributed
         e = y - prior                 # everything it should have contributed
-        band = _wall_band(g, hops=3)
+        band = wall_band(g, hops=3)
 
         dd = float((delta * delta).sum())
         alpha = float((delta * e).sum() / dd) if dd > 0 else NAN

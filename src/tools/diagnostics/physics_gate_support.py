@@ -25,7 +25,6 @@ Usage:
 from __future__ import annotations
 from src.utils.paths import anchor_packs_dir
 
-from src.tools.diagnostics._common import bootstrap
 
 import argparse
 import glob
@@ -101,7 +100,6 @@ def one(path: Path, device, phys, bio, lss: float) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser()
     ap.add_argument("--anchors", default="")
     ap.add_argument("--out", default="")

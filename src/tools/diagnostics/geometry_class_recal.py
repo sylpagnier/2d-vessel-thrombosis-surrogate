@@ -40,7 +40,7 @@ check; and `--explain` dissects any vessel whose statistic looks anomalous.
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir
+from src.tools.diagnostics._common import biochem_packs_dir
 
 import argparse
 import sys
@@ -132,7 +132,6 @@ def explain(stem: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser()
     ap.add_argument("--explain", default="", help="comma-separated stems to dissect")
     args = ap.parse_args(argv)

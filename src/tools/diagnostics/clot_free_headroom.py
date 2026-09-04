@@ -25,7 +25,6 @@ under-trained smoke model:
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap
 
 import argparse
 import sys
@@ -39,7 +38,6 @@ from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="gt")
     ap.add_argument("--tag", default="", help="phase9_scores tags for the out-of-fold field")

@@ -31,6 +31,7 @@ Usage:
     python scripts/eval_wound_complement.py --stems wound_comsol001
 """
 from __future__ import annotations
+from src.biochem_gnn.wall_cohort_constants import WOUND_LOVO_COHORT  # noqa: E402
 from src.utils.paths import anchor_packs_dir
 
 import argparse
@@ -51,7 +52,8 @@ from src.config import BiochemConfig, PhysicsConfig
 
 GRAPH_DIR = anchor_packs_dir()
 LOVO = Path("outputs/clot_ml/wound_rate/lovo.json")
-WOUND_STEMS = ("wound_comsol001", "wound_comsol002", "wound_comsol003")
+#: The LOVO subset, not the full cohort -- see wall_cohort_constants.
+WOUND_STEMS = WOUND_LOVO_COHORT
 #: Column order. ``wnd`` sits between the two domains it is confused with, so the table
 #: itself shows it is not the score.
 DOM = ("wall", "wnd", "w_reg", "w_lum", "far", "full")

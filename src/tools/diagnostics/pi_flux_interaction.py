@@ -17,7 +17,6 @@ import numpy as np
 
 from src.core_physics.wall_shear_attenuation import DELTA_MU_HALF_SI
 from src.core_physics.pi_wall_shear import hydraulic_h
-from src.tools.diagnostics._common import bootstrap
 
 
 def _load_corpus(corpus_dir: Path) -> dict[str, dict[str, np.ndarray]]:
@@ -65,7 +64,6 @@ def _tercile_slopes(data: dict[str, dict[str, np.ndarray]], *, hydraulic: bool) 
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--corpus", type=Path, default=Path("outputs/pi_corpus"))
     args = ap.parse_args(argv)

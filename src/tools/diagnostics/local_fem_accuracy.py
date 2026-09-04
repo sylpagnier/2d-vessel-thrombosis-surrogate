@@ -31,7 +31,7 @@ an additional 1.38x surrogate deficit.  A converged FEM field should not carry t
 """
 from __future__ import annotations
 
-from src.tools.diagnostics._common import bootstrap, biochem_packs_dir
+from src.tools.diagnostics._common import biochem_packs_dir, wall_band
 
 import argparse
 import contextlib
@@ -73,17 +73,6 @@ def _jaccard(a: np.ndarray, b: np.ndarray) -> float:
     a, b = np.asarray(a, dtype=bool), np.asarray(b, dtype=bool)
     u = int((a | b).sum())
     return float((a & b).sum() / u) if u else float("nan")
-
-
-def _wall_band(data, hops: int = 3) -> np.ndarray:
-    n = int(data.num_nodes)
-    row, col = data.edge_index
-    band = data.mask_wall.reshape(-1).bool().clone()
-    for _ in range(hops):
-        acc = torch.zeros(n, dtype=torch.bool)
-        acc.index_put_((row,), band[col], accumulate=False)
-        band = band | acc
-    return band.numpy()
 
 
 def _field_metrics(u: np.ndarray, g: np.ndarray, wall: np.ndarray) -> dict:
@@ -149,7 +138,7 @@ def _score_one(stem: str, hops_list: list[int], gains: list[float], quiet: bool)
     bio = BiochemConfig(phase="biochem")
     g = data.y[0, :, 0:2].numpy().astype(np.float64)
     wall = np.asarray(data.mask_wall.reshape(-1).bool().numpy())
-    band = _wall_band(data, hops=3)
+    band = wall_band(data, hops=3)
     row = dict(stem=stem, n_nodes=int(data.num_nodes), gt_speed_max=float(np.linalg.norm(g, axis=1).max()))
 
     deq = None
@@ -194,7 +183,6 @@ def _med(rows: list[dict], key: str) -> float:
 
 
 def main(argv: list[str] | None = None) -> int:
-    bootstrap()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stems", nargs="*", default=None)
     ap.add_argument("--cohort", action="store_true", help="FIT+DEV clot-carrying packs plus the wounds")

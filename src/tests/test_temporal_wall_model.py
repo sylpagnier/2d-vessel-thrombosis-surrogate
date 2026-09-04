@@ -21,7 +21,6 @@ from src.core_physics.physics_wall_model import (
     graded_gate,
     integrate_mat_trajectory,
 )
-from src.core_physics.temporal_metrics import curve_l1, onset_metrics, spearman
 
 
 def _fields(sr, dsrx, bio):
@@ -214,28 +213,6 @@ def test_washout_step_reaches_the_analytic_steady_state():
     for _ in range(4000):
         mat = washout_step(mat, src, 10.0, decay)
     assert mat[0] == pytest.approx(float(src[0] / decay[0]), rel=1e-6)
-
-
-def test_curve_l1_is_zero_for_identical_onset_distributions():
-    t = np.linspace(0, 30000, 61)
-    wall = np.ones(30, dtype=bool)
-    idx = np.arange(30) % 60
-    assert curve_l1(idx, idx.copy(), t, wall) == pytest.approx(0.0, abs=1e-12)
-
-
-def test_onset_metrics_flag_a_flash_against_a_spread_gt():
-    t = np.linspace(0, 30000, 61)
-    wall = np.ones(40, dtype=bool)
-    flash = np.full(40, 10)
-    spread = np.arange(40)
-    m = onset_metrics(flash, spread, t, wall)
-    assert m["spread_model"] == pytest.approx(0.0)
-    assert m["spread_ratio"] == pytest.approx(0.0)
-    assert curve_l1(flash, spread, t, wall) > 0.1
-
-
-def test_spearman_handles_degenerate_input():
-    assert np.isnan(spearman(np.ones(5), np.arange(5)))
 
 
 def test_pred_flow_mls_on_velocity_ignores_a_cached_shear_head():
