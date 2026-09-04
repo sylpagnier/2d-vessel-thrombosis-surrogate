@@ -2,8 +2,13 @@
 # Common Stage-A launch environment.  An arm sets ARM_NAME + whatever it varies, then sources
 # this.  Everything here is either the s11.5 launch config or an iteration-speed setting.
 set -e
-export SPECIES_PRIOR_SOURCE=analytic
-export KINEMATICS_ELEVATE_P2=1
+# Overridable like every other setting below.  These two were hard assignments, so an arm
+# that set them BEFORE sourcing this had them silently reverted -- and both change what the
+# model is trained on, not merely how fast.  P2 elevation in particular fabricates mid-side
+# labels by interpolation, which is right for the P1 synthetic corpus and wrong for a deploy
+# pack that already carries COMSOL's own mid-side values.
+export SPECIES_PRIOR_SOURCE=${SPECIES_PRIOR_SOURCE:-analytic}
+export KINEMATICS_ELEVATE_P2=${KINEMATICS_ELEVATE_P2:-1}
 export KINEMATICS_COORD_MODE=centered
 export KINEMATICS_NORMALIZE_SHEAR_GRAD=1
 # In data/reference/ (tracked), NOT outputs/ (gitignored).  A missing file here is not an

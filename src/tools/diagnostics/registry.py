@@ -15,6 +15,7 @@ DIAGNOSTICS: dict[str, str] = {
     "local-fem-accuracy": "src.tools.diagnostics.local_fem_accuracy",
     "lumen-001-vs-007": "src.tools.diagnostics.lumen_001_vs_007",
     "physics-gate-support": "src.tools.diagnostics.physics_gate_support",
+    "prior-vs-model-gate": "src.tools.diagnostics.prior_vs_model_gate",
     "pi-flux-interaction": "src.tools.diagnostics.pi_flux_interaction",
     "signs-of-life-001": "src.tools.diagnostics.signs_of_life_001",
     "wound-composition": "src.tools.diagnostics.wound_composition",

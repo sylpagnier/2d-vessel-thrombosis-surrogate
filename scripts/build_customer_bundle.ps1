@@ -83,6 +83,20 @@ $InboxDir = Join-Path $BundleDir "customer_geometries"
 New-Item -ItemType Directory -Force -Path $InboxDir | Out-Null
 Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\README.txt") $InboxDir
 
+# Seed the inbox with one real, non-synthetic vessel so first launch shows a prediction
+# immediately instead of an empty dropdown -- patient041, a stenosis anchor the shipped
+# clot_ml_0 was actually trained on, so a customer (or we) can sanity-check the model against
+# a known-good case rather than only ever seeing parametric geometries. Trimmed of G_x/G_y/
+# Laplacian/z_kin_pred (stale mesh operators + a cached embedding, unused by the deploy path --
+# see mls_gradient.py) to cut ~20 MB of dead weight; still ~235 MB because the real 201-step
+# species/velocity history (y) is what the deploy pipeline derives its own rollout step count
+# from (CustomerDeployPipeline.run()), so it cannot be downsampled without changing the
+# demo's timeline resolution.
+Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\demo_stenosis_vessel.pt") $InboxDir
+$DemoMeshDir = Join-Path $BundleDir "data\raw\biochem_anchors"
+New-Item -ItemType Directory -Force -Path $DemoMeshDir | Out-Null
+Copy-Item -Force (Join-Path $RepoRoot "data\raw\biochem_anchors\patient041.msh") $DemoMeshDir
+
 # --- 4. The ~11 MB of checkpoints this tool actually loads ------------------------------
 # Traced from CustomerDeployPipeline.run() -> load_v0_bundle("clot_ml_0"): only
 # outputs/clot_ml/locked/clot_ml_v0 (config/manifest) and outputs/clot_ml/locked/clot_gnn_v6

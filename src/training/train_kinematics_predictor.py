@@ -409,13 +409,23 @@ def load_dataset(
         if rheology:
             data_dir = data_dir / str(rheology).lower()
 
-    if not data_dir.exists():
+    # Train on the deploy packs ALONE, with no synthetic corpus underneath.  This exists for
+    # `prior_source="fem"`: the FEM prior needs a mesh per vessel, and the 250-vessel synthetic
+    # corpus has none (`data/raw/kinematics/meshes/` is empty, and the same-named
+    # `biochem_anchors/vessel_N.msh` is a DIFFERENT vessel -- the solver's registration guard
+    # refuses it).  Mixing a FEM-prior pack with an analytic-prior one in the same run is not an
+    # acceptable fallback either: the prior is the hard BC's base point, so the two would be
+    # different functions sharing one decoder.
+    deploy_only = os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+    if not deploy_only and not data_dir.exists():
         raise FileNotFoundError(
             f"Dataset directory not found: {data_dir}. "
             "Expected rheology-split graphs under graphs_kinematics/<newtonian|carreau>."
         )
 
-    paths = sorted(data_dir.glob("vessel_*.pt"))
+    paths = [] if deploy_only else sorted(data_dir.glob("vessel_*.pt"))
     if shuffle_graphs:
         paths = list(paths)
         rng = random.Random(int(graph_load_seed))
@@ -435,13 +445,16 @@ def load_dataset(
                 f"[kin] KINEMATICS_GRAPH_CAP={n_cap}: sampled {n_cap}/{n_total} graphs "
                 f"(seed={int(graph_load_seed)})."
             )
-    if not paths:
+    if not paths and not deploy_only:
         raise RuntimeError(
             f"No graph files found in dataset directory: {data_dir}. "
             "Expected at least one vessel_*.pt file."
         )
     dataset = []
-    print(f"[kin] Loading {len(paths)} graphs from {data_dir}...")
+    if deploy_only:
+        print("[kin] KINEMATICS_DEPLOY_PACKS_ONLY=1: skipping the synthetic corpus entirely.")
+    else:
+        print(f"[kin] Loading {len(paths)} graphs from {data_dir}...")
     file_iter = paths
     if kinematics_tqdm_enabled():
         file_iter = tqdm(paths, leave=False, ascii=sys.platform == "win32")
@@ -464,10 +477,12 @@ def load_dataset(
     # deployment is decided in, and four arms of loss reweighting could not manufacture it.  The
     # deploy packs ARE that regime, they are fully labelled by COMSOL, and Stage-A has never
     # trained on them.  Disjoint from the selection set by construction.
-    if os.environ.get("KINEMATICS_TRAIN_ON_DEPLOY_PACKS", "").strip().lower() in (
+    if deploy_only or os.environ.get("KINEMATICS_TRAIN_ON_DEPLOY_PACKS", "").strip().lower() in (
         "1", "true", "yes", "on"
     ):
-        from src.utils.kinematics_select_packs import load_deploy_training_packs
+        from src.utils.kinematics_select_packs import (
+            load_deploy_training_packs, selection_pack_dir,
+        )
 
         deploy_graphs = load_deploy_training_packs()
         if deploy_graphs:
@@ -478,6 +493,11 @@ def load_dataset(
             print(f"[kin] Merged {len(deploy_graphs)} DEPLOY packs into the training pool "
                   f"(KINEMATICS_TRAIN_ON_DEPLOY_PACKS=1).")
         else:
+            if deploy_only:
+                raise RuntimeError(
+                    "KINEMATICS_DEPLOY_PACKS_ONLY=1 but no usable deploy packs were found "
+                    f"under {selection_pack_dir()}; there is nothing to train on."
+                )
             print("[kin] WARN KINEMATICS_TRAIN_ON_DEPLOY_PACKS=1 but no usable deploy packs "
                   "were found; training on synthetic vessels ONLY.")
 
@@ -536,6 +556,7 @@ def _prepare_dataset(dataset, data_dir=None):
             _os.environ.get("KINEMATICS_MAX_NODES", ""),
             _os.environ.get("KINEMATICS_PDE_FLOOR", "1"),
             _os.environ.get("KINEMATICS_TRAIN_ON_DEPLOY_PACKS", ""),
+            _os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", ""),
             _os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", ""),
             _os.environ.get("KINEMATICS_GRAPH_CAP", ""),
             len(dataset),
@@ -2018,6 +2039,13 @@ def train_kinematics(
                     composite=val_comp,
                     run_id=str(getattr(diary, "run_dir", Path(".")).name),
                     training_manifest=training_manifest,
+                    # Both PERIODIC saves recorded this and the BEST one did not, so the only
+                    # checkpoint anyone promotes was the only one that could not say which
+                    # prior block it was trained against.  That is not metadata: the hard BC
+                    # reads the prior as its base point (`u = prior + envelope * r`), so a
+                    # model deployed on a different prior than it trained on is a different
+                    # function, and `assert_train_deploy_prior_parity` has nothing to check.
+                    prior_source=train_prior_source,
                 )
                 manifest_path = write_kinematics_architecture_manifest(
                     snapshot_rgp_deq_model_config(model),

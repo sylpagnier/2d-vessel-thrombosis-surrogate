@@ -150,10 +150,8 @@ _CLOT_PHI_THRESHOLD = 0.45
 
 _DEMO_PT = (
     get_project_root()
-    / "data"
-    / "phase_comparison_test"
-    / "graphs_biochem"
-    / "vessel_0.pt"
+    / "customer_geometries"
+    / "demo_stenosis_vessel.pt"
 )
 
 ViewMode = Literal["preview", "results"]

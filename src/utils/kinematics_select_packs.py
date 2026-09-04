@@ -102,8 +102,11 @@ def load_selection_packs(*, limit: int = 0, prior_source: str | None = None, ver
             if y is None or float(y[..., 0:2].abs().max()) == 0.0:
                 missing.append(stem)
                 continue
-            g = apply_prior_source(g, source)
+            # Stem BEFORE the prior rewrite: these packs carry no `graph_stem` of their own,
+            # and `prior_source="fem"` resolves the vessel's mesh (and its solve cache) by
+            # stem.  Setting it afterwards left the FEM prior with nothing to look up.
             g.graph_stem = stem
+            g = apply_prior_source(g, source)
             out.append(g)
         except Exception as exc:
             print(f"[kin] WARN selection pack {stem}: {type(exc).__name__}: {exc}")
@@ -189,8 +192,9 @@ def load_deploy_training_packs(*, prior_source: str | None = None, verbose: bool
             # A graph-level `is_anchor` broadcasts to every node; these packs are fully
             # labelled by COMSOL, so that is the truth rather than a fabrication.
             g.is_anchor = torch.ones(int(g.num_nodes), dtype=torch.bool)
-            g = apply_prior_source(g, source)
+            # Stem BEFORE the prior rewrite -- see `load_selection_packs`.
             g.graph_stem = stem
+            g = apply_prior_source(g, source)
             g.is_clinical_anchor = True
             out.append(g)
         except Exception as exc:
