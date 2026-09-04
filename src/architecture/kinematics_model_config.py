@@ -62,10 +62,12 @@ def snapshot_rgp_deq_model_config(model: RGP_DEQ) -> dict[str, Any]:
         "wss_fuse": bool(getattr(model, "wss_fuse", False)),
         "bc_envelope": bool(getattr(model, "bc_envelope", False)),
         "bc_lambda": float(getattr(model, "bc_lambda", 10.0)),
+        "bc_envelope_decay": float(getattr(model, "bc_envelope_decay", 0.0)),
         "fourier_learnable": bool(getattr(model, "fourier_learnable", False)),
         "shear_head": bool(getattr(model, "shear_head", False)),
         "decoder_skip": bool(getattr(model, "decoder_skip", False)),
         "residual_gain": bool(getattr(model, "residual_gain", False)),
+        "residual_rezero": bool(getattr(model, "residual_rezero", False)),
         "num_global_tokens": 16,
         "phase": "kinematics",
     }
@@ -209,6 +211,9 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["bc_envelope"] = bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
         if ctor.get("bc_lambda") is None:
             ctor["bc_lambda"] = float(os.environ.get("KINEMATICS_BC_LAMBDA", "10.0"))
+        if ctor.get("bc_envelope_decay") is None:
+            ctor["bc_envelope_decay"] = float(
+                os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0"))
         if "shear_head" not in ctor or ctor.get("shear_head") is None:
             ctor["shear_head"] = any(str(k).startswith("shear_decoder.") for k in state_dict)
         # The tensors outrank the manifest for both of these: the decoder width and the presence
@@ -219,6 +224,13 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["decoder_skip"] = inferred_skip
         elif "decoder_skip" not in ctor or ctor.get("decoder_skip") is None:
             ctor["decoder_skip"] = bool(int(os.environ.get("KINEMATICS_DECODER_SKIP", "0")))
+        # The tensor is the truth here too: `residual_scale` exists in the state dict iff the
+        # model was built with the flag, so a manifest cannot describe a model that will not load.
+        has_rezero = any(str(k) == "residual_scale" for k in state_dict)
+        if has_rezero or ctor.get("residual_rezero") is None:
+            ctor["residual_rezero"] = bool(has_rezero) if has_rezero else bool(
+                int(os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0"))
+            )
         inferred_gain = infer_residual_gain_from_state_dict(state_dict)
         ctor["residual_gain"] = bool(inferred_gain) if inferred_gain is not None else bool(
             int(os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0"))
@@ -246,12 +258,16 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["bc_envelope"] = bool(saved["bc_envelope"])
         if "bc_lambda" in saved:
             ctor["bc_lambda"] = float(saved["bc_lambda"])
+        if "bc_envelope_decay" in saved:
+            ctor["bc_envelope_decay"] = float(saved["bc_envelope_decay"])
         if "fourier_learnable" in saved:
             ctor["fourier_learnable"] = bool(saved["fourier_learnable"])
         if "decoder_skip" in saved:
             ctor["decoder_skip"] = bool(saved["decoder_skip"])
         if "residual_gain" in saved:
             ctor["residual_gain"] = bool(saved["residual_gain"])
+        if "residual_rezero" in saved:
+            ctor["residual_rezero"] = bool(saved["residual_rezero"])
         return _merge_kinematics_toggle_flags(ctor)
 
     inferred_siren = infer_use_siren_decoder_from_state_dict(state_dict)
@@ -305,10 +321,13 @@ def build_rgp_deq_from_ctor(phys_cfg: Any, ctor: Mapping[str, Any]) -> RGP_DEQ:
         wss_fuse=bool(ctor["wss_fuse"]) if "wss_fuse" in ctor else None,
         bc_envelope=bool(ctor["bc_envelope"]) if "bc_envelope" in ctor else None,
         bc_lambda=float(ctor["bc_lambda"]) if ctor.get("bc_lambda") is not None else None,
+        bc_envelope_decay=(float(ctor["bc_envelope_decay"])
+                           if ctor.get("bc_envelope_decay") is not None else None),
         fourier_learnable=bool(ctor["fourier_learnable"]) if "fourier_learnable" in ctor else None,
         shear_head=bool(ctor["shear_head"]) if "shear_head" in ctor else True,
         decoder_skip=bool(ctor["decoder_skip"]) if "decoder_skip" in ctor else None,
         residual_gain=bool(ctor["residual_gain"]) if "residual_gain" in ctor else None,
+        residual_rezero=bool(ctor["residual_rezero"]) if "residual_rezero" in ctor else None,
     )
 
 

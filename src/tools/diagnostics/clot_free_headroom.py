@@ -1,9 +1,9 @@
-﻿"""Do the 8 clot-free vessels carry any usable signal, or a free 1.0000?
+"""Do the 8 clot-free vessels carry any usable signal, or a free 1.0000?
 
 WHY THIS EXISTS.  The 2026-08-22 cohort decision admitted `wall_cohort_splits.CLOT_FREE` to
 training and to scoring on the argument that empty-GT vessels are real evidence about FALSE
 POSITIVES (MODEL_REVIEW_2026-08-22 8b).  `scripts/sweep_ml_clean_protocol.py` had already
-recorded the opposite worry in one line -- *"patient017 has zero GT clot, so
+recorded the opposite worry in one line -- *"comsol017 has zero GT clot, so
 `empty_gt_fp_tol` awards a free 1.0000"* -- and the first smoke run reproduced it: all four
 clot-free vessels scored 1.0000 under both the model AND the zero-parameter physics backbone,
 with **zero** nodes committed.

@@ -1,10 +1,10 @@
-﻿"""Is the score field comparable ACROSS vessels?  The mechanism behind the readout gap.
+"""Is the score field comparable ACROSS vessels?  The mechanism behind the readout gap.
 
 WHY THIS EXISTS.  Phase B measured the readout costing **0.193 off-wall** against a per-vessel
 oracle, on a field whose ranking is intact (out-of-fold AUC 0.989) -- so the loss is not in
 what the model knows about a node, it is in the fact that a score means something different
-on each vessel.  `patient032`'s off-wall GT sits at a median score of 0.1156 while
-`patient014`, which has no off-wall GT at all, has a tail reaching 0.8551.  One cohort cut
+on each vessel.  `comsol032`'s off-wall GT sits at a median score of 0.1156 while
+`comsol014`, which has no off-wall GT at all, has a tail reaching 0.8551.  One cohort cut
 cannot serve both, and no readout family already built gets within 0.15 of the oracle
 (MODEL_REVIEW_2026-08-22 8f.2).
 

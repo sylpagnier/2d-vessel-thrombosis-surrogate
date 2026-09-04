@@ -349,7 +349,7 @@ class ClotBaselinePredictor:
 def _cli() -> None:
     ap = argparse.ArgumentParser(description="Clot baseline predict (GraphSAGE species + clot-phi)")
     ap.add_argument("--manifest", default="", help="manifest.json (default: outputs/biochem/clot_baseline/)")
-    ap.add_argument("--anchor", default="patient007")
+    ap.add_argument("--anchor", default="comsol007")
     ap.add_argument("--anchor-dir", default="", help="Override graph dir (default: recipe dump dir)")
     ap.add_argument("--time-index", type=int, default=-1)
     ap.add_argument("--no-teacher-rollout", action="store_true", help="Graph already has dumped pred fields")

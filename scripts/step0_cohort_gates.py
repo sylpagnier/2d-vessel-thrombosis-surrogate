@@ -1,6 +1,6 @@
 """The COMSOL t=0 deposition gates, computed with CORRECT derivative operators, on the cohort.
 
-Validated on patient007 against the raw COMSOL export: MLS(hops=3) reconstructs
+Validated on comsol007 against the raw COMSOL export: MLS(hops=3) reconstructs
 ``spf.sr`` at spearman 0.998 and ``d(spf.sr,x)`` at 0.990, and the two-gate union
 classifies the final committed wall set at F1 0.848 (COMSOL's own gates: 0.854).
 The repo's shipped ``G_x``/``G_y`` score 0.19 / 0.00 on the same comparison.
@@ -115,7 +115,7 @@ def main() -> int:
         paths = [f"data/processed/graphs_biochem_anchors/{a.strip()}.pt"
                  for a in args.anchors.split(",") if a.strip()]
     else:
-        paths = sorted(glob.glob("data/processed/graphs_biochem_anchors/patient*.pt"))
+        paths = sorted(glob.glob("data/processed/graphs_biochem_anchors/comsol*.pt"))
     rows = []
     print("%12s %6s %6s %7s %6s | %6s %6s %6s | %6s %6s %6s | %6s %6s"
           % ("vessel", "band", "wall", "commit", "onwall", "P", "R", "F1", "wP", "wR", "wF1",

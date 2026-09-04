@@ -426,7 +426,7 @@ def _parse_batch_args(argv: list[str]) -> Optional[argparse.Namespace]:
         "--mixed-levels",
         action="store_true",
         help="Mixed cohort via `default_level_mix`, which is now ALL L2 because every "
-             "biochem deploy patient is level 2; pass --level-mix for the old L0/L1 spread. "
+             "biochem deploy COMSOL anchor is level 2; pass --level-mix for the old L0/L1 spread. "
              "Overrides --level.",
     )
     p.add_argument(

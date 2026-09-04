@@ -66,7 +66,7 @@ def test_repaired_wound_packs_encode_the_wound_as_wall():
     from pathlib import Path
 
     root = Path("data/processed/graphs_biochem_anchors")
-    packs = sorted(root.glob("wound_patient*.pt"))
+    packs = sorted(root.glob("wound_comsol*.pt"))
     if not packs:
         import pytest
 
@@ -123,11 +123,11 @@ def test_clot_ml_features_encode_the_wound_as_boundary():
     from pathlib import Path
 
     root = Path("data/processed/graphs_biochem_anchors")
-    p = root / "wound_patient001.pt"
+    p = root / "wound_comsol001.pt"
     if not p.exists():
         import pytest
 
-        pytest.skip("wound_patient001 pack not present")
+        pytest.skip("wound_comsol001 pack not present")
 
     from src.clot_ml.locked import build_sample
     from src.config import BiochemConfig, PhysicsConfig

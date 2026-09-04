@@ -13,7 +13,7 @@ tracks:
        with ``unit='cm'`` for COMSOL CGS compatibility.
 
    2b) Extract anchor CFD into graphs:
-       ``PatientDataExtractor`` with explicit directories:
+       ``ComsolAnchorDataExtractor`` with explicit directories:
        ``data/raw/biochem_anchors`` + ``data/processed/cfd_results_biochem``
        -> ``data/processed/graphs_biochem_anchors``.
 
@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 from src.data_gen.lib.mesh_to_graph_biochem import MeshToGraphPhase3
 from src.data_gen.lib.vessel_generator import (
     VesselGeneratorPhase3,
@@ -209,12 +209,12 @@ def run_interactive_pipeline() -> None:
             "Expect COMSOL text exports + meshes under "
             f"{anchor_raw_dir} and {anchor_cfd_dir}."
         )
-        if not _prompt_yes_no("Run PatientDataExtractor now?", default=True):
+        if not _prompt_yes_no("Run ComsolAnchorDataExtractor now?", default=True):
             print("Skipped anchor extraction.")
         else:
             _auto_scaffold_anchor_sidecars(anchor_raw_dir)
-            print("\n--- PatientDataExtractor.run() ---\n")
-            PatientDataExtractor(
+            print("\n--- ComsolAnchorDataExtractor.run() ---\n")
+            ComsolAnchorDataExtractor(
                 phase="biochem_anchors",
                 raw_dir=anchor_raw_dir,
                 label_dir=anchor_cfd_dir,
@@ -376,8 +376,8 @@ def run_batch_pipeline(args: argparse.Namespace) -> None:
 
     else:
         _auto_scaffold_anchor_sidecars(anchor_raw_dir)
-        print("--- PatientDataExtractor (anchor CFD extraction) ---\n")
-        PatientDataExtractor(
+        print("--- ComsolAnchorDataExtractor (anchor CFD extraction) ---\n")
+        ComsolAnchorDataExtractor(
             phase="biochem_anchors",
             raw_dir=anchor_raw_dir,
             label_dir=anchor_cfd_dir,

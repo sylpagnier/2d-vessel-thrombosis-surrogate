@@ -11,7 +11,7 @@ from src.utils.paths import data_root, get_project_root
 # Biochem COMSOL anchors always use Carreau physics; steady kine sidecars match.
 BIOCHEM_ANCHOR_KINE_RHEOLOGY = "carreau"
 
-#: Where the REPAIRED copy of each patient mesh lives (see `sync_geometry_from_deploy_pack`).
+#: Where the REPAIRED copy of each COMSOL anchor mesh lives (see `sync_geometry_from_deploy_pack`).
 BIOCHEM_ANCHOR_GRAPH_DIR = "data/processed/graphs_biochem_anchors"
 
 
@@ -48,27 +48,27 @@ def kinematics_graph_rheology_dir(rheology: str, *, root: Path | None = None) ->
     return kinematics_training_graph_dir(rheology=rheology, root=root)
 
 
-def iter_patient_kine_anchor_paths(*, rheology: str | None = None) -> list[Path]:
-    """Sorted ``patient*.pt`` steady kine sidecars (Carreau by default)."""
+def iter_comsol_kine_anchor_paths(*, rheology: str | None = None) -> list[Path]:
+    """Sorted ``comsol*.pt`` steady kine sidecars (Carreau by default)."""
     anchor_dir = kinematics_anchor_graph_dir(rheology=rheology)
     if not anchor_dir.is_dir():
         return []
-    return sorted(anchor_dir.glob("patient*.pt"))
+    return sorted(anchor_dir.glob("comsol*.pt"))
 
 
-def load_patient_kine_anchor_graphs(
+def load_comsol_kine_anchor_graphs(
     *,
     rheology: str | None = None,
     attach_geometry: bool = True,
     sync_geometry: bool = True,
 ) -> list:
-    """Load clinical COMSOL steady kine graphs for Stage-A finetune / eval."""
+    """Load comsol COMSOL steady kine graphs for Stage-A finetune / eval."""
     from src.utils.channel_schema import assert_graph_schema, infer_missing_schema
     from src.utils.kinematics_geometry import attach_geometry_metadata
     from src.config import VesselConfig
     from src.utils.channel_schema import KINE_Y_SCHEMA
 
-    paths = iter_patient_kine_anchor_paths(rheology=rheology)
+    paths = iter_comsol_kine_anchor_paths(rheology=rheology)
     if not paths:
         return []
     cfg = VesselConfig(phase="biochem_anchors")
@@ -78,7 +78,7 @@ def load_patient_kine_anchor_graphs(
         data = infer_missing_schema(data, phase_hint="kinematics")
         assert_graph_schema(data, expected_y_schema=(KINE_Y_SCHEMA,))
         data.graph_stem = f.stem
-        data.is_clinical_anchor = True
+        data.is_comsol_anchor = True
         if attach_geometry:
             attach_geometry_metadata(data, mesh_input_dir=cfg.mesh_input_dir, stem=f.stem)
         if sync_geometry:
@@ -97,10 +97,10 @@ def sync_geometry_from_deploy_pack(data, *, deploy_dir: str | Path | None = None
     """Overwrite a training anchor's mesh channels with the deploy pack's repaired values.
 
     RGP_DEQ_REPAIR_PLAN.md B14.  ``graphs_kinematics_anchors/carreau`` and
-    ``graphs_biochem_anchors`` hold the SAME mesh for the same patient -- identical
+    ``graphs_biochem_anchors`` hold the SAME mesh for the same COMSOL anchor -- identical
     ``edge_index``, ``mask_wall``, node positions and ``sdf`` -- but only the biochem copy ever
     received ``repair_pack_wall_normals`` and the width fix.  Measured over all 43 shared
-    patients, per-channel rel-L2 between the two copies:
+    COMSOL anchors, per-channel rel-L2 between the two copies:
 
     ```
     [4,5]  wall_normal    0.178 / 0.199        [15]    width_nd   0.149
@@ -119,7 +119,7 @@ def sync_geometry_from_deploy_pack(data, *, deploy_dir: str | Path | None = None
     extractor revision and they disagree about the prior block), so this writes the affected
     columns and nothing else, and never touches disk.
 
-    Returns ``True`` when a sync happened.  A patient with no deploy pack, or a node-count
+    Returns ``True`` when a sync happened.  A COMSOL anchor with no deploy pack, or a node-count
     mismatch, is left alone -- silently using a mismatched mesh would be the original bug.
     """
     import torch as _t

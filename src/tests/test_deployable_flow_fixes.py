@@ -70,7 +70,7 @@ def test_gt_flow_puts_no_node_inside_the_deadband():
     """
     from src.clot_ml.gnn import FLOW_DIR_DEADBAND
 
-    for name in ("patient020", "patient001"):
+    for name in ("comsol020", "comsol001"):
         data = _pack(name)
         u, v = _uv(data, "gt")
         spd = np.hypot(u, v)
@@ -85,7 +85,7 @@ def test_wall_destination_edges_carry_no_direction_under_either_flow():
     on an edge pointing INTO a wall node is aggregation the ensemble never saw at training
     time.  Before the deadband this read 0.0000 under GT and ~0.70 under RGP-DEQ.
     """
-    data = _pack("patient020")
+    data = _pack("comsol020")
     edge_features, ei, pos, h = _geometry(data)
     wall_dst = data.mask_wall.reshape(-1).bool().cpu().numpy()[ei[1]]
     assert wall_dst.any()
@@ -100,7 +100,7 @@ def test_wall_destination_edges_carry_no_direction_under_either_flow():
 
 def test_the_deadband_leaves_resolved_lumen_flow_alone():
     """It must silence noise, not the signal: interior cosines stay the analytic value."""
-    data = _pack("patient020")
+    data = _pack("comsol020")
     edge_features, ei, pos, h = _geometry(data)
     u, v = _uv(data, "gt")
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
@@ -122,11 +122,11 @@ def test_width_priors_are_clamped_for_the_solve_and_restored_after():
     from src.config import NodeFeat
     from src.utils.kinematics_inference import WIDTH_D1_MAX, WIDTH_D2_MAX, clamped_width_priors
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     before = data.x
     d2_before = float(before[:, NodeFeat.WIDTH_D2].abs().max())
     if d2_before <= WIDTH_D2_MAX:
-        pytest.skip("patient020 no longer carries out-of-range width priors")
+        pytest.skip("comsol020 no longer carries out-of-range width priors")
 
     with clamped_width_priors(data) as g:
         # float32 rounds the clamp bound up in the last bit, hence the tolerance
@@ -144,14 +144,14 @@ def test_the_clamp_is_an_exact_no_op_when_the_priors_are_already_in_range():
     """A vessel inside the training range -- every kinematics vessel -- must not be copied.
 
     Note this is stricter than the cohort: even the 18 corner-edge packs trip the ``d1``
-    bound (patient001 reads 6.90 against 4.14), and clamping them is measurably inert
+    bound (comsol001 reads 6.90 against 4.14), and clamping them is measurably inert
     (rel L2 0.130 -> 0.131).  What must hold is that an in-range input is passed through
     untouched, so the operation cannot perturb a vessel it has nothing to fix.
     """
     from src.config import NodeFeat
     from src.utils.kinematics_inference import clamped_width_priors
 
-    data = _pack("patient001")
+    data = _pack("comsol001")
     x = data.x.clone()
     x[:, NodeFeat.WIDTH_D1] = 0.5
     x[:, NodeFeat.WIDTH_D2] = 7.0
@@ -163,7 +163,7 @@ def test_the_clamp_is_an_exact_no_op_when_the_priors_are_already_in_range():
 def test_the_clamp_survives_a_pack_without_width_channels():
     from src.utils.kinematics_inference import clamped_width_priors
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     data.x = data.x[:, :6].contiguous()
     with clamped_width_priors(data) as g:
         assert g.x.shape[1] == 6
@@ -186,7 +186,7 @@ def _first_stencil(flow: str) -> int:
     from src.clot_ml.features import build_features
     from src.config import BiochemConfig, PhysicsConfig
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     if flow == "pred" and getattr(data, "u0_pred", None) is None:
         pytest.skip("pack carries no u0_pred")
     seen: list[int] = []
@@ -232,7 +232,7 @@ def test_pred_dsrx_is_scaled_and_gt_is_not():
     """
     import src.core_physics.physics_wall_model as pwm
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     if getattr(data, "u0_pred", None) is None:
         pytest.skip("pack carries no u0_pred")
     from src.config import BiochemConfig
@@ -261,7 +261,7 @@ def test_the_gain_reaches_the_gate_branch():
     """It has to move `gate_sep`, or it is decoration -- that branch is what it exists for."""
     import src.core_physics.physics_wall_model as pwm
 
-    data = _pack("patient012")
+    data = _pack("comsol012")
     if getattr(data, "u0_pred", None) is None:
         pytest.skip("pack carries no u0_pred")
     from src.config import BiochemConfig

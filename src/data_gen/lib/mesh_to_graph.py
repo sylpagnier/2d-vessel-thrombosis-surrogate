@@ -734,7 +734,7 @@ def build_mesh_converter(
 
     If ``is_non_newtonian`` is True, the Phase-3 pipeline is selected regardless of ``phase``.
     If False, Kinematics/2-style graphs are built. If None (default), ``phase`` alone decides
-    (``biochem`` / ``biochem_anchors`` / ``biochem_patients`` / ``biochem_mix`` → Biochem).
+    (``biochem`` / ``biochem_anchors`` / ``biochem_mix`` → Biochem).
     """
     t = (phase or "kinematics").lower()
     if is_non_newtonian is True:
@@ -743,7 +743,7 @@ def build_mesh_converter(
         return MeshToGraphPhase3(**kwargs)
     if is_non_newtonian is False:
         return MeshToGraph(phase=phase, **kwargs)
-    if t in ("biochem", "biochem_anchors", "biochem_patients", "biochem_mix"):
+    if t in ("biochem", "biochem_anchors", "biochem_anchors", "biochem_mix"):
         from src.data_gen.lib.mesh_to_graph_biochem import MeshToGraphPhase3
 
         return MeshToGraphPhase3(**kwargs)

@@ -1,4 +1,4 @@
-﻿"""Debug root cause of patient001 lumen lock + inert compound-val.
+"""Debug root cause of comsol001 lumen lock + inert compound-val.
 
 Compares the train_offwall_growth compound-val static (full-graph features,
 all-node idx) vs eval_mat_growth_simple static (wall-band features).
@@ -43,7 +43,7 @@ from src.core_physics.species_pushforward_continuous import (  # noqa: E402
 from src.core_physics.t0_device import require_cuda_device  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 from src.inference.corrector_coupling import resolve_kinematics_checkpoint  # noqa: E402
-from src.archive.mat_growth.train_offwall_growth import build_global_base_features  # noqa: E402
+from src.training.train_offwall_growth import build_global_base_features  # noqa: E402
 from src.utils.kinematics_inference import load_kinematics_predictor  # noqa: E402
 from src.utils.paths import get_project_root  # noqa: E402
 
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--wall-ckpt", default=str(DEFAULT_WALL))
     ap.add_argument("--growth-ckpt", default=str(DEFAULT_GROWTH))
-    ap.add_argument("--anchors", default="patient001,patient007")
+    ap.add_argument("--anchors", default="comsol001,comsol007")
     ap.add_argument("--mat-leg", default="WC_v7_clot_phi_mse")
     ap.add_argument(
         "--out",
@@ -271,8 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         report["anchors"][anc] = row
 
     # Root-cause classification
-    a001 = report["anchors"].get("patient001") or {}
-    a007 = report["anchors"].get("patient007") or {}
+    a001 = report["anchors"].get("comsol001") or {}
+    a007 = report["anchors"].get("comsol007") or {}
     w001_train = (a001.get("wall_only_train_static") or {}).get("deploy_clot_f1", None)
     w001_eval = (a001.get("wall_only_eval_static") or {}).get("deploy_clot_f1", None)
     w007_train = (a007.get("wall_only_train_static") or {}).get("deploy_clot_f1", None)
@@ -320,14 +320,14 @@ def main(argv: list[str] | None = None) -> int:
         ne = a001["static_eval"]["n_nodes"]
         if nt != ne:
             report["root_cause_candidates"].append(
-                f"patient001 static node count train={nt} vs eval={ne} "
+                f"comsol001 static node count train={nt} vs eval={ne} "
                 f"(full graph vs wall-band)."
             )
 
     report["verdict"] = verdict
     report["floor_gap"] = {
-        "patient001_train_vs_eval_clot_f1": [w001_train, w001_eval],
-        "patient007_train_vs_eval_clot_f1": [w007_train, w007_eval],
+        "comsol001_train_vs_eval_clot_f1": [w001_train, w001_eval],
+        "comsol007_train_vs_eval_clot_f1": [w007_train, w007_eval],
     }
 
     print("\n" + "=" * 78, flush=True)

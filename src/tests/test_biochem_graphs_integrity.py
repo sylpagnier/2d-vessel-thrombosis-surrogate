@@ -12,15 +12,15 @@ from src.data_gen.lib.extract_biochem_comsol_data import validate_graph_physical
 
 # Locate biochem graph directory
 GRAPH_DIR = get_project_root() / "data" / "processed" / "graphs_biochem_anchors"
-PT_FILES = sorted(list(GRAPH_DIR.glob("patient*.pt")))
+PT_FILES = sorted(list(GRAPH_DIR.glob("comsol*.pt")))
 
 def discover_test_cases():
     return [fp.stem for fp in PT_FILES]
 
-@pytest.mark.skipif(not PT_FILES, reason="No biochem patient graphs found in data/processed/graphs_biochem_anchors/")
+@pytest.mark.skipif(not PT_FILES, reason="No biochem COMSOL anchor graphs found in data/processed/graphs_biochem_anchors/")
 @pytest.mark.parametrize("stem", discover_test_cases())
 def test_biochem_graph_physical_integrity(stem):
-    """Load each patient graph and check that all physical properties are correct."""
+    """Load each COMSOL anchor graph and check that all physical properties are correct."""
     graph_path = GRAPH_DIR / f"{stem}.pt"
     meta_path = GRAPH_DIR / f"{stem}_metadata.json"
     

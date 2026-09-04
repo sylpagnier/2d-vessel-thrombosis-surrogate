@@ -15,7 +15,7 @@ from src.utils.channel_schema import (
     BIO_X_SCHEMA,
     KINE_X_SCHEMA,
     assert_anchor_dual_x_aligned,
-    attach_patient_anchor_graph_metadata,
+    attach_comsol_anchor_graph_metadata,
     biochem_encoder_x,
 )
 
@@ -83,7 +83,7 @@ def _minimal_anchor_graph(*, n: int = 12):
         mask_outlet=mask_out,
         mask_wall=mask_wall,
     )
-    return attach_patient_anchor_graph_metadata(data, mask_wall=mask_wall)
+    return attach_comsol_anchor_graph_metadata(data, mask_wall=mask_wall)
 
 
 def test_dual_x_metadata_and_alignment():
@@ -106,16 +106,16 @@ def test_biochem_encoder_x_rejects_kine_only_graph():
 
 
 @pytest.mark.skipif(
-    not (__import__("pathlib").Path(__file__).resolve().parents[2] / "data" / "processed" / "graphs_biochem_anchors" / "patient001.pt").exists(),
+    not (__import__("pathlib").Path(__file__).resolve().parents[2] / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt").exists(),
     reason="Re-extract anchor graphs to pick up dual-x layout.",
 )
-def test_on_disk_patient001_dual_x_schema():
+def test_on_disk_comsol001_dual_x_schema():
     from pathlib import Path
 
-    p = Path(__file__).resolve().parents[2] / "data" / "processed" / "graphs_biochem_anchors" / "patient001.pt"
+    p = Path(__file__).resolve().parents[2] / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt"
     data = torch.load(p, map_location="cpu", weights_only=False)
     if not hasattr(data, "x_biochem"):
-        pytest.skip("patient001.pt predates dual-x extractor; re-run PatientDataExtractor.")
+        pytest.skip("comsol001.pt predates dual-x extractor; re-run ComsolAnchorDataExtractor.")
     assert data.x_schema == KINE_X_SCHEMA
     assert_anchor_dual_x_aligned(data)
     # Kinematics wall normals must not equal inlet mask columns (historical bug).

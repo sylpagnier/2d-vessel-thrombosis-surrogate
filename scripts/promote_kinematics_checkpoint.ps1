@@ -3,8 +3,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string] $Checkpoint,
-    [string] $Holdout = "patient007",
-    [double] $MaxPatientRelL2 = 0.25,
+    [string] $Holdout = "comsol007",
+    [double] $MaxComsolRelL2 = 0.25,
     [double] $MaxSyntheticRelL2 = 0.20,
     [double] $MaxSyntheticL2RelL2 = 0.22,
     [int] $SyntheticCap = 200,
@@ -24,7 +24,7 @@ if (-not $Force) {
         "scripts/check_kinematics_promotion_gates.py",
         "--checkpoint", $ckpt,
         "--holdout", $Holdout,
-        "--max-patient-rel-l2", "$MaxPatientRelL2",
+        "--max-comsol-rel-l2", "$MaxComsolRelL2",
         "--max-synthetic-rel-l2", "$MaxSyntheticRelL2",
         "--max-synthetic-l2-rel-l2", "$MaxSyntheticL2RelL2",
         "--synthetic-cap", "$SyntheticCap"

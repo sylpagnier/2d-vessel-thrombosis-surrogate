@@ -2,7 +2,7 @@
 
 The wall model holds ``rp``/``ap`` at their t=0 values on the strength of
 PHASE3_HANDOFF 1.3 / 26.16 ("spatial CV 0.003 / 0.095 -- there is almost no chemistry to
-learn").  COMSOL's own patient007 wall export disagrees:
+learn").  COMSOL's own comsol007 wall export disagrees:
 
     ap   min 5.14e5   max 1.25e7   mean 8.52e6      [plt/cm^3]
 

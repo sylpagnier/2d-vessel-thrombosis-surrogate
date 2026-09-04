@@ -267,7 +267,7 @@ def biochem_encoder_x(data) -> torch.Tensor:
     if schema == KINE_X_SCHEMA:
         raise ValueError(
             "Graph has kinematics x_schema on data.x but no x_biochem; "
-            "re-run PatientDataExtractor or migrate anchor graphs."
+            "re-run ComsolAnchorDataExtractor or migrate anchor graphs."
         )
     raise ValueError(
         f"Cannot resolve biochem encoder features (x_schema={schema!r}, "
@@ -275,10 +275,10 @@ def biochem_encoder_x(data) -> torch.Tensor:
     )
 
 
-def attach_patient_anchor_graph_metadata(data, *, mask_wall: Optional[torch.Tensor] = None):
+def attach_comsol_anchor_graph_metadata(data, *, mask_wall: Optional[torch.Tensor] = None):
     """Attach schemas for anchor graphs: ``data.x`` = kine 18ch, ``data.x_biochem`` = biochem 15ch."""
     if not hasattr(data, "x_biochem") or data.x_biochem is None:
-        raise ValueError("attach_patient_anchor_graph_metadata requires data.x_biochem.")
+        raise ValueError("attach_comsol_anchor_graph_metadata requires data.x_biochem.")
     attach_channel_metadata(
         data,
         x_schema=KINE_X_SCHEMA,

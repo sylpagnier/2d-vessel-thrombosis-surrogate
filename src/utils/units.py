@@ -5,7 +5,7 @@ Two responsibilities:
 1. CGS<->SI numeric multipliers used when ingesting COMSOL exports
    (``CGS_to_SI``).
 2. Mesh-unit invariants for the data-generation pipelines:
-   synthetic / kinematics meshes are written in **meters** while patient /
+   synthetic / kinematics meshes are written in **meters** while COMSOL anchor /
    COMSOL meshes are written in **centimeters**. Each ``vessel_*.msh`` ships
    a JSON sidecar that records its unit choice, and the graph builders /
    anchor extractor call :func:`assert_mesh_unit` so a mismatched mesh is

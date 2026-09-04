@@ -1,12 +1,12 @@
 """Interactive biochem COMSOL -> PyG graph extraction.
 
 **Default:** COMSOL auto-pull is on. Save solves as either
-``comsol_models/phase2_nowound_XXX.mph`` (stem ``patientXXX``) or
-``comsol_models/phase2_wound_XXX.mph`` (stem ``wound_patientXXX``).
+``comsol_models/phase2_nowound_XXX.mph`` (stem ``comsolXXX``) or
+``comsol_models/phase2_wound_XXX.mph`` (stem ``wound_comsolXXX``).
 
     python -m src.tools.extract_biochem_comsol
     python -m src.tools.extract_biochem_comsol --variant nowound
-    python -m src.tools.extract_biochem_comsol --stem patient007 --variant wound
+    python -m src.tools.extract_biochem_comsol --stem comsol007 --variant wound
 
 Both physics families extract; they never share a stem, so wound solves cannot
 overwrite the canonical nowound cohort graphs.
@@ -17,7 +17,7 @@ Runs those exports (mesh from comp1/mesh1), writes ``cfd_results_biochem/*.txt``
 After each successful extract, a *lite* pack (graph + mesh, no ``.mph``) is written
 to ``data/extract_transfer/<stem>/``. For Google Drive, zip once and upload that::
 
-    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --stem wound_patient001,wound_patient002
+    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --stem wound_comsol001,wound_comsol002
 
 On this laptop leave the Drive download in Downloads (the ``extract_transfer``
 folder or ``extract_transfer.zip``), then::
@@ -30,10 +30,10 @@ PyCharm: **Run** module ``src.tools.extract_biochem_comsol`` (working directory 
 
 CLI::
 
-    python -m src.data_gen.lib.extract_biochem_comsol_data --stem patient007
-    python -m src.data_gen.lib.extract_biochem_comsol_data --stem wound_patient007
+    python -m src.data_gen.lib.extract_biochem_comsol_data --stem comsol007
+    python -m src.data_gen.lib.extract_biochem_comsol_data --stem wound_comsol007
     python -m src.tools.extract_biochem_comsol --list-only
-    python -m src.tools.extract_biochem_comsol --stem patient048 --force
+    python -m src.tools.extract_biochem_comsol --stem comsol048 --force
     python -m src.tools.extract_biochem_comsol --verbose   # mph/JVM + per-file export logs
     python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --only-new
     python -m src.tools.extract_biochem_comsol --install-bundles --only-new
@@ -53,7 +53,7 @@ from src.data_gen.lib.biochem_comsol_auto_export import (
     resolve_biochem_comsol_model_path,
     resolve_stem_selection,
 )
-from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 from src.data_gen.pipeline_biochem import _auto_scaffold_anchor_sidecars
 from src.tools.prepare_biochem_anchors import enrich_anchor_meshes, stems_in_dir
 from src.utils.paths import data_root
@@ -224,7 +224,7 @@ def print_status_table(
         )
     print(
         "[i] [ready]=mesh+txt  [extracted]=graph  "
-        "phase2_nowound_XXX.mph -> patientXXX;  phase2_wound_XXX.mph -> wound_patientXXX"
+        "phase2_nowound_XXX.mph -> comsolXXX;  phase2_wound_XXX.mph -> wound_comsolXXX"
     )
 
 
@@ -251,7 +251,7 @@ def _resolve_choices(
     kine_dir: Path,
     variant: str | None = None,
 ) -> list[AnchorExtractStatus]:
-    """Parse ``5,8,9``, ``5-9``, ``patient005``, or ``wound_patient007`` into status rows."""
+    """Parse ``5,8,9``, ``5-9``, ``comsol005``, or ``wound_comsol007`` into status rows."""
     try:
         stems = resolve_stem_selection(raw, statuses, variant=variant)
     except ValueError as exc:
@@ -284,7 +284,7 @@ def _can_run_status(s: AnchorExtractStatus, *, from_comsol: bool) -> bool:
 
 def _maybe_pull_comsol(
     stem: str,
-    extractor: PatientDataExtractor,
+    extractor: ComsolAnchorDataExtractor,
     *,
     from_comsol: bool,
     model_path: Path | None,
@@ -321,7 +321,7 @@ def _maybe_pull_comsol(
 
 def _run_extract(
     stem: str,
-    extractor: PatientDataExtractor,
+    extractor: ComsolAnchorDataExtractor,
     *,
     force: bool,
     skip_enrich: bool,
@@ -354,7 +354,7 @@ def _run_extract(
         )
 
     try:
-        extractor.process_patient(stem)
+        extractor.process_comsol_anchor(stem)
     except Exception as exc:
         print(f"[ERR] Extraction failed for {stem}: {exc}")
         return False
@@ -366,7 +366,7 @@ def _run_extract(
 
 def _run_extract_batch(
     picked: list[AnchorExtractStatus],
-    extractor: PatientDataExtractor,
+    extractor: ComsolAnchorDataExtractor,
     *,
     force: bool,
     skip_enrich: bool,
@@ -420,7 +420,7 @@ def _run_extract_batch(
 
 def _interactive_loop(
     statuses: list[AnchorExtractStatus],
-    extractor: PatientDataExtractor,
+    extractor: ComsolAnchorDataExtractor,
     *,
     force: bool,
     skip_enrich: bool,
@@ -437,8 +437,8 @@ def _interactive_loop(
     ]
     print(f"\n[i] {len(ready)} stem(s) ready to extract (not yet graphed).")
     print(
-        "[i] Enter index or stem, or several: 5 | 5,8,9 | 5-9 | patient008 | "
-        "wound_patient007 | patient007_wound | 'l' relist, 'q' quit.\n"
+        "[i] Enter index or stem, or several: 5 | 5,8,9 | 5-9 | comsol008 | "
+        "wound_comsol007 | comsol007_wound | 'l' relist, 'q' quit.\n"
     )
 
     while True:
@@ -515,14 +515,14 @@ def main(argv: list[str] | None = None) -> None:
         "--stem",
         type=str,
         default="",
-        help="One or more stems: patient007 | wound_patient007 | 7 | 5,8,9 | 5-9 "
-        "(non-interactive). Combine with --variant wound to restamp patientXXX.",
+        help="One or more stems: comsol007 | wound_comsol007 | 7 | 5,8,9 | 5-9 "
+        "(non-interactive). Combine with --variant wound to restamp comsolXXX.",
     )
     parser.add_argument(
         "--variant",
         choices=("nowound", "wound", "all"),
         default="all",
-        help="Restrict listing/extraction to nowound (patientXXX) or wound (wound_patientXXX).",
+        help="Restrict listing/extraction to nowound (comsolXXX) or wound (wound_comsolXXX).",
     )
     parser.add_argument(
         "--list-only",
@@ -618,7 +618,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from src.data_gen.lib.biochem_comsol_mph_export import ensure_biochem_extract_dirs
 
-    extractor = PatientDataExtractor(phase="biochem_anchors", raw_dir=raw_dir, label_dir=label_dir)
+    extractor = ComsolAnchorDataExtractor(phase="biochem_anchors", raw_dir=raw_dir, label_dir=label_dir)
     ensure_biochem_extract_dirs(raw_dir, label_dir, extractor.proc_dir)
 
     from src.data_gen.lib.biochem_extract_transfer import (

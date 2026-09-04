@@ -6,7 +6,7 @@ pack indices, not seconds.  Wound vessels use the WOUND_PROGRESS 13 domains
 ``wall`` / ``off`` (true lumen).  SEALED is never in the default list.
 
     python scripts/eval_clot_ml_0.py
-    python scripts/eval_clot_ml_0.py --stems wound_patient003 patient012
+    python scripts/eval_clot_ml_0.py --stems wound_comsol003 comsol012
     python scripts/eval_clot_ml_0.py --cohort
 """
 from __future__ import annotations
@@ -39,7 +39,7 @@ from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, SEALED  # n
 
 PACKS = REPO / "data/processed/graphs_biochem_anchors"
 DEFAULT_STEMS = tuple(WOUND_COHORT) + (
-    "patient012", "patient020", "patient032", "patient041", "patient044",
+    "comsol012", "comsol020", "comsol032", "comsol041", "comsol044",
     WOUND_AB_PAIR[1],
 )
 

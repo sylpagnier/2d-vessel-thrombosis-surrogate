@@ -146,7 +146,7 @@ def boundary_weighted_mse(
         # magnitude, and the wall band's share of the actual squared error runs 0.7-4.3%.
         # Normalising by the graph's own mean square puts every vessel on one scale, which
         # matters because `u_ref` differs 2x across the cohort and the loss is summed over a
-        # mixed synthetic + clinical sampler.
+        # mixed synthetic + comsol sampler.
         denom = (y**2).mean().clamp(min=1e-12)
         e = e / denom
     wp = float(p_weight)
@@ -334,7 +334,7 @@ def _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s_scale):
     (IQR ratio 0.62), so its MINIMUM wall shear is 31.5 where the truth reaches 9.3 -- and the
     deposition gate cuts at 25.  On 7 of 30 vessels no wall node crosses the cut, the wall
     gate is empty, `physics_mask` seeds from it and empties, and THIRTEEN downstream feature
-    channels go identically zero.  That is the -0.97 on patient010, not accumulated field error.
+    channels go identically zero.  That is the -0.97 on comsol010, not accumulated field error.
 
     An L2 loss on velocity is exactly what produces that compression, and nothing in the
     objective looked at the tail.  This is a one-sided penalty on OVER-predicting shear where
@@ -358,8 +358,8 @@ def _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s_scale):
         return sr_pr.sum() * 0.0
     # SYMMETRIC, deliberately.  A one-sided penalty was the first instinct -- the surrogate
     # looked like it could not reach low shear -- but per-vessel the tail is wrong in BOTH
-    # directions: measured, patient005's predicted minimum wall shear is 14.5x the truth's and
-    # patient010's is 0.018x.  The cohort median hid that.  What matters is that the tail is
+    # directions: measured, comsol005's predicted minimum wall shear is 14.5x the truth's and
+    # comsol010's is 0.018x.  The cohort median hid that.  What matters is that the tail is
     # WRONG, not which way.
     return ((q[lo] - g[lo]) ** 2).mean() / (s_scale * k).clamp(min=1e-6) ** 2
 
@@ -378,10 +378,10 @@ def wall_band_shear_losses(
 
     ```
     vessel      field                 sr corr   sr scale   dsrx corr   dsrx scale
-    patient020  analytic prior only     0.568      0.104       0.612        0.060
-    patient020  RGP-DEQ                 0.703      0.506       0.228        0.387
-    patient001  analytic prior only     0.806      0.410       0.962        0.146
-    patient001  RGP-DEQ                 0.552      1.165       0.826        0.332
+    comsol020  analytic prior only     0.568      0.104       0.612        0.060
+    comsol020  RGP-DEQ                 0.703      0.506       0.228        0.387
+    comsol001  analytic prior only     0.806      0.410       0.962        0.146
+    comsol001  RGP-DEQ                 0.552      1.165       0.826        0.332
     ```
 
     So the hard BC does NOT deny the model wall-shear authority -- ``d/dn(sdf * uvp) = uvp`` at
@@ -573,7 +573,7 @@ def _soft_gate_bce(data, sr_pr, sr_gt, dsr_pr, dsr_gt, band, s_scale, d_scale):
     with temperatures set from the ground truth's own spread, so the sharpness follows the
     vessel rather than a hand-picked constant.  The target is the HARD GT gate, computed with
     the same operator -- verified well-posed: under the WLS operator the GT gate fires on
-    10.1 / 36.0 / 10.1 % of wall nodes on patient020 / 001 / 041, identical to the shipped
+    10.1 / 36.0 / 10.1 % of wall nodes on comsol020 / 001 / 041, identical to the shipped
     3-hop MLS convention to one decimal.
     """
     from src.clot_ml.features import M_TO_CM

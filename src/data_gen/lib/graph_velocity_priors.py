@@ -7,7 +7,7 @@ from src.config import VesselConfig
 R_REF_ND = 0.5
 U_MAX_BASE_ND = 1.5
 # Cap Poiseuille peak ND; training graphs stay ~<=2.0. Uncapped 1/R blow-up in tight stenosis
-# (patient anchors) reached ~8 ND and broke GINO-DEQ (pred spikes, misleading viz scales).
+# (COMSOL anchor anchors) reached ~8 ND and broke GINO-DEQ (pred spikes, misleading viz scales).
 U_PRIOR_PEAK_CAP_ND = 2.0
 EPSILON = 1e-5
 

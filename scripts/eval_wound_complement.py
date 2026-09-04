@@ -28,7 +28,7 @@ docs/PHASE10_V4.md 1 removed from v3.
 
 Usage:
     python scripts/eval_wound_complement.py
-    python scripts/eval_wound_complement.py --stems wound_patient001
+    python scripts/eval_wound_complement.py --stems wound_comsol001
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ from src.config import BiochemConfig, PhysicsConfig
 
 GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
 LOVO = Path("outputs/clot_ml/wound_rate/lovo.json")
-WOUND_STEMS = ("wound_patient001", "wound_patient002", "wound_patient003")
+WOUND_STEMS = ("wound_comsol001", "wound_comsol002", "wound_comsol003")
 #: Column order. ``wnd`` sits between the two domains it is confused with, so the table
 #: itself shows it is not the score.
 DOM = ("wall", "wnd", "w_reg", "w_lum", "far", "full")

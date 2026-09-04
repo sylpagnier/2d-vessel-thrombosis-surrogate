@@ -1,4 +1,4 @@
-"""Centerline metadata for Poiseuille priors (synthetic + patient anchors)."""
+"""Centerline metadata for Poiseuille priors (synthetic + COMSOL anchor anchors)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def centerline_from_graph_path(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Approximate centerline by shortest path on the mesh graph (inlet -> outlet).
 
-    Works for curved patient anchors when JSON sidecar centerline is missing; much
+    Works for curved COMSOL anchor anchors when JSON sidecar centerline is missing; much
     better than a straight inlet-outlet chord for Poiseuille flow-direction alignment.
     """
     pos = pos_nd.detach().cpu().numpy()
@@ -160,15 +160,15 @@ def load_sidecar_centerline_nd(
 def resolve_anchor_mesh_path(raw_dir: Path, stem: str) -> Optional[Path]:
     """Prefer ``<stem>.msh``, else ``<stem>.nas`` (COMSOL anchors often ship NAS only).
 
-  Also tries ``vessel_<id>.{msh,nas}`` when ``stem`` is ``patient<id>`` (legacy Gmsh names).
+  Also tries ``vessel_<id>.{msh,nas}`` when ``stem`` is ``COMSOL anchor<id>`` (legacy Gmsh names).
     """
     raw_dir = Path(raw_dir)
     for name in (f"{stem}.msh", f"{stem}.nas"):
         p = raw_dir / name
         if p.is_file():
             return p
-    if stem.startswith("patient") and stem[7:].isdigit():
-        vid = str(int(stem[7:]))
+    if stem.startswith("comsol") and stem[6:].isdigit():
+        vid = str(int(stem[6:]))
         for name in (f"vessel_{vid}.msh", f"vessel_{vid}.nas"):
             p = raw_dir / name
             if p.is_file():

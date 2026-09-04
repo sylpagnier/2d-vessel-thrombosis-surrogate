@@ -5,7 +5,7 @@ and is not going to change, so it defines the deployment domain and training has
 The alternative -- collapsing deployment onto its corner subgraph (`p1_corner_graph`, §7.2) --
 was measured and only fixed shear *amplitude*, so it is kept as a diagnostic, not as the plan.
 
-**What has to match, measured on `patient020`:**
+**What has to match, measured on `comsol020`:**
 
 ```
 corners 5009   midsides 14699   midside fraction 0.7458   midsides/corners 2.935
@@ -120,7 +120,7 @@ def elevate_to_p2(data, *, interpolate_labels: bool = True, keep_wls: bool = Tru
     # NOTE: `is_anchor` is deliberately NOT copied here -- it is rebuilt below as a per-node
     # mask so mid-side nodes carry no fabricated supervision.
     for name in ("u_ref", "d_bar", "graph_stem", "geometry_level", "config_id",
-                 "is_clinical_anchor", "x_schema", "y_schema", "channel_schema_version",
+                 "is_comsol_anchor", "x_schema", "y_schema", "channel_schema_version",
                  "x_channel_names", "y_channel_names", "re_actual", "bend_sign", "mesh_path"):
         v = getattr(data, name, None)
         if v is not None:

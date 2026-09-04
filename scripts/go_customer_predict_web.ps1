@@ -4,8 +4,8 @@
 param(
     [switch] $Cpu,
     [int] $Port = 8765,
-    [string] $Host = "127.0.0.1"
+    [string] $BindHost = "127.0.0.1"
 )
 
 . (Join-Path $PSScriptRoot "_launcher_common.ps1")
-Invoke-GoCustomerPredictWeb -Cpu:$Cpu -Port $Port -BindHost $Host
+Invoke-GoCustomerPredictWeb -Cpu:$Cpu -Port $Port -BindHost $BindHost

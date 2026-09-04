@@ -3,7 +3,7 @@
 Maps holdout metrics into a coarse failure mode so sweeps can decide the next knob:
 under-seed / stalled front vs overspray vs balanced, without re-deriving thresholds each time.
 
-Also owns the locked wall-gen **gate rule** (patient020): primary ``deploy_clot_f1``,
+Also owns the locked wall-gen **gate rule** (comsol020): primary ``deploy_clot_f1``,
 mass band, no score-alone promote when mass is starved.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# Locked wall-gen gate (patient020). Primary metric is strict clot F1 -- not guiding score.
+# Locked wall-gen gate (comsol020). Primary metric is strict clot F1 -- not guiding score.
 # The fh=2 / mass~0.18 run showed score can rise while F1 falls (precision mirage).
 WALL_GEN_GATE_PRIMARY = "deploy_clot_f1"
 WALL_GEN_GATE_MASS_LO = 0.8
@@ -34,7 +34,7 @@ def passes_wall_gen_gate(
     mass_starve: float = WALL_GEN_GATE_MASS_STARVE,
     require_lift: bool = False,
 ) -> tuple[bool, str]:
-    """Return (ok, reason) for promoting / claiming a wall-gen win on patient020.
+    """Return (ok, reason) for promoting / claiming a wall-gen win on comsol020.
 
     Rules (locked):
     1. Primary = ``deploy_clot_f1`` (not score).

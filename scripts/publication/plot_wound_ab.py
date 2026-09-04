@@ -1,4 +1,4 @@
-"""Wound A/B figure: wound_patient005 vs. its matched no-wound twin patient048.
+"""Wound A/B figure: wound_comsol005 vs. its matched no-wound twin comsol048.
 
 Same vessel geometry (identical node bounding box), one row per variant, zoomed
 to the wound-region window (mapped onto both since the coordinate systems are
@@ -27,9 +27,9 @@ from scripts.publication.pub_style import (  # noqa: E402
 )
 
 PANEL_W = 6.2
-PAIR = ("wound_patient005", "patient048")
-ROW_LABEL = {"wound_patient005": "wound_patient005  (WOUND)",
-            "patient048": "patient048  (no wound, matched geometry)"}
+PAIR = ("wound_comsol005", "comsol048")
+ROW_LABEL = {"wound_comsol005": "wound_comsol005  (WOUND)",
+            "comsol048": "comsol048  (no wound, matched geometry)"}
 
 
 def _load(stem: str) -> dict:

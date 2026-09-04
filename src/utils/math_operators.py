@@ -143,7 +143,7 @@ def _fill_rank_deficient_rows(deriv, M_inv_eff, row, col, num_nodes):
 
     RGP_DEQ_REPAIR_PLAN.md D5.  COMSOL exports ``triangle6``, so ~74.6% of every biochem mesh
     node is a P2 mid-side vertex of degree 2 whose two edge vectors are exactly antiparallel.
-    Its 5-term normal matrix has **rank 2 of 5** -- measured on ``patient020``: 14699 nodes at
+    Its 5-term normal matrix has **rank 2 of 5** -- measured on ``comsol020``: 14699 nodes at
     rank 2, 4679 at rank 5.  Recovering a known quadratic through the operator gives a relative
     error of **4.2e-16 on the rank-5 rows and 0.72 on the rank-2 rows**: full-rank nodes are
     exact to machine precision, deficient ones carry no usable derivative at all.

@@ -16,7 +16,7 @@ stage () {
   return $rc
 }
 
-# Fig 1 solves the FEM itself, so regenerate it against the repaired solver.  The patient
+# Fig 1 solves the FEM itself, so regenerate it against the repaired solver.  The COMSOL anchor
 # anchors were never mis-scaled, so this is expected to reproduce -- run it to KNOW that.
 stage 10_fig1_data python scripts/publication/generate_fig1_data.py
 

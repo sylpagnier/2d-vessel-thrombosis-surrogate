@@ -4,9 +4,9 @@ WHY THIS EXISTS.  Inlet and outlet facets used to be tagged by requiring BOTH co
 of a boundary facet to carry COMSOL's node selection.  That selection is not always complete
 on a quadratic mesh, and two of the 2026-09-02 packs prove it:
 
-    patient038   no two adjacent inlet corners tagged at all -- 0 facets, and the solve was
+    comsol038   no two adjacent inlet corners tagged at all -- 0 facets, and the solve was
                  refused outright ("an untagged inlet or outlet leaves ... a singular solve")
-    patient048   4 of 21 outlet facets tagged with one corner each, so those four silently
+    comsol048   4 of 21 outlet facets tagged with one corner each, so those four silently
                  took the no-slip WALL condition instead of the outlet one and the solve was
                  wrong without saying so
 
@@ -34,9 +34,9 @@ MESHES = REPO / "data/raw/biochem_anchors"
 skfem = pytest.importorskip("skfem")
 
 #: packs where the corner rule was already complete -- the completion must not move a facet
-INTACT = ("patient012", "patient020", "patient044", "wound_patient005")
+INTACT = ("comsol012", "comsol020", "comsol044", "wound_comsol005")
 #: (pack, expected inlet facets, expected outlet facets) after completion
-REPAIRED = (("patient038", 20, 20), ("patient048", 21, 21))
+REPAIRED = (("comsol038", 20, 20), ("comsol048", 21, 21))
 
 
 def _register(stem: str):
@@ -108,8 +108,8 @@ def test_completion_recovers_the_two_incompletely_tagged_packs(stem, n_inlet, n_
 
 
 def test_the_solver_uses_the_completion_and_solves_the_pack_that_used_to_refuse():
-    """End-to-end: `patient038` raised on `inlet=0 outlet=0` before this fix."""
-    stem = "patient038"
+    """End-to-end: `comsol038` raised on `inlet=0 outlet=0` before this fix."""
+    stem = "comsol038"
     if not (PACKS / f"{stem}.pt").exists() or not (MESHES / f"{stem}.nas").exists():
         pytest.skip(f"{stem} not on disk")
     from src.clot_ml.v0 import solve_fem_into_pack

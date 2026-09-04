@@ -9,7 +9,7 @@ its dataset build.  Solve them all up front instead, and report which ones canno
 
     python scripts/build_fem_prior_cache.py                # train pool + selection set
     python scripts/build_fem_prior_cache.py --all-cohort   # every FIT+DEV pack plus the wounds
-    python scripts/build_fem_prior_cache.py --stems patient001 patient041
+    python scripts/build_fem_prior_cache.py --stems comsol001 comsol041
     python scripts/build_fem_prior_cache.py --force        # re-solve, ignoring the cache
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _cohort_stems(packs: Path) -> list[str]:
 
     skip = set(SEALED) | set(CLOT_FREE)
     out = [a for a in list(FIT) + list(DEV) if a not in skip and (packs / f"{a}.pt").exists()]
-    for s in ("wound_patient001", "wound_patient002", "wound_patient003"):
+    for s in ("wound_comsol001", "wound_comsol002", "wound_comsol003"):
         if (packs / f"{s}.pt").exists() and s not in out:
             out.append(s)
     return out

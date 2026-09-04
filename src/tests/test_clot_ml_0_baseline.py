@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 LOCKED = Path("outputs/clot_ml/locked")
-FINAL_HALF = {"patient007", "patient013", "patient031", "patient043"}
+FINAL_HALF = {"comsol007", "comsol013", "comsol031", "comsol043"}
 
 
 def _alias_manifest_path() -> Path:

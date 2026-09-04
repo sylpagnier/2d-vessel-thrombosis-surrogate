@@ -28,7 +28,7 @@ python "$SCRIPT_DIR/generate_flow_requirement_data.py"
 # Timing must run on an OTHERWISE IDLE machine -- it is a wall-clock measurement, and anything
 # else running here corrupts it.  Left out of the default pipeline deliberately; run it alone:
 #   python scripts/publication/generate_timing_data.py --every 1
-# Wound A/B (wound_patient005 vs. patient048) is a PREVIEW, not a Fig 12/13-budgeted item --
+# Wound A/B (wound_comsol005 vs. comsol048) is a PREVIEW, not a Fig 12/13-budgeted item --
 # the wound section stays frozen pending PUBLICATION_NOTES §7.0. Left out of the default
 # pipeline deliberately; run it alone:
 #   python scripts/publication/generate_wound_ab_data.py && python scripts/publication/plot_wound_ab.py

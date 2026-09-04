@@ -1,4 +1,4 @@
-"""Wound A/B example: wound_patient005 vs. its matched no-wound twin patient048.
+"""Wound A/B example: wound_comsol005 vs. its matched no-wound twin comsol048.
 
 Same underlying vessel geometry (.nas), simulated once with the wound boundary
 condition and once without -- confirmed by identical node bounding box. Predicts
@@ -32,7 +32,7 @@ from src.clot_ml.wound import has_wound, solid_mask, wound_region_masks  # noqa:
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 
-PAIR = ("wound_patient005", "patient048")
+PAIR = ("wound_comsol005", "comsol048")
 
 
 def build_one(stem: str, bundle, kind: str, bio, phys) -> dict:
@@ -83,7 +83,7 @@ def build_one(stem: str, bundle, kind: str, bio, phys) -> dict:
 
 
 def main() -> None:
-    print("[i] Generating wound A/B example data (wound_patient005 vs. patient048)")
+    print("[i] Generating wound A/B example data (wound_comsol005 vs. comsol048)")
     bundle, kind = load_default()
     print(f"    shipped model: kind={kind}")
     bio = BiochemConfig(phase="biochem")

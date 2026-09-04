@@ -61,7 +61,7 @@ def test_train_t0_coverage_frac_never_eats_the_unroll_runway():
         last = 200
         cap = train_t0_max_for_n_times(201)
         assert cap <= last - TRAIN_T0_COVERAGE_MIN_RUNWAY
-        # Also true on a short (patient039-like) vessel.
+        # Also true on a short (comsol039-like) vessel.
         cap_short = train_t0_max_for_n_times(92)
         assert cap_short <= 91 - TRAIN_T0_COVERAGE_MIN_RUNWAY
 

@@ -20,7 +20,7 @@ It reinstalls CPU-only `torch` from `https://download.pytorch.org/whl/cpu`, then
 `requirements-customer.txt` -- a deliberately smaller set than the full research
 `requirements.txt` (only `pytest` is actually dropped; `pandas` and `mph`, the COMSOL/MATLAB
 bridge, both stay in even though the deploy path never calls their functions, because
-`src/data_gen/__init__.py` imports `AnchorGenerator`/`PatientDataExtractor` eagerly at package
+`src/data_gen/__init__.py` imports `AnchorGenerator`/`ComsolAnchorDataExtractor` eagerly at package
 level and pulls them in transitively -- see the comment in `requirements-customer.txt`).
 `scikit-learn` is version-pinned (`==1.8.0`): the readout heads in
 `outputs/clot_ml/locked/clot_gnn_v6/temporal.pkl` are pickled sklearn objects, and sklearn's

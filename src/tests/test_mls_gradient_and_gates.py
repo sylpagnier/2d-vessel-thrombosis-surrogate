@@ -3,7 +3,7 @@
 WHY.  Every flow-derived feature in this project (shear rate, shear gradient, both
 gates in ``comsol_surface_deposition``) is a derivative of the velocity field.  The packs
 ship ``G_x``/``G_y`` for that, and on 2026-08-09 they were audited against COMSOL's own
-``spf.sr`` / ``d(spf.sr,x)`` export for patient007:
+``spf.sr`` / ``d(spf.sr,x)`` export for comsol007:
 
     operator            spearman(spf.sr)   spearman(d(spf.sr,x))
     packs' G_x / G_y          0.19                0.00
@@ -107,7 +107,7 @@ import torch  # noqa: E402
 
 def _anchor():
     from pathlib import Path
-    paths = sorted(Path("data/processed/graphs_biochem_anchors").glob("patient0*.pt"))
+    paths = sorted(Path("data/processed/graphs_biochem_anchors").glob("comsol0*.pt"))
     if not paths:
         pytest.skip("no biochem anchor graphs")
     return torch.load(str(paths[0]), map_location="cpu", weights_only=False)

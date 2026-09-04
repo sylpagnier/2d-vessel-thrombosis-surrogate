@@ -6,7 +6,7 @@ from src.utils.kinematics_geometry import (
     cohort_level_counts,
     geometry_sample_weight,
     split_anchor_physics_stratified,
-    split_clinical_anchor_train_val,
+    split_comsol_anchor_train_val,
     train_pool_for_epoch,
 )
 
@@ -68,18 +68,18 @@ def test_cohort_level_counts():
     assert c[0] == 1 and c[2] == 1
 
 
-def test_clinical_holdout_split():
-    p7 = _graph(1, True, stem="patient007")
-    p7.is_clinical_anchor = True
-    p3 = _graph(1, True, stem="patient003")
-    p3.is_clinical_anchor = True
+def test_comsol_holdout_split():
+    p7 = _graph(1, True, stem="comsol007")
+    p7.is_comsol_anchor = True
+    p3 = _graph(1, True, stem="comsol003")
+    p3.is_comsol_anchor = True
     syn = _graph(2, False, stem="vessel_0001")
     dataset = [p7, p3, syn, _graph(0, False, stem="vessel_0002")]
-    splits = split_clinical_anchor_train_val(
-        dataset, seed=0, holdout_stems=["patient007"]
+    splits = split_comsol_anchor_train_val(
+        dataset, seed=0, holdout_stems=["comsol007"]
     )
     val_stems = {getattr(d, "graph_stem", "") for d in splits["val"]}
-    assert "patient007" in val_stems
+    assert "comsol007" in val_stems
     train_stems = {getattr(d, "graph_stem", "") for d in splits["train"]}
-    assert "patient007" not in train_stems
-    assert "patient003" in train_stems
+    assert "comsol007" not in train_stems
+    assert "comsol003" in train_stems

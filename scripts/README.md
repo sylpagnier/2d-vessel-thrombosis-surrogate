@@ -7,7 +7,7 @@ Supported launchers for **Local FEM Solver** (four active stacks). Retired ladde
 
 | Stack | Entry | Docs |
 |-------|-------|------|
-| **deploy-clot** (`clot_ml_0`) | `promote_clot_ml_0.py`, `eval_clot_ml_0.py`, `run_phase9_cv.py`, `eval_strict*.py` | `docs/WOUND_PROGRESS.md` |
+| **deploy-clot** (`clot_ml_0`) | `promote_clot_ml_0.py`, `eval_clot_ml_0.py`, `run_phase9_cv.py`, `eval_strict*.py` | [`docs/SEALED_SPLIT.md`](../docs/SEALED_SPLIT.md) |
 | **RGP-DEQ** (Stage A flow) | `go_kinematics_production_allfix.ps1`, `run_kinematics_production.py`, `precache_rgp_deq.py` | `docs/KINEMATICS_BEST_ARCHITECTURE.md` |
 | **Research sweeps** | `go_research_sweep.ps1` / `run_research_sweep.py` | `docs/RESEARCH_SWEEPS.md` |
 | **Diagnostics** | `go_diag.ps1` / `python -m src.tools.diagnostics` | `src/tools/diagnostics/registry.py` |
@@ -20,11 +20,11 @@ Utility `.ps1`: `_launcher_common.ps1`, `go_diag.ps1`, `kill_stale_python.ps1`, 
 
 `go_deployclot.sh` runs every stage below in dependency order against `flow="fem"`, the local
 Carreau solve; each stage is idempotent and skips work already on disk, so a rerun resumes.
-See [`docs/DEPLOYCLOT.md`](../docs/DEPLOYCLOT.md).
+See [`docs/SEALED_SPLIT.md`](../docs/SEALED_SPLIT.md) and [`docs/BIOCHEM_GNN.md`](../docs/BIOCHEM_GNN.md).
 
 - `go_deployclot.sh` -- the runbook.
-- `diag_fem_flow_audit.py` -- what the local FEM solve costs per vessel, in the four
-  quantities the deposition gate consumes.
+- `python -m src.tools.diagnostics local-fem-accuracy` -- what the local FEM solve costs per
+  vessel, in the four quantities the deposition gate consumes.
 - `build_temporal_transport.py` -- per-(node, time) transport channels, one directory per
   flow source; the timing head is fitted against these and must not read another flow's.
 - `promote_clot_gnn_v4.py` -> `promote_clot_gnn_v4_temporal.py` ->
@@ -51,11 +51,11 @@ See [`docs/DEPLOYCLOT.md`](../docs/DEPLOYCLOT.md).
 ## RGP-DEQ kinematics (Stage A)
 
 - `go_kinematics_production_allfix.ps1` / `run_kinematics_production.py` -- production allfix baseline (orchestrator)
-- Config + runner: `src/training/kinematics_production_config.py`, `kinematics_production_runner.py`
+- Config + runner: `src/training/kinematics_production_config.py`, `src/training/kinematics_production_runner.py`
 - `go_kinematics_stage_a_ladder.ps1` -- ladder-only entry (delegates to `run_kinematics_production.py ladder`)
 - `go_kinematics_data_gen.ps1` -- mesh / pack generation helper
 - `precompute_kinematics_t0.py`, `precache_rgp_deq.py`, `check_kinematics_promotion_gates.py`
-- `preflight_kine_cohort.py`, `slim_kine_packs.py`, `finetune_kine_patient_anchors.py`,
+- `preflight_kine_cohort.py`, `slim_kine_packs.py`, `finetune_kine_comsol_anchors.py`,
   `calibrate_kine_loss_weights.py`
 - `train_pi_wall_shear.py` -- pi-flux wall-shear calibration
 - `viz_occlusion_flow_sweep.py` -- FEM occlusion oracle figures
@@ -71,8 +71,19 @@ See [`docs/DEPLOYCLOT.md`](../docs/DEPLOYCLOT.md).
 
 ## Ad-hoc diagnostics
 
-- `go_diag.ps1` / `python -m src.tools.diagnostics` / `scripts/diag.py` (thin shim)
+Every supported probe is registered and runs through one entry point:
+
+```bash
+python -m src.tools.diagnostics list      # what is available
+python -m src.tools.diagnostics <slug>    # run one
+```
+
+- `go_diag.ps1` / `scripts/diag.py` are thin shims over that CLI.
 - Registry: `src/tools/diagnostics/registry.py`
+
+One-off `diag_*.py` / `diagnose_*.py` probes written against a single run are kept local
+rather than published; add a module under `src/tools/diagnostics/` and register it if a
+probe is worth keeping.
 
 ## Customer + visualization
 

@@ -473,7 +473,7 @@ class AnchorGenerator:
             if mesh_unit == MESH_UNIT_CM and self.vessel_config.phase == "kinematics":
                 raise ValueError(
                     f"[{i}] kinematics corpus requires SI meshes (sidecar unit=m). "
-                    f"Biochem anchor meshes use unit=cm and PatientDataExtractor, not AnchorGenerator."
+                    f"Biochem anchor meshes use unit=cm and ComsolAnchorDataExtractor, not AnchorGenerator."
                 )
 
             from src.data_gen.lib.comsol_t0_fluid import (

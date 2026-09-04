@@ -6,7 +6,7 @@ on.  Audited 2026-08-09: ``G_x`` has a **median of one non-zero per row** and
 ``G_x(f=x)`` returns **0 across the interior** (it is only linearly consistent on wall
 rows).  So ``gamma_si`` and ``dshear_ds`` as computed in the repo are not derivatives of
 the velocity field -- measured against COMSOL's own ``spf.sr`` / ``d(spf.sr,x)`` on
-patient007 they rank-correlate 0.19 and 0.00 respectively.
+comsol007 they rank-correlate 0.19 and 0.00 respectively.
 
 This module replaces them with a weighted moving-least-squares (MLS) fit over
 **graph** neighbourhoods (2-hop by default, so the stencil follows the mesh and never
@@ -20,7 +20,7 @@ single matvec, and they depend only on node positions + connectivity -- i.e. the
 ROOT CAUSE, for the record.  ``G_x``/``G_y`` are assembled in
 ``src/data_gen/lib/mesh_to_graph_biochem.py`` as a weighted-least-squares gradient from a
 **1-hop** stencil against a **5-term quadratic basis** ``[dx, dy, dx^2, dx*dy, dy^2]``.
-Mean node degree in the packs is ~3 (51904 edges / 17413 nodes on patient007), so the
+Mean node degree in the packs is ~3 (51904 edges / 17413 nodes on comsol007), so the
 moment matrix is rank-deficient at most interior nodes and its inverse saturates at the
 pipeline's 5e6 clamp -- ``M_inv`` row-norm has median exactly 5.0e6 across the interior.
 The assembly is structurally correct; the stencil is simply smaller than the basis.  That

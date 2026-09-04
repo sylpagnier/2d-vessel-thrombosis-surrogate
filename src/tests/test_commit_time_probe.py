@@ -55,7 +55,7 @@ def test_rank_auc_pair_mask_scores_only_masked_pairs():
 
 
 def test_flow_tie_pairs_matches_the_s29_gap():
-    """patient037's 0.048 vs 0.047 is a tie at the 5% default; 021's clean gap is not."""
+    """comsol037's 0.048 vs 0.047 is a tie at the 5% default; 021's clean gap is not."""
     ties = flow_tie_pairs([0.048], [0.047], rel_tol=0.05)
     assert bool(ties[0, 0]) is True
     assert bool(flow_tie_pairs([0.065], [0.120], rel_tol=0.05)[0, 0]) is False

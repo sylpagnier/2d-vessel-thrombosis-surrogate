@@ -15,8 +15,8 @@ import os
 
 def main():
     anchors = [
-        "patient005", "patient006", "patient010", 
-        "patient023", "patient002", "patient020", "patient034"
+        "comsol005", "comsol006", "comsol010", 
+        "comsol023", "comsol002", "comsol020", "comsol034"
     ]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     

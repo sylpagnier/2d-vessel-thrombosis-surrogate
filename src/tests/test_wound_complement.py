@@ -26,8 +26,8 @@ from src.clot_ml.wound import (
 from src.config import BiochemConfig
 
 GRAPH_DIR = Path("data/processed/graphs_biochem_anchors")
-WOUND = "wound_patient001"
-NOWOUND = "patient012"
+WOUND = "wound_comsol001"
+NOWOUND = "comsol012"
 
 
 def _load(stem: str):
@@ -98,7 +98,7 @@ def test_wound_rate_lifts_the_injured_patch_to_the_fitted_magnitude():
     """The shared ODE must integrate the SAME rate the complement fitted.
 
     At COMSOL's static ``srf2`` prefactor of 1 the injured patch reaches ~1.35x crit on
-    ``wound_patient001`` against GT's 9.04x, so no wound-owned lumen node can clear the
+    ``wound_comsol001`` against GT's 9.04x, so no wound-owned lumen node can clear the
     ``crit / off_att`` bar the off-wall rule is built on (WOUND_PROGRESS 15).  The healthy
     wall must not move: this rewrites ``srf2``, never ``srf1``.
     """
@@ -167,7 +167,7 @@ def test_two_regime_gate_is_faster_than_flat():
 def test_neighbour_trigger_is_inert_where_the_neighbourhood_is_quiet():
     """The coupling may never disturb a self-triggered wound.
 
-    ``wound_patient001`` has no gelled wall node within 61 mesh hops of its wound, so every
+    ``wound_comsol001`` has no gelled wall node within 61 mesh hops of its wound, so every
     trigger source -- including the GT oracle -- must leave its trajectory untouched. This is
     the safety property that lets the coupling ship at all: it can only ever add.
     """
@@ -309,7 +309,7 @@ def test_recursive_lumen_is_strictly_additive_and_gated():
     """C2 (MODEL_REVIEW 9d): deeper shells may only ADD, and only where the physics admits.
 
     The first version rebuilt shell 1 from hop distances, which is a different and smaller set
-    than `first_corner_shell` (43 nodes against 80 on `wound_patient001`), and it cost
+    than `first_corner_shell` (43 nodes against 80 on `wound_comsol001`), and it cost
     001/002 `w_lum` 0.0160 -- a gate violation produced by changing shell 1 while trying to
     add shell 2.  Shell 1 must stay exactly as shipped.
     """
@@ -321,9 +321,9 @@ def test_recursive_lumen_is_strictly_additive_and_gated():
     from src.clot_ml.wound import wound_owned_masks, wound_shells
 
     root = Path(__file__).resolve().parents[2] / "data/processed/graphs_biochem_anchors"
-    p_ = root / "wound_patient001.pt"
+    p_ = root / "wound_comsol001.pt"
     if not p_.exists():
-        pytest.skip("wound_patient001 pack not present")
+        pytest.skip("wound_comsol001 pack not present")
     d = torch.load(p_, map_location="cpu", weights_only=False)
     wnd, owned, _ = wound_owned_masks(d)
     shells, _ = wound_shells(d, 4)
@@ -368,7 +368,7 @@ def test_dispatcher_recursive_is_inert_on_a_nine_x_wound():
     ``test_recursive_lumen_leaves_low_mat_wounds_untouched`` asserts the arithmetic of the
     bar; this asserts the DEPLOY consequence on a real pack, which is the property that lets
     the mode be promoted without re-validating 001/002: at ``off_att=0.16`` shell 2 needs 39x
-    crit and ``wound_patient001`` reaches ~9x, so the committed set must be identical.
+    crit and ``wound_comsol001`` reaches ~9x, so the committed set must be identical.
     """
     from src.clot_ml.locked import predict_temporal_v4_wound
 
@@ -390,14 +390,14 @@ def test_dispatcher_recursive_never_removes_a_committed_node():
 
     These are different claims and the difference was a live bug.  ``compose_with_v4`` applies
     ``mask[owned] = wound_out["mask"][owned]``, so widening ``owned_off`` to a deeper ring
-    hands v4's nodes to a module that may decline them -- on ``wound_patient003`` the first
+    hands v4's nodes to a module that may decline them -- on ``wound_comsol003`` the first
     version removed 2 committed nodes and added none.  It removed two false positives, so the
     score went UP and the defect was invisible in the score; only a set comparison finds it.
     """
     from src.clot_ml.locked import predict_temporal_v4_wound
 
     bundle = _v4w_bundle()
-    for stem in ("wound_patient001", "wound_patient003"):
+    for stem in ("wound_comsol001", "wound_comsol003"):
         p = GRAPH_DIR / f"{stem}.pt"
         if not p.exists():
             pytest.skip(f"{stem} not on disk")

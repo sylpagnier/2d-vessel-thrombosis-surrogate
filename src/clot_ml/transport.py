@@ -102,7 +102,7 @@ def _solve_upwind(F: sp.csr_matrix, out: np.ndarray, rhs: np.ndarray, vol: np.nd
 
     Direct sparse solve, because Jacobi does **not** always converge here: strong
     recirculation makes the iteration matrix's spectral radius approach 1, and on
-    ``patient035`` 400 sweeps still leave a 23% residual.  Jacobi is kept as a fallback for
+    ``comsol035`` 400 sweeps still leave a 23% residual.  Jacobi is kept as a fallback for
     the (rare) singular factorisation.
     """
     Fin = F.T.tocsr()                              # Fin[i, j] = flux j -> i

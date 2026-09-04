@@ -9,7 +9,7 @@ two settings (`src/clot_ml/v0.REPLACE_SCOPES`):
 
 At n=3 there was no basis to choose: WOUND_PROGRESS 19 measured `all_lumen` and left
 `wound_region` as an option.  The 2026-09-02 deploy evaluation then showed what `all_lumen`
-costs -- the FAR FIELD collapses to 0.0000 on `wound_patient004`, `005` and `006`, because
+costs -- the FAR FIELD collapses to 0.0000 on `wound_comsol004`, `005` and `006`, because
 chemistry replaces a verdict the GNN was getting right far from the injury.  With six wound
 vessels the scope can be chosen the way every other readout scalar in this project is: on the
 out-of-fold vessels, never on the held-out one.

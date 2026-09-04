@@ -1,6 +1,6 @@
 """Geometry classes: aneurysm / stenosis / baseline, with an explicit abstain.
 
-Stenoses and aneurysms are the class that matters most, and `patient039`-`patient044` are
+Stenoses and aneurysms are the class that matters most, and `comsol039`-`comsol044` are
 in it.  Rather than hard-code that list, the class is **measured** from the mesh's own lumen
 width and then checked against it -- so it transfers to an unlabelled vessel.
 
@@ -22,10 +22,10 @@ not symmetric, and this is the important part:
 
     aneurysm   bulge >= 2.0       STILL SEPARATES, and by more than before.
                                   designated 2.15 / 2.23 / 2.71 against a cohort maximum of
-                                  1.61 (patient013).  Gap 0.54, cut sits in the middle of it.
+                                  1.61 (comsol013).  Gap 0.54, cut sits in the middle of it.
 
     stenosis   narrowing <= 0.40  NO LONGER SEPARATES ANYTHING.  The three designated
-                                  stenoses read 0.52 / 0.53 / 0.58 and `patient012`, a
+                                  stenoses read 0.52 / 0.53 / 0.58 and `comsol012`, a
                                   baseline, reads 0.51 -- BELOW all three.  Unsmoothed it is
                                   the same story (012 p2/med 0.510 against 041's 0.538).
                                   No threshold on this statistic can recover the labels.
@@ -46,9 +46,9 @@ and the priority-class reporting axis lost them.
 THE ISOLATED-NODE BUG, found by A2 and fixed here.  The along-wall smoothing averaged over a
 node's SELECTED NEIGHBOURS ONLY.  A selected node with no selected neighbour therefore divided
 0 by `max(0, 1)` and smoothed to **exactly 0**, which then set the 2nd percentile.  That is
-`patient008`'s `narrowing = 0.0000` -- 12 isolated nodes, and its raw wall width never goes
+`comsol008`'s `narrowing = 0.0000` -- 12 isolated nodes, and its raw wall width never goes
 below 0.61.  The window now includes the node itself, which is both the standard estimator and
-divide-by-zero-free.  It moves `patient008` 0.0000 -> 0.8533 and the designated stenoses
+divide-by-zero-free.  It moves `comsol008` 0.0000 -> 0.8533 and the designated stenoses
 0.46/0.48/0.51 -> 0.54/0.52/0.58; the aneurysm statistic barely moves.
 
 CONSEQUENCE FOR THE PROTOCOL, worth stating plainly: **DEV (040/041/044) is entirely
@@ -70,8 +70,8 @@ BOUNDARY_HOPS = 12
 WIDTH_OK_LO, WIDTH_OK_HI = 0.40, 5.0
 
 USER_DESIGNATED = {
-    "patient039": "aneurysm", "patient040": "aneurysm", "patient043": "aneurysm",
-    "patient041": "stenosis", "patient042": "stenosis", "patient044": "stenosis",
+    "comsol039": "aneurysm", "comsol040": "aneurysm", "comsol043": "aneurysm",
+    "comsol041": "stenosis", "comsol042": "stenosis", "comsol044": "stenosis",
 }
 PRIORITY = ("aneurysm", "stenosis", "stenosis+aneurysm")
 
@@ -116,7 +116,7 @@ def width_stats(data) -> dict:
         return nan
     # Smooth over the node's selected neighbours AND ITSELF.  Neighbours-only divided by
     # `max(cnt, 1)`, so a selected node with no selected neighbour smoothed to exactly 0 and
-    # set the 2nd percentile -- `patient008` read `narrowing = 0.0000` from 12 such nodes
+    # set the 2nd percentile -- `comsol008` read `narrowing = 0.0000` from 12 such nodes
     # while its raw wall width never went below 0.61.  See the module docstring.
     selv = sel.astype(np.float64)
     cnt = np.asarray(A @ selv).reshape(-1) + selv
@@ -164,7 +164,7 @@ def measured_class(stats: dict) -> str:
 
     This is the honest answer for an unlabelled vessel, and the thing to compare the
     designation against.  Note the module docstring: the stenosis branch does not currently
-    separate the labelled stenoses from `patient012`, so a `baseline` from this function is
+    separate the labelled stenoses from `comsol012`, so a `baseline` from this function is
     evidence about the BULGE only.
     """
     return classify(dict(stats), None)

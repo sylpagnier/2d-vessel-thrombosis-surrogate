@@ -48,7 +48,7 @@ Promote / lock: `python scripts/promote_biochem_gnn.py`.
 ```python
 from src.biochem_gnn import BiochemGNN, FlowMode
 
-model = BiochemGNN.from_manifest(anchor="patient007", flow_mode=FlowMode.COUPLED)
+model = BiochemGNN.from_manifest(anchor="comsol007", flow_mode=FlowMode.COUPLED)
 out = model.rollout(data)  # out.phi_by_time, out.mu_by_time, out.species_series
 ```
 

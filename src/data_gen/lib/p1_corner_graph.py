@@ -60,7 +60,7 @@ def identify_midside_nodes(data, *, max_cos: float = -0.9):
     The test is anti-parallelism, **not** an exact-midpoint check.  COMSOL places boundary
     mid-side nodes on the true curved geometry rather than on the chord -- that is the entire
     point of a ``triangle6`` element -- so a strict midpoint tolerance silently misclassifies
-    every mid-side node on a curved wall as a corner.  Measured on ``patient001``, deviation
+    every mid-side node on a curved wall as a corner.  Measured on ``comsol001``, deviation
     from the chord midpoint relative to segment length:
 
     ```

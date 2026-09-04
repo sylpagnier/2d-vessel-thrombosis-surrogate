@@ -32,9 +32,9 @@ pytest src/tests/
 
 ## Deeper context
 
-[`AGENTS.md`](AGENTS.md) is the working cheat sheet for the canonical model stacks,
-checkpoints, and gates this repo scores against — useful background before a non-trivial
-change, even though it's written for quick reference rather than onboarding.
+[`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) maps the source tree and the CLI entry
+points, and [`docs/MODEL_NOMENCLATURE.md`](docs/MODEL_NOMENCLATURE.md) explains which model
+name means what — both are worth a skim before a non-trivial change.
 
 ## Questions / issues
 

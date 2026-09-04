@@ -2,7 +2,7 @@
 
 Usage::
 
-    python -m src.inference.predict_species_gnn_deploy --graph data/processed/graphs_biochem_anchors/patient004.pt
+    python -m src.inference.predict_species_gnn_deploy --graph data/processed/graphs_biochem_anchors/comsol004.pt
     python -m src.inference.predict_species_gnn_deploy --graph new_vessel.pt --flow kinematics --loao
 """
 

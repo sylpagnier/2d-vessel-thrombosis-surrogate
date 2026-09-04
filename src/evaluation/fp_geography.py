@@ -1,6 +1,6 @@
 """Classify deploy FPs as adjacent overpaint vs distant wrong-pocket (wall-gen gate).
 
-Used by the cheap patient020 diagnostic before choosing physfp vs closed-loop FT.
+Used by the cheap comsol020 diagnostic before choosing physfp vs closed-loop FT.
 """
 
 from __future__ import annotations

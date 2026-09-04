@@ -14,7 +14,7 @@ python scripts/eval_clot_ml_0.py --cohort --flow pred --out outputs/runs/pred_al
 echo "exit=$?"
 
 log "3/3 tolerance curve, 3 vessels"
-python scripts/diag_flow_sensitivity.py patient010 patient005 patient020 \
+python scripts/diag_flow_sensitivity.py comsol010 comsol005 comsol020 \
     --source pred --out outputs/runs/flow_sensitivity.json
 echo "exit=$?"
 

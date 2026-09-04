@@ -232,13 +232,13 @@ def test_seeded_stall_stays_small_and_net_positive_on_wound_001():
     It is NOT zero, which an earlier revision of this test asserted.  Measured at the shipped
     ``STALL_HOPS = 2`` with the wound acting as a ``Mat`` source (WOUND_PROGRESS 14.6), the
     union opens **8** t=0-ungated wall nodes on 001, 6 of them GT clot.  The property worth
-    pinning is that it does not spray: a handful of nodes, majority true.  `wound_patient003`
+    pinning is that it does not spray: a handful of nodes, majority true.  `wound_comsol003`
     is where the mechanism has to earn its place, and that is the next test.
     """
     from src.config import PhysicsConfig
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
 
-    data = _load_pack("wound_patient001")
+    data = _load_pack("wound_comsol001")
     extra, wall = _ungated_stall_extra(data)
     T = int(data.y.shape[0])
     gt = gt_clot_phi_at_time(data, T - 1, PhysicsConfig(phase="biochem")).numpy() > 0.5
@@ -253,7 +253,7 @@ def test_seeded_stall_opens_ungated_wall_on_wound_003():
     from src.config import PhysicsConfig
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
 
-    data = _load_pack("wound_patient003")
+    data = _load_pack("wound_comsol003")
     extra, wall = _ungated_stall_extra(data)
     T = int(data.y.shape[0])
     gt = gt_clot_phi_at_time(data, T - 1, PhysicsConfig(phase="biochem")).numpy() > 0.5

@@ -241,7 +241,7 @@ def test_spearman_handles_degenerate_input():
 def test_pred_flow_mls_on_velocity_ignores_a_cached_shear_head():
     """The kinematics shear head is cached but not the deployable sr.
 
-    On patient005 the head has wall corr 0.17 vs GT MLS and never trips sgt; MLS-on-u0
+    On comsol005 the head has wall corr 0.17 vs GT MLS and never trips sgt; MLS-on-u0
     keeps wall corr 0.82.  A flat cached head must not flatten the gate.
     """
     from src.core_physics.physics_wall_model import t0_flow_fields

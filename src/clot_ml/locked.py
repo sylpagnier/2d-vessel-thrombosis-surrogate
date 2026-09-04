@@ -549,7 +549,7 @@ def predict_temporal_v4_wound(bundle: dict, data, times, *, flow: str = "gt",
     ``src/tests/test_wound_complement.py`` pins it at the dispatcher level.
 
     On a wound pack, after compose, OR hop-2 stall-opened t=0-ungated wall into the series.
-    That is the only 0-FP SET gain measured on ``wound_patient003`` (blinds the GNN never
+    That is the only 0-FP SET gain measured on ``wound_comsol003`` (blinds the GNN never
     ranks); it is inert on 001/002 and does not add owner-basin lumen.
     """
     from src.clot_ml.temporal import union_ungated_stall_series

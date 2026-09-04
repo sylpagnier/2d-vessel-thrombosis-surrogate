@@ -39,7 +39,7 @@ def resolve_kinematics_checkpoint(explicit: Path | str | None = None) -> Path:
     Training runs write into ``KINEMATICS_OUTPUT_DIR`` subdirectories, but this resolver only
     ever looked at the stage-A root -- so a freshly trained model is invisible to every deploy
     path unless it is passed explicitly.  On 2026-08-27 two runs finished into
-    ``outputs/kinematics/{production_allfix,clinical_anchor_finetune}/`` while every consumer
+    ``outputs/kinematics/{production_allfix,comsol_anchor_finetune}/`` while every consumer
     kept loading the 2026-08-12 root checkpoint (RGP_DEQ_REPAIR_PLAN.md B7).
 
     The resolution order is unchanged -- silently switching to a subdirectory checkpoint would
@@ -232,7 +232,7 @@ def clamped_width_priors(data: Data, *, d1_max: float = WIDTH_D1_MAX, d2_max: fl
     0.147 exactly.
 
     An input already inside the range is passed through untouched.  The 18 corner-edge packs
-    still trip the ``d1`` bound (patient001 reads 6.90 against 4.14) and clamping them is
+    still trip the ``d1`` bound (comsol001 reads 6.90 against 4.14) and clamping them is
     measurably inert -- rel L2 0.130 -> 0.131 -- so the operation only ever bites where there
     is something to fix.  Restores ``data.x`` on exit: callers, and ``_graph_key``, keep the
     tensor they passed in.

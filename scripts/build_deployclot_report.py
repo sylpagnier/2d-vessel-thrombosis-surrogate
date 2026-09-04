@@ -23,8 +23,8 @@ if str(REPO) not in sys.path:
 
 OUT = REPO / "outputs/deployclot"
 LOGS = REPO / "outputs/logs/deployclot"
-CLOT_FREE_STEMS = {"patient017", "patient022", "patient023", "patient026", "patient027",
-                   "patient030", "patient033", "patient034", "patient038"}
+CLOT_FREE_STEMS = {"comsol017", "comsol022", "comsol023", "comsol026", "comsol027",
+                   "comsol030", "comsol033", "comsol034", "comsol038"}
 
 
 def _load(p: Path):
@@ -99,7 +99,7 @@ def solver_section(rows) -> str:
         for g in (0.002, 0.01, 0.1, 1.0))
     strip = (f'<figure class="strip"><figcaption>Per-vessel velocity rel L2 against COMSOL, '
              f'log axis, one tick per vessel (n={len(rows)}). The two ticks past 0.1 are '
-             f'<code>patient045</code> and <code>patient046</code>.</figcaption>'
+             f'<code>comsol045</code> and <code>comsol046</code>.</figcaption>'
              f'<div class="stripbody">{"".join(ticks)}<div class="axis">{axis}</div></div>'
              f'</figure>')
     return f"""
@@ -332,7 +332,7 @@ def offwall_section(att, v6a, v6b) -> str:
     pv = att["per_vessel"]
     stems = list(pv)
     SHIP, FIX = "0.23/0/3", "0.23/0.5/1"
-    head = "".join("<th class='n'>%s</th>" % html.escape(s.replace("wound_patient", "w"))
+    head = "".join("<th class='n'>%s</th>" % html.escape(s.replace("wound_comsol", "w"))
                    for s in stems)
     depth_rows = "".join(
         "<tr><td class='n'>d = %d</td>%s<td class='n em'>%.4f</td></tr>" % (
@@ -343,7 +343,7 @@ def offwall_section(att, v6a, v6b) -> str:
     lovo_rows = "".join(
         "<tr><td><code>%s</code></td><td class='n'>%.4f</td><td class='n em'>%.4f</td>"
         "<td class='n'>%+.4f</td><td class='n'>%.4f</td><td class='n em'>%.4f</td></tr>" % (
-            html.escape(s.replace("wound_patient", "wound")),
+            html.escape(s.replace("wound_comsol", "wound")),
             pv[s][SHIP]["w_lum"], pv[s][FIX]["w_lum"],
             pv[s][FIX]["w_lum"] - pv[s][SHIP]["w_lum"],
             pv[s][SHIP]["w_reg"], pv[s][FIX]["w_reg"])
@@ -369,7 +369,7 @@ def offwall_section(att, v6a, v6b) -> str:
             "</tbody></table></div>"
             "<p>The learned field wins at the old readout and <strong>loses at the corrected "
             "one</strong>, where it is identical to the chemistry on five of six vessels. Its "
-            "whole gain was <code>wound_patient005</code>, and the way it won there was to make "
+            "whole gain was <code>wound_comsol005</code>, and the way it won there was to make "
             "the field <em>smaller</em> so shell 2 stopped firing &mdash; the depth fix, "
             "expressed as a magnitude. A learned residual was an expensive way to re-tune a "
             "threshold.</p>"
@@ -393,7 +393,7 @@ def offwall_section(att, v6a, v6b) -> str:
         "<th class='n'>mean</th></tr></thead><tbody>%s</tbody></table></div>"
         "<p>Depths 2 through 5 are identical to four decimals &mdash; past shell 2 the field "
         "never clears the bar, so the extra shells are inert. The single difference between "
-        "depth 1 and depth 2 is <code>wound_patient005</code>, where shell 2 commits only false "
+        "depth 1 and depth 2 is <code>wound_comsol005</code>, where shell 2 commits only false "
         "positives. The rule was not failing to reach. It was reaching one shell too far, on one "
         "vessel, and paying 0.145 for it.</p>"
         "<h3>The constant was standing in for transport</h3>"
@@ -420,8 +420,8 @@ def offwall_section(att, v6a, v6b) -> str:
         "depth 1</strong>; five of six pick &beta; = 0.5. The wall domain and every non-wound "
         "vessel are bit-identical.</p>"
         "<div class='caveat'><h4>Each effect lives in exactly one vessel</h4>"
-        "<p>The depth reduction is worth +0.145 on <code>wound_patient005</code> and nothing "
-        "anywhere else; the shear modulation is worth +0.070 on <code>wound_patient006</code>, "
+        "<p>The depth reduction is worth +0.145 on <code>wound_comsol005</code> and nothing "
+        "anywhere else; the shear modulation is worth +0.070 on <code>wound_comsol006</code>, "
         "the corpus's one stagnation-regime wound, and nothing anywhere else. Swept alone, "
         "neither survives leave-one-out &mdash; on its own fold the other five vessels are tied "
         "and the tie-break keeps the old value. Together they clear it. <strong>A second "
@@ -472,7 +472,7 @@ def cut_section(arms, ptr) -> str:
             continue
         gaps.append((a, b, o - b))
     gaps.sort(key=lambda r: -r[2])
-    top = "".join("<code>%s</code> +%.3f" % (html.escape(a.replace("patient", "p")), g)
+    top = "".join("<code>%s</code> +%.3f" % (html.escape(a.replace("comsol", "p")), g)
                   for a, _, g in gaps[:3])
     med = float(np.median([g for _, _, g in gaps]))
 
@@ -550,7 +550,7 @@ def metric_section(geo) -> str:
     rows = "".join(
         "<tr><td><code>%s</code></td><td class='n'>%d</td><td class='n'>%.3f</td>"
         "<td class='n'>%.4f</td><td class='n'>%.4f</td></tr>" % (
-            html.escape(r["stem"].replace("patient", "p")), r["n_gt"], r["gt_p50"],
+            html.escape(r["stem"].replace("comsol", "p")), r["n_gt"], r["gt_p50"],
             r["sev"], r["dep"])
         for r in sorted([x for x in R if x["group"] == "SEALED"],
                         key=lambda x: x["stem"]))
@@ -825,20 +825,20 @@ differentiation stencil and unit gain &mdash; while the RGP-DEQ surrogate arm ne
 stencil and a fitted &times;3.00 amplitude correction. A converged solve is on COMSOL's own
 scale; a surrogate is not.</p>
 <div class="caveat"><h4>Where the solver is wrong, it is wrong off the wall</h4>
-<p>The two outliers, <code>patient045</code> and <code>patient046</code>, have <em>zero</em>
+<p>The two outliers, <code>comsol045</code> and <code>comsol046</code>, have <em>zero</em>
 wall-node error. Their error is confined to a single downstream recirculation window &mdash; on
-<code>patient045</code> the 200 worst nodes all lie between x = 4.2 and 5.0 of a 6.9-long
+<code>comsol045</code> the 200 worst nodes all lie between x = 4.2 and 5.0 of a 6.9-long
 domain, none of them on the wall &mdash; where the two solvers place the shear layer
 differently. Both are the highest-peak-velocity vessels in the corpus.</p></div>
 <h3>A boundary-tag bug the audit found</h3>
-<p><code>patient038</code> would not solve at all, and <code>patient048</code> &mdash; one half
+<p><code>comsol038</code> would not solve at all, and <code>comsol048</code> &mdash; one half
 of the A/B pair &mdash; solved with 4 of its 21 outlet facets silently given the no-slip wall
 condition. Inlet and outlet facets were tagged by requiring <em>both</em> corner vertices to
 carry COMSOL's node selection, and that selection is not always complete on a quadratic mesh.
 An inlet is a straight cut through the lumen, so the tagged nodes determine it exactly: the
 solver now fits the line through them and takes every boundary facet whose midpoint lies on it,
 accepting the completion only when it contains what the corner rule already agreed on. Bit-exact
-no-op on 52 of 54 packs; <code>patient048</code>'s rel L2 goes 0.069 &rarr; <strong>0.020</strong>.</p>
+no-op on 52 of 54 packs; <code>comsol048</code>'s rel L2 goes 0.069 &rarr; <strong>0.020</strong>.</p>
 """))
 
     secs.append(("02 &middot; the wound clock", "The wound source is not delayed by 100 s", f"""
@@ -853,7 +853,7 @@ on the other two &mdash; the opposite direction from a delay, and nowhere near t
 delay requires. Extrapolating each vessel's <code>Mat</code> curve back to zero independently
 agrees: within a pack, the wound's onset and its own healthy wall's onset differ by a few
 seconds on all six.</p>
-<p class="note">Two riders. The <code>.mph</code> files for <code>wound_patient004/005/006</code>
+<p class="note">Two riders. The <code>.mph</code> files for <code>wound_comsol004/005/006</code>
 are not in <code>comsol_models/</code>, so this is a measurement on the packs rather than a
 reading of the model tree. And the stored time grid is 150 s, so any onset inside (0, 150) s
 would be sub-grid and could not change a single stored frame either way.</p>
@@ -920,7 +920,7 @@ section 04, where each arm is trained <em>and</em> evaluated on its own field.</
     if ab:
         secs.append(("06 &middot; the counterfactual", "One vessel, with and without the injury", f"""
 <p>Until this corpus there was no paired A/B: no two runs in the dataset shared a geometry, so
-nothing isolated the wound's effect. <code>wound_patient005</code> and <code>patient048</code>
+nothing isolated the wound's effect. <code>wound_comsol005</code> and <code>comsol048</code>
 are the same vessel outline &mdash; identical <code>d_bar</code> to sixteen significant figures,
 median wall-node distance 0.0000 &mdash; remeshed, one with the wound selection and one
 without.</p>
@@ -930,7 +930,7 @@ mesh family and physics all held fixed, the only thing that changed is the injur
 predicted each vessel well while attributing the extra clot to the wrong place would pass every
 other metric here and fail this one.</p>
 {ab_section(ab)}
-<p class="note">No wound pack is ever in the GNN training pool, and <code>patient048</code> is
+<p class="note">No wound pack is ever in the GNN training pool, and <code>comsol048</code> is
 scored out-of-fold, so neither half of the pair is in-sample.</p>
 """))
 
@@ -965,9 +965,9 @@ figure.</strong></p></div>
         ("t=0 flow audit, 54 packs", (OUT / "fem_flow_audit.json").exists()),
         ("wound-onset ratio test", (OUT / "wound_onset_check.json").exists()),
         ("FEM feature caches (55- and 68-column, 40 vessels)",
-         (REPO / "outputs/clot_ml_cache_v5_fem/patient048.npz").exists()),
+         (REPO / "outputs/clot_ml_cache_v5_fem/comsol048.npz").exists()),
         ("FEM temporal-transport channels",
-         (REPO / "outputs/temporal_transport_fem/patient012.npz").exists()),
+         (REPO / "outputs/temporal_transport_fem/comsol012.npz").exists()),
         ("wound complement, leave-one-out on 6 vessels",
          (REPO / "outputs/clot_ml/wound_rate_fem/lovo.json").exists()),
         ("base ensemble promoted", bool(manifest and manifest.get("n_members"))),

@@ -1,3 +1,0 @@
-#!/bin/sh
-# Strip AI co-author trailers before the commit is finalized.
-exec python "$(dirname "$0")/strip_ai_coauthor.py" "$1"

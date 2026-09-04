@@ -21,8 +21,8 @@ def _research_case():
 
 
 def test_local_fem_solver():
-    pt_path = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "patient001.pt"
-    nas_path = ROOT / "data" / "raw" / "biochem_anchors" / "patient001.nas"
+    pt_path = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt"
+    nas_path = ROOT / "data" / "raw" / "biochem_anchors" / "comsol001.nas"
 
     if not pt_path.is_file() or not nas_path.is_file():
         pytest.skip("Data not found")
@@ -35,7 +35,7 @@ def test_local_fem_solver():
 
 
 def test_research_mesh_registers_and_respects_no_slip():
-    """The research `.msh` vessels are in metres; the patient `.nas` anchors are in cm.
+    """The research `.msh` vessels are in metres; the COMSOL anchor `.nas` anchors are in cm.
 
     A hardcoded cm->m scale collapsed every research mesh onto ~3 pack nodes, so the wall
     tagged zero facets, the solve was exactly singular, and the sweeps still scored.  Pin

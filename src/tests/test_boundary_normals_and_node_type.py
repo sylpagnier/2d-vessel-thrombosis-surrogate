@@ -56,7 +56,7 @@ def test_normals_are_unit_on_solid_and_exactly_zero_elsewhere():
 
 
 def test_isolated_solid_nodes_still_get_a_normal():
-    """Degree-0 nodes in the solid subgraph exist on real packs (12 of 539 on patient008)."""
+    """Degree-0 nodes in the solid subgraph exist on real packs (12 of 539 on comsol008)."""
     pos, ei, solid, idx, nx, ny = _channel()
     keep = ~(solid[ei[0]] & solid[ei[1]] &
              ((ei[0] == idx(10, 0)) | (ei[1] == idx(10, 0))))
@@ -97,7 +97,7 @@ def test_one_hot_is_exactly_one_per_node_with_inlet_priority():
 
 
 # --------------------------------------------------------------------------- on-disk
-@pytest.mark.parametrize("stem", ["patient020", "wound_patient001"])
+@pytest.mark.parametrize("stem", ["comsol020", "wound_comsol001"])
 def test_repaired_packs_carry_real_normals_and_one_hots(stem):
     """End-to-end: after `scripts/repair_pack_wall_normals.py` these must not be zero."""
     p = PACKS / f"{stem}.pt"
@@ -126,7 +126,7 @@ def test_repaired_packs_carry_real_normals_and_one_hots(stem):
     assert oh[:, 1].sum() > 0, "some node must be labelled solid"
 
 
-@pytest.mark.parametrize("stem", ["patient020", "wound_patient001"])
+@pytest.mark.parametrize("stem", ["comsol020", "wound_comsol001"])
 def test_repair_is_idempotent(stem):
     """Re-running the repair must change nothing -- see the |n| = 2.0 incident above."""
     import sys

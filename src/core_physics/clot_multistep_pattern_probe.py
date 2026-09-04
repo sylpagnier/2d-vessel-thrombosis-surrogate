@@ -832,7 +832,7 @@ def aggregate_rules(
                 "mean_band_prec": sum(r.band_prec for r in rows) / len(rows),
                 "mean_band_rec": sum(r.band_rec for r in rows) / len(rows),
                 "mean_band_pred_frac": mean_pred,
-                "p007_f1": next((r.band_f1 for r in rows if r.anchor == "patient007"), float("nan")),
+                "p007_f1": next((r.band_f1 for r in rows if r.anchor == "comsol007"), float("nan")),
             }
         )
     out.sort(key=lambda x: (-x["mean_band_f1"], x["mean_band_pred_frac"]))

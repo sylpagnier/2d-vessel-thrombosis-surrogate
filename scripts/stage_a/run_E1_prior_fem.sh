@@ -18,7 +18,7 @@
 # (pinned by `src/tests/test_fem_deq_coupling.py`).  Pre-solve the cache with
 # `python scripts/build_fem_prior_cache.py` or the first epoch pays ~3 minutes of CPU.
 #
-# KNOWN TAIL: patient045 and patient046 solve to relL2 0.53 / 0.67 against COMSOL where the
+# KNOWN TAIL: comsol045 and comsol046 solve to relL2 0.53 / 0.67 against COMSOL where the
 # other 27 vessels sit at 0.007-0.057 -- a genuine flow disagreement, not a registration or
 # inlet artefact (dir_cos 0.66-0.76, both inlets give the identical field). Both are in the
 # TRAIN pool and neither is in the selection set, so they cannot move the checkpoint choice;

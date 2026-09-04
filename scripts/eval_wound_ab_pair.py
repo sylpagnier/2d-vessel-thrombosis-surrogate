@@ -2,14 +2,14 @@
 
 docs/WOUND_PROGRESS.md 7 named this the single most useful missing simulation --
 
-    "There is no paired A/B.  `wound_patient001` is *not* the same vessel as `patient001` ...
+    "There is no paired A/B.  `wound_comsol001` is *not* the same vessel as `comsol001` ...
      Nothing here isolates the wound's effect on a fixed geometry.  Re-running one existing
      cohort `.nas` with and without the `sel1` selection is the single most useful next
      simulation."
 
-It exists now: `wound_patient005` and `patient048` share a vessel outline to a median
+It exists now: `wound_comsol005` and `comsol048` share a vessel outline to a median
 wall-node distance of 0.0000 nd (remeshed, so the node sets differ; every one of
-`patient048`'s nodes registers onto `wound_patient005` within 0.22% of the domain span, and
+`comsol048`'s nodes registers onto `wound_comsol005` within 0.22% of the domain span, and
 exactly 58 of them land on the 58 wound nodes).
 
 WHY IT IS WORTH ITS OWN SCRIPT.  Every other number in this project scores a model against

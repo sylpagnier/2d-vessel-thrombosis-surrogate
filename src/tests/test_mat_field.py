@@ -32,7 +32,7 @@ def test_time_sampler_always_keeps_the_final_frame():
 
 
 def test_time_sampler_returns_every_frame_when_the_horizon_is_short():
-    # patient011 has T=45 and patient003 T=29; a vessel shorter than the budget is dense
+    # comsol011 has T=45 and comsol003 T=29; a vessel shorter than the budget is dense
     assert np.array_equal(sample_time_indices(9, 16), np.arange(9))
 
 
@@ -82,7 +82,7 @@ def test_untrained_v6_is_exactly_the_ode():
 
     This is what makes the arm safe to compare against the shipped ODE: a v6 that has
     learned nothing is not noise, it is the baseline.  It is also the property that made the
-    failure on ``wound_patient003`` legible -- the predicted ``Mat`` p90 came back at 2.00x
+    failure on ``wound_comsol003`` legible -- the predicted ``Mat`` p90 came back at 2.00x
     crit against the ODE's own 1.96x, which is how we knew the residual had collapsed
     rather than mislearned (docs/WOUND_PROGRESS.md 17).
     """

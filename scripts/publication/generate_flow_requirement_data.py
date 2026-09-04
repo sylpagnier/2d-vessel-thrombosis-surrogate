@@ -166,7 +166,7 @@ def main() -> int:
     if sens is None:
         payload["missing"].append(
             "panel (b): tolerance curve. Produce with:\n"
-            f"    python scripts/diag_flow_sensitivity.py patient010 patient005 patient020 "
+            f"    python scripts/diag_flow_sensitivity.py comsol010 comsol005 comsol020 "
             f"--source pred --out {a.sensitivity}")
     else:
         by_stem: dict[str, list[dict]] = {}

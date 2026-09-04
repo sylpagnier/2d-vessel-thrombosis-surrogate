@@ -1,4 +1,4 @@
-﻿"""Does the wound module DELETE clot that `clot_gnn_v4` had right?
+"""Does the wound module DELETE clot that `clot_gnn_v4` had right?
 
 `compose_with_v4` hands the wound module total control of `owned = wound U its first shell`:
 
@@ -11,8 +11,8 @@ healthy t=0 gate is DISCARDED and replaced by the scalar `g_pre` / `g_post`:
     pre = torch.where(wnd, g_pre, base)            # base = V["gate"] * solid
 
 Both are only safe if the healthy law has nothing to say on the wound.  On
-`wound_patient001/002` it has not: the gate is 0% ON at every wound node, so override and
-addition coincide bit-for-bit.  On `wound_patient003` the gate is already 42% open at step 3
+`wound_comsol001/002` it has not: the gate is 0% ON at every wound node, so override and
+addition coincide bit-for-bit.  On `wound_comsol003` the gate is already 42% open at step 3
 (WOUND_PROGRESS 11.1) -- the one vessel that carries all the residual error.
 
 `WOUND_PROGRESS` 1 flags this exactly ("override vs additive is currently unobservable ...
@@ -44,7 +44,7 @@ from src.clot_ml.wound import (  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 
 PACKS = biochem_packs_dir()
-VESSELS = ("wound_patient001", "wound_patient002", "wound_patient003")
+VESSELS = ("wound_comsol001", "wound_comsol002", "wound_comsol003")
 
 #: the shipped constants (`clot_gnn_v4w` manifest, WOUND_PROGRESS 12.1)
 G_PRE, G_POST = 1.98, 14.28

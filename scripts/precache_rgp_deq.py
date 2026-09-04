@@ -1,11 +1,11 @@
 """Precache RGP-DEQ t=0 flow onto biochem graph packs.
 
-    python scripts/precache_rgp_deq.py --only patient040,patient041,patient044,patient012
-    python scripts/precache_rgp_deq.py --only patient040 --force
+    python scripts/precache_rgp_deq.py --only comsol040,comsol041,comsol044,comsol012
+    python scripts/precache_rgp_deq.py --only comsol040 --force
 
 **Prior source (RGP_DEQ_REPAIR_PLAN.md B1).**  This script used to call the DEQ on whatever
 ``x[:, 11:14]`` the pack happened to carry.  Every biochem pack carries a CFD-derived prior
-block (rel-L2 0.012-0.049 against COMSOL's own ``t=0``; ``patient002`` is bit-identical), so
+block (rel-L2 0.012-0.049 against COMSOL's own ``t=0``; ``comsol002`` is bit-identical), so
 the "deployable" ``u0_pred`` consumed by ``clot_ml.features`` and ``physics_wall_model`` was
 produced by handing the flow surrogate the field it exists to predict.  The default is now
 ``analytic`` -- the only source legal under the s17 Z2 contract -- and the choice is stamped

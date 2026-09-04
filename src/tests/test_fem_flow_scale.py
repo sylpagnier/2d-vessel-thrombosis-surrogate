@@ -42,7 +42,7 @@ def test_fem_and_gt_on_same_scale_when_u0_pred_is_gt():
     import src.core_physics.physics_wall_model as pwm
     from src.config import BiochemConfig
 
-    data = _pack("patient005")
+    data = _pack("comsol005")
     bio = BiochemConfig(phase="biochem")
 
     data.u0_pred = data.y[0, :, 0].clone()
@@ -61,11 +61,11 @@ def test_fem_and_gt_on_same_scale_when_u0_pred_is_gt():
 
 
 def test_fem_scale_invariant_across_vessels():
-    """Spot-check the oracle invariant on patient020."""
+    """Spot-check the oracle invariant on comsol020."""
     import src.core_physics.physics_wall_model as pwm
     from src.config import BiochemConfig
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     bio = BiochemConfig(phase="biochem")
 
     data.u0_pred = data.y[0, :, 0].clone()
@@ -90,12 +90,12 @@ def test_deq_pred_gain_still_reaches_pred_branch():
     import src.core_physics.physics_wall_model as pwm
     from src.config import BiochemConfig
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     if getattr(data, "u0_pred", None) is None:
         pytest.skip("pack carries no u0_pred")
     bio = BiochemConfig(phase="biochem")
 
-    data_fem = torch.load(PACKS / "patient020.pt", map_location="cpu", weights_only=False)
+    data_fem = torch.load(PACKS / "comsol020.pt", map_location="cpu", weights_only=False)
     data_fem.u0_pred = data_fem.y[0, :, 0].clone()
     data_fem.v0_pred = data_fem.y[0, :, 1].clone()
 

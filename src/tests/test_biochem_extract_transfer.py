@@ -27,7 +27,7 @@ def _touch(path: Path, text: str = "x") -> None:
 
 
 def test_stage_and_install_transfer_bundle_roundtrip(tmp_path):
-    stem = "wound_patient001"
+    stem = "wound_comsol001"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -68,7 +68,7 @@ def test_stage_and_install_transfer_bundle_roundtrip(tmp_path):
 
 
 def test_install_skips_existing_graph_unless_force(tmp_path):
-    stem = "patient007"
+    stem = "comsol007"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -90,28 +90,28 @@ def test_install_all_filters_by_stem(tmp_path):
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
-    _touch(proc / "wound_patient001.pt")
-    _touch(proc / "wound_patient002.pt")
+    _touch(proc / "wound_comsol001.pt")
+    _touch(proc / "wound_comsol002.pt")
     stage_extract_transfer_bundle(
-        "wound_patient001", raw_dir=raw, label_dir=label, proc_dir=proc, root=tmp_path
+        "wound_comsol001", raw_dir=raw, label_dir=label, proc_dir=proc, root=tmp_path
     )
     stage_extract_transfer_bundle(
-        "wound_patient002", raw_dir=raw, label_dir=label, proc_dir=proc, root=tmp_path
+        "wound_comsol002", raw_dir=raw, label_dir=label, proc_dir=proc, root=tmp_path
     )
     dest = tmp_path / "laptop"
     results = install_all_extract_transfer_bundles(
         root=dest,
         transfer_dir=tmp_path / "data" / "extract_transfer",
-        stems=["wound_patient001"],
+        stems=["wound_comsol001"],
         force=True,
     )
-    assert [name for name, _ in results] == ["wound_patient001"]
-    assert (dest / "data/processed/graphs_biochem_anchors/wound_patient001.pt").is_file()
-    assert not (dest / "data/processed/graphs_biochem_anchors/wound_patient002.pt").is_file()
+    assert [name for name, _ in results] == ["wound_comsol001"]
+    assert (dest / "data/processed/graphs_biochem_anchors/wound_comsol001.pt").is_file()
+    assert not (dest / "data/processed/graphs_biochem_anchors/wound_comsol002.pt").is_file()
 
 
 def test_lite_pack_includes_nas_when_present(tmp_path):
-    stem = "wound_patient003"
+    stem = "wound_comsol003"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -149,7 +149,7 @@ def test_lite_pack_includes_nas_when_present(tmp_path):
 
 
 def test_mesh_only_pack_roundtrip(tmp_path):
-    stem = "patient041"
+    stem = "comsol041"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -176,7 +176,7 @@ def test_mesh_only_pack_roundtrip(tmp_path):
 
 
 def test_lite_repack_drops_full_pack_leftovers(tmp_path):
-    stem = "patient007"
+    stem = "comsol007"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -194,7 +194,7 @@ def test_lite_repack_drops_full_pack_leftovers(tmp_path):
 
 
 def test_zip_and_unpack_transfer_dir(tmp_path):
-    stem = "wound_patient001"
+    stem = "wound_comsol001"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
@@ -234,7 +234,7 @@ def _stage_lite(tmp_path, stem: str) -> None:
 
 
 def test_install_from_downloads_extract_transfer_folder(tmp_path):
-    stem = "wound_patient001"
+    stem = "wound_comsol001"
     _stage_lite(tmp_path, stem)
     downloads = tmp_path / "Downloads"
     incoming_dir = downloads / "extract_transfer"
@@ -260,7 +260,7 @@ def test_install_from_downloads_extract_transfer_folder(tmp_path):
 
 
 def test_install_from_unnamed_downloads_folder(tmp_path):
-    stem = "wound_patient002"
+    stem = "wound_comsol002"
     _stage_lite(tmp_path, stem)
     downloads = tmp_path / "Downloads"
     pack = downloads / "wound_graphs"
@@ -282,7 +282,7 @@ def test_install_from_unnamed_downloads_folder(tmp_path):
 
 
 def test_install_from_downloads_zip(tmp_path):
-    stem = "wound_patient001"
+    stem = "wound_comsol001"
     _stage_lite(tmp_path, stem)
     archive = zip_extract_transfer_dir(root=tmp_path)
     downloads = tmp_path / "Downloads"
@@ -304,12 +304,12 @@ def test_install_from_downloads_zip(tmp_path):
 
 
 def test_downloads_preferred_over_data_extract_transfer(tmp_path):
-    _stage_lite(tmp_path, "wound_patient001")
+    _stage_lite(tmp_path, "wound_comsol001")
     downloads = tmp_path / "Downloads"
-    pack = downloads / "extract_transfer" / "wound_patient003"
+    pack = downloads / "extract_transfer" / "wound_comsol003"
     pack.mkdir(parents=True)
     _touch(pack / "graph.pt", "from-downloads")
-    _touch(pack / "manifest.json", '{"stem": "wound_patient003", "files": {"graph.pt": "data/processed/graphs_biochem_anchors/wound_patient003.pt"}}\n')
+    _touch(pack / "manifest.json", '{"stem": "wound_comsol003", "files": {"graph.pt": "data/processed/graphs_biochem_anchors/wound_comsol003.pt"}}\n')
 
     found = resolve_incoming_transfer(
         downloads_dir=downloads,
@@ -324,10 +324,10 @@ def test_filter_stems_for_pack_only_new(tmp_path):
     label = tmp_path / "label"
     proc = tmp_path / "proc"
     transfer = tmp_path / "data" / "extract_transfer"
-    _touch(proc / "wound_patient005.pt", "old")
-    _touch(proc / "wound_patient006.pt", "new")
+    _touch(proc / "wound_comsol005.pt", "old")
+    _touch(proc / "wound_comsol006.pt", "new")
     stage_extract_transfer_bundle(
-        "wound_patient005",
+        "wound_comsol005",
         raw_dir=raw,
         label_dir=label,
         proc_dir=proc,
@@ -335,22 +335,22 @@ def test_filter_stems_for_pack_only_new(tmp_path):
         lite=True,
     )
     assert not stem_needs_pack(
-        "wound_patient005",
+        "wound_comsol005",
         proc_dir=proc,
         transfer_dir=transfer,
     )
     assert stem_needs_pack(
-        "wound_patient006",
+        "wound_comsol006",
         proc_dir=proc,
         transfer_dir=transfer,
     )
     packed = filter_stems_for_pack(
-        ["wound_patient005", "wound_patient006"],
+        ["wound_comsol005", "wound_comsol006"],
         proc_dir=proc,
         transfer_dir=transfer,
         only_new=True,
     )
-    assert packed == ["wound_patient006"]
+    assert packed == ["wound_comsol006"]
 
 
 def test_select_bundle_names_for_zip_only_new(tmp_path, monkeypatch):
@@ -359,9 +359,9 @@ def test_select_bundle_names_for_zip_only_new(tmp_path, monkeypatch):
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"
-    _touch(proc / "wound_patient005.pt", "old")
+    _touch(proc / "wound_comsol005.pt", "old")
     stage_extract_transfer_bundle(
-        "wound_patient005",
+        "wound_comsol005",
         raw_dir=raw,
         label_dir=label,
         proc_dir=proc,
@@ -370,9 +370,9 @@ def test_select_bundle_names_for_zip_only_new(tmp_path, monkeypatch):
     )
     archive = zip_extract_transfer_dir(root=tmp_path)
     time.sleep(0.05)
-    _touch(proc / "wound_patient006.pt", "new")
+    _touch(proc / "wound_comsol006.pt", "new")
     stage_extract_transfer_bundle(
-        "wound_patient006",
+        "wound_comsol006",
         raw_dir=raw,
         label_dir=label,
         proc_dir=proc,
@@ -385,11 +385,11 @@ def test_select_bundle_names_for_zip_only_new(tmp_path, monkeypatch):
         dest_zip=archive,
         only_new=True,
     )
-    assert names == ["wound_patient006"]
+    assert names == ["wound_comsol006"]
 
 
 def test_install_only_new_skips_existing_graph(tmp_path):
-    stem = "wound_patient006"
+    stem = "wound_comsol006"
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     proc = tmp_path / "proc"

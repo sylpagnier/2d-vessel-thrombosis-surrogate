@@ -7,8 +7,8 @@ same score field, final time point:
     per-vessel ORACLE cut        wall 0.9447    off 0.8275
 
 **+0.042 wall and +0.120 off-wall sit in the threshold, not in the model.**  Individually:
-`patient035` wall 0.656 -> 0.974, `patient028` 0.699 -> 0.854, `patient019` 0.851 -> 0.971,
-`patient020` off 0.509 -> 0.829, `patient005` off 0.240 -> 0.621, `patient032` off
+`comsol035` wall 0.656 -> 0.974, `comsol028` 0.699 -> 0.854, `comsol019` 0.851 -> 0.971,
+`comsol020` off 0.509 -> 0.829, `comsol005` off 0.240 -> 0.621, `comsol032` off
 0.432 -> 0.742.  The network already separates those vessels; one cohort constant does not
 sit in the right place on any of them.
 

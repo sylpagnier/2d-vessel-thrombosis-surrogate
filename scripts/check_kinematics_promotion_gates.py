@@ -1,8 +1,8 @@
-"""Promotion gates for Stage-A checkpoints (synthetic + clinical holdout).
+"""Promotion gates for Stage-A checkpoints (synthetic + comsol holdout).
 
 Example:
-    python scripts/check_kinematics_promotion_gates.py --checkpoint outputs/kinematics/clinical_anchor_finetune/kinematics_best.pth
-    python scripts/check_kinematics_promotion_gates.py --checkpoint outputs/kinematics/production_allfix/kinematics_best.pth --holdout patient007,patient003
+    python scripts/check_kinematics_promotion_gates.py --checkpoint outputs/kinematics/comsol_anchor_finetune/kinematics_best.pth
+    python scripts/check_kinematics_promotion_gates.py --checkpoint outputs/kinematics/production_allfix/kinematics_best.pth --holdout comsol007,comsol003
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from src.architecture.kinematics_model_config import (
 from src.config import PhysicsConfig
 from src.core_physics.physics_kernels import PhysicsKernels
 from src.training.train_kinematics_predictor import load_dataset
-from src.utils.kinematics_geometry import graph_geometry_level, split_clinical_anchor_train_val
+from src.utils.kinematics_geometry import graph_geometry_level, split_comsol_anchor_train_val
 from src.utils.metrics import quantify_performance
 
 
@@ -43,9 +43,9 @@ def _eval_rel_l2(model, graphs, kernels, device) -> float:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--holdout", type=str, default="patient007", help="Comma-separated patient stems for val.")
+    p.add_argument("--holdout", type=str, default="comsol007", help="Comma-separated COMSOL anchor stems for val.")
     p.add_argument("--synthetic-cap", type=int, default=200)
-    p.add_argument("--max-patient-rel-l2", type=float, default=0.25)
+    p.add_argument("--max-comsol-rel-l2", type=float, default=0.25)
     p.add_argument("--max-synthetic-rel-l2", type=float, default=0.20)
     p.add_argument(
         "--max-synthetic-l2-rel-l2",
@@ -61,8 +61,8 @@ def main() -> int:
         print(f"[ERR] missing checkpoint: {ckpt_path}")
         return 1
 
-    os.environ["KINEMATICS_INCLUDE_PATIENT_ANCHORS"] = "1"
-    os.environ["KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS"] = args.holdout.strip()
+    os.environ["KINEMATICS_INCLUDE_COMSOL_ANCHORS"] = "1"
+    os.environ["KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS"] = args.holdout.strip()
     os.environ["KINEMATICS_GRAPH_CAP"] = str(int(args.synthetic_cap))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,17 +77,17 @@ def main() -> int:
 
     dataset = load_dataset("kinematics", "carreau", shuffle_graphs=False)
     holdout = {s.strip() for s in args.holdout.split(",") if s.strip()}
-    splits = split_clinical_anchor_train_val(dataset, holdout_stems=sorted(holdout))
+    splits = split_comsol_anchor_train_val(dataset, holdout_stems=sorted(holdout))
     val = splits["val"]
-    val_patients = [d for d in val if getattr(d, "is_clinical_anchor", False)]
-    val_synth = [d for d in val if not getattr(d, "is_clinical_anchor", False)]
+    val_comsol_anchors = [d for d in val if getattr(d, "is_comsol_anchor", False)]
+    val_synth = [d for d in val if not getattr(d, "is_comsol_anchor", False)]
 
-    patient_rel = _eval_rel_l2(model, val_patients, kernels, device)
+    comsol_rel = _eval_rel_l2(model, val_comsol_anchors, kernels, device)
     synth_rel = _eval_rel_l2(model, val_synth, kernels, device)
     val_synth_l2 = [d for d in val_synth if graph_geometry_level(d, default=-1) == 2]
     synth_l2_rel = _eval_rel_l2(model, val_synth_l2, kernels, device)
 
-    patient_ok = math.isfinite(patient_rel) and patient_rel <= float(args.max_patient_rel_l2)
+    comsol_ok = math.isfinite(comsol_rel) and comsol_rel <= float(args.max_comsol_rel_l2)
     synth_ok = math.isfinite(synth_rel) and synth_rel <= float(args.max_synthetic_rel_l2)
     synth_l2_ok = (
         len(val_synth_l2) > 0
@@ -96,7 +96,7 @@ def main() -> int:
     )
 
     print(f"[gates] checkpoint={ckpt_path}")
-    print(f"[gates] holdout patients ({len(val_patients)}): rel_L2={patient_rel:.4f}  gate<={args.max_patient_rel_l2}  -> {'PASS' if patient_ok else 'FAIL'}")
+    print(f"[gates] holdout COMSOL anchors ({len(val_comsol_anchors)}): rel_L2={comsol_rel:.4f}  gate<={args.max_comsol_rel_l2}  -> {'PASS' if comsol_ok else 'FAIL'}")
     print(f"[gates] synthetic val ({len(val_synth)}): rel_L2={synth_rel:.4f}  gate<={args.max_synthetic_rel_l2}  -> {'PASS' if synth_ok else 'FAIL'}")
     print(
         f"[gates] synthetic L2 val ({len(val_synth_l2)}): rel_L2={synth_l2_rel:.4f}  "
@@ -109,7 +109,7 @@ def main() -> int:
     if math.isfinite(baseline):
         print(f"[gates] checkpoint composite (train val metric): {baseline:.4f}")
 
-    if patient_ok and synth_ok and synth_l2_ok:
+    if comsol_ok and synth_ok and synth_l2_ok:
         print("[gates] PROMOTE OK")
         return 0
     print("[gates] PROMOTE BLOCKED")

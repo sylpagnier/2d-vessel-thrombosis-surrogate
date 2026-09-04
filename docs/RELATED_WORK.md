@@ -86,7 +86,7 @@ VTE).
    KNN, DT, RF, NB, LR, XGBoost, CatBoost, EBM, DNN, PINN. Zero GNNs. A mesh-agnostic graph
    surrogate is first-of-kind in this intersection.
 3. **The review asks for our paper by name.** It repeatedly names as future directions:
-   extension "to three-dimensional vascular geometries", "patient-specific anatomical
+   extension "to three-dimensional vascular geometries", "COMSOL anchor-specific anatomical
    reconstructions", and architectures (CNN/RNN/transformer) that "improve the detection of
    complex spatial and temporal patterns in thrombus growth". Our motivation section is a
    quotation from the review that defines the field.
@@ -107,7 +107,7 @@ thrombosis CFD:
 | **Neural-operator surrogate for platelet deformation** ([Bioengineering 12(9):958, 2025](https://doi.org/10.3390/bioengineering12090958)) | DeepONet: membrane deformation of a *single platelet* across capillary numbers; <1% median displacement error, 4–5 orders speedup | Sub-cellular scale. Complementary to us, not competing |
 | **Latent neural DEs for clot growth** ([arXiv 2608.08165](https://arxiv.org/abs/2608.08165)) | SNODE/SNFDE: infers tissue-factor parameter and forecasts **scalar clot size** from sparse observations | Low-dimensional trajectory forecasting, not spatial fields on a mesh. **The nearest competitor in framing** — read in full |
 | **Coagulo-Net** ([PMC11578045](https://pmc.ncbi.nlm.nih.gov/articles/PMC11578045/)) | PINNs for blood-coagulation equations; solution + inverse inference | Solves/infers the PDEs; does not generalize a rollout across unseen geometries |
-| Hybrid ANN–ODE VTE risk; DNN thrombogenesis classifiers; LAA thrombus prediction | Patient-level *risk classification* | Different problem entirely |
+| Hybrid ANN–ODE VTE risk; DNN thrombogenesis classifiers; LAA thrombus prediction | COMSOL anchor-level *risk classification* | Different problem entirely |
 
 **Verdict — the paper: GO.** The gap is real and is now documented by a systematic review rather
 than by our own search. Remaining condition: the multi-Re training cohort, which the one-paper

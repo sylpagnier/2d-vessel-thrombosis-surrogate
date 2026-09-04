@@ -1,8 +1,8 @@
 """Regression test: canonical surface-deposition law vs COMSOL exports.
 
 Pins the unit-consistent COMSOL phase-2 surface platelet-deposition law against a
-compact fixture extracted from the patient007 calibration export
-(``src/tests/fixtures/comsol_wall_deposition_patient007.csv``). Guards that:
+compact fixture extracted from the comsol007 calibration export
+(``src/tests/fixtures/wall_deposition_comsol007.csv``). Guards that:
 
   1. Reconstructing ``J0_Mat`` from the exported inputs (CGS) recovers the
      Damkohler number ``Da == surface_damkohler == 1e-4`` to machine precision,
@@ -34,7 +34,7 @@ from src.core_physics.comsol_surface_deposition import (
     recover_damkohler_cgs,
 )
 
-FIXTURE = Path(__file__).parent / "fixtures" / "comsol_wall_deposition_patient007.csv"
+FIXTURE = Path(__file__).parent / "fixtures" / "wall_deposition_comsol007.csv"
 
 
 def _load_fixture() -> dict[str, torch.Tensor]:

@@ -70,7 +70,7 @@ def fast_march_sdf(
     # The original SDF field is already a distance field (signed distance to wall).
     # Euclidean edge lengths in `pos_nd` are in the same non-dimensional space as `original_sdf_nd`.
     # Wait, SDF might be normalized by d_bar. Are `pos_nd` normalized by d_bar too?
-    # "Positions by the geometric length scale (data.x[:, 0:2] are already ND on patient graphs)"
+    # "Positions by the geometric length scale (data.x[:, 0:2] are already ND on COMSOL anchor graphs)"
     # Yes, pos_nd is ND, meaning distance in pos_nd is identical to SDF.
     # No extra scaling factor needed! "Normalize the resulting distances to match the scale" might just mean ensuring they are in the same units, which they are if we use ND pos.
     

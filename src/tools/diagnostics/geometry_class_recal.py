@@ -1,4 +1,4 @@
-﻿"""Recalibrate the geometry classifier against the REPAIRED `width_nd` (roadmap item A2).
+"""Recalibrate the geometry classifier against the REPAIRED `width_nd` (roadmap item A2).
 
 WHY.  `width_nd` is produced by sphere-marching along `wall_normal`, and `wall_normal` was
 identically zero at every wall node on every pack until 2026-08-22 (MODEL_REVIEW 6.5).  The
@@ -7,12 +7,12 @@ channel was therefore degenerate, `geometry_class.py`'s own docstring recorded t
 goes away."*  It did.  **The abstain is gone (0 of 45 unusable) and the two cuts came out of
 it in opposite states**, which is the finding:
 
-    aneurysm    designated 2.11 / 2.22 / 2.67   nearest cohort other 1.61 (patient013)
+    aneurysm    designated 2.11 / 2.22 / 2.67   nearest cohort other 1.61 (comsol013)
                 SEPARATION +0.506 -- any cut in (1.61, 2.11) works; `BULGE_ANEURYSM = 2.0`
                 sits inside it with margin +/-0.25.  KEEP.
 
-    stenosis    designated 0.52 / 0.53 / 0.58   nearest cohort other 0.51 (patient012)
-                SEPARATION -0.071 -- `patient012`, a baseline, is NARROWER than all three
+    stenosis    designated 0.52 / 0.53 / 0.58   nearest cohort other 0.51 (comsol012)
+                SEPARATION -0.071 -- `comsol012`, a baseline, is NARROWER than all three
                 designated stenoses.  Unsmoothed it is the same ordering (012 p2/med 0.510
                 against 041's 0.538).  **NO CUT SEPARATES THEM.**
 
@@ -25,7 +25,7 @@ instead was the two things that WERE wrong:
     stop silently reclassifying to `baseline`;
   * `width_stats`'s along-wall smoothing includes the node itself.  Neighbours-only divided by
     `max(cnt, 1)`, so a selected node with no selected neighbour smoothed to exactly 0 and set
-    the 2nd percentile -- `patient008`'s `narrowing = 0.0000` was 12 such nodes against a raw
+    the 2nd percentile -- `comsol008`'s `narrowing = 0.0000` was 12 such nodes against a raw
     wall width that never goes below 0.61.  Fixed: 0.0000 -> 0.8533.
 
 WHAT THIS SCRIPT IS FOR.  It prints the full ordered distribution of both statistics with the
@@ -36,7 +36,7 @@ merits -- letting them in closes both gaps for the wrong reason) while showing t
 check; and `--explain` dissects any vessel whose statistic looks anomalous.
 
     python scripts/diag_geometry_class_recal.py
-    python scripts/diag_geometry_class_recal.py --explain patient008,patient041,patient012
+    python scripts/diag_geometry_class_recal.py --explain comsol008,comsol041,comsol012
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ PACKS = biochem_packs_dir()
 
 def all_stems() -> list[str]:
     stems = list(FIT) + list(DEV) + list(SEALED) + list(CLOT_FREE)
-    stems += sorted(p.stem for p in PACKS.glob("wound_patient*.pt"))
+    stems += sorted(p.stem for p in PACKS.glob("wound_comsol*.pt"))
     seen, out = set(), []
     for s in stems:
         if s not in seen and (PACKS / f"{s}.pt").exists():

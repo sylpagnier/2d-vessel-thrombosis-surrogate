@@ -1,11 +1,11 @@
 ClotML customer geometries inbox
 ==================================
 
-demo_stenosis_vessel.pt is a real stenosis vessel from the training cohort (patient041),
+demo_stenosis_vessel.pt is a real stenosis vessel from the training cohort (comsol041),
 included so the app has something to predict on the first time you open it -- a quick way
 to sanity-check that the model is behaving as expected before trying your own geometry.
 Delete it any time; it only needs its matching mesh at
-data/raw/biochem_anchors/patient041.msh to keep working.
+data/raw/biochem_anchors/comsol041.msh to keep working.
 
 Put your own vessel files HERE (this folder) too, then launch:
 

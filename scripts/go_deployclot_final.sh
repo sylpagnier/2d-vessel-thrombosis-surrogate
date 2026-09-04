@@ -82,7 +82,7 @@ stage 13_prod_v0       python scripts/promote_clot_ml_0.py --base DeployClotP_w 
                               --name DeployClotP_0 --flow $FLOW $V0_ARGS
 # the refusal is a GATE, not a formality: it must fail (rc=2) or the stamp is not working
 stage 14_refusal_gate  python scripts/eval_clot_ml_0.py --v0 DeployClotP_0 \
-                              --baseline DeployClot2_w --flow $FLOW --stems patient012
+                              --baseline DeployClot2_w --flow $FLOW --stems comsol012
 fi
 
 # ---------------------------------------------------------------- 3  GT-FLOW arm

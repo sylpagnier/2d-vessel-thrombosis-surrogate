@@ -8,11 +8,11 @@ DATA_PATH = Path("outputs/offwall_temporal_data.json")
 OUT_PATH = Path("outputs/phase6_offwall_temporal_report.html")
 
 VESSEL_LABELS = {
-    "patient012": "patient012 — most off-wall clot in the cohort (48%)",
-    "patient044": "patient044 — largest absolute off-wall count",
-    "patient042": "patient042 — sealed, never trained on",
-    "patient007": "patient007 — sealed, deployable flow, COMSOL-validated",
-    "patient032": "patient032 — deployable flow, lumen arm finds nothing",
+    "comsol012": "comsol012 — most off-wall clot in the cohort (48%)",
+    "comsol044": "comsol044 — largest absolute off-wall count",
+    "comsol042": "comsol042 — sealed, never trained on",
+    "comsol007": "comsol007 — sealed, deployable flow, COMSOL-validated",
+    "comsol032": "comsol032 — deployable flow, lumen arm finds nothing",
 }
 
 
@@ -231,7 +231,7 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
     (<code>predict_wall_onset</code>). The off-wall score curve inherits whatever timing
     the diagnostic lumen extension produces, which itself inherits from the wall curve --
     so when the wall score dips, watch whether the off-wall score dips with it a few
-    frames later. <code>patient032</code>'s off-wall score sits at zero the entire run:
+    frames later. <code>comsol032</code>'s off-wall score sits at zero the entire run:
     the lumen arm never admits a node there, which is now visible as a flat line rather
     than a single missing final-count number.
   </div>

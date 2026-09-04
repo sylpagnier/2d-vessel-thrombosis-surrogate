@@ -20,7 +20,7 @@ stage () {
 # 1. Smoke: the Reynolds sweep.  Pre-fix this returned bit-identical arms for Re 150-600.
 stage 01_smoke_re python scripts/run_research_sweep.py --sweep 03_inlet_re
 
-# 2. Patient-side FEM accuracy arm table (n=33).  Unaffected by the mesh-scale bug, so this is
+# 2. COMSOL anchor-side FEM accuracy arm table (n=33).  Unaffected by the mesh-scale bug, so this is
 #    a regression check on the dsrx_gain refactor: it should reproduce the 2026-09-01 numbers.
 stage 02_arm_table python -m src.tools.diagnostics.local_fem_accuracy --cohort \
   --hops 3,6 --gains 1,2.18,3 --out outputs/diag_fem_arm_table_refit.json

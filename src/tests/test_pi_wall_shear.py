@@ -46,7 +46,7 @@ def test_baseline_reduces_to_the_tier1_prior_when_the_lumen_is_open():
 
 def test_flux_term_can_raise_shear_above_the_base_field():
     """The measured behaviour a dmu-only operator CANNOT produce: sr/sr0 > 1 at high occlusion
-    (patient008 reads 1.565 in `outputs/diag_corrector_severe_occlusion.json`)."""
+    (comsol008 reads 1.565 in `outputs/diag_corrector_severe_occlusion.json`)."""
     ratio = float(np.exp(physics_log_ratio(np.array([0.002]), np.array([0.2]), p=2.0))[0])
     assert ratio > 1.0
 

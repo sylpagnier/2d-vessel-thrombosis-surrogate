@@ -26,7 +26,7 @@ TRAIN).  A renewal rate linear in shear is a stirred-replenishment balance, not 
 diffusive one; do not call it Leveque.
 
 Constants are fit by ``scripts/fit_ap_closure.py`` on WALL_COHORT_V2_TRAIN only.  The
-patient007 values (C=68) in the handoff came from the SEALED vessel's raw export and are
+comsol007 values (C=68) in the handoff came from the SEALED vessel's raw export and are
 not usable (6.1).
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def consumption(kernel: str, gate, sat, mas_f, mat_f, k_as: float, k_aa: float,
         1.0  (~sat_plus_mat)    61.0       49.1        39.4   1.55x     0.7679
 
     The static kernel's ``C`` moves 2.7x depending on which part of the run you weight --
-    which is most of why this repo has held both ``C = 68`` (patient007) and ``C = 250``
+    which is most of why this repo has held both ``C = 68`` (comsol007) and ``C = 250``
     (pooled TRAIN) and thought they disagreed.  They are the same measurement under
     different weighting.  At ``mat_coef = 0.3`` the drift collapses to 1.14x and the pooled
     R2 is at its plateau.  Physically: the AP sink grows with the mature deposit but

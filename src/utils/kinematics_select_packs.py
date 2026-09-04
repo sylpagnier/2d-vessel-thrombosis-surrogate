@@ -1,7 +1,7 @@
 """The graphs Stage-A is *selected* on: real deployment packs, never trained on.
 
-**Why this exists.**  Selection used to run only when ``KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS``
-and ``KINEMATICS_INCLUDE_PATIENT_ANCHORS`` were both set *and* clinical steady-kine sidecars
+**Why this exists.**  Selection used to run only when ``KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS``
+and ``KINEMATICS_INCLUDE_COMSOL_ANCHORS`` were both set *and* comsol steady-kine sidecars
 existed under ``graphs_kinematics_anchors/``.  That directory is empty on this cohort, so the
 whole T7 selection block was skipped and the run fell back to promoting on
 ``rel_l2 + 100 * continuity`` -- the metric RGP_DEQ_REPAIR_PLAN.md §10.3 measured as **not**
@@ -26,13 +26,13 @@ import os
 from pathlib import Path
 
 #: Deploy packs from an older extractor revision -- dead ``node_type`` and anomalous prior
-#: blocks (``patient002`` is the bit-identical s17 Z2 leak; the ``*_mirror_y`` copies read
+#: blocks (``comsol002`` is the bit-identical s17 Z2 leak; the ``*_mirror_y`` copies read
 #: 0.06-0.45).  Excluded from selection so a stale pack cannot move a checkpoint choice.
 #: See PILOT_COHORT_RUNBOOK.md §6.
-STALE_EXTRACTOR_STEMS = ("patient002",)
+STALE_EXTRACTOR_STEMS = ("comsol002",)
 
 #: Scores 0.000 in every predicted-flow arm and is its own problem (`DEPLOY_FLOW_PLAN.md` §2).
-KNOWN_BAD_STEMS = ("patient018",)
+KNOWN_BAD_STEMS = ("comsol018",)
 
 
 def selection_pack_dir(root: Path | None = None) -> Path:
@@ -145,7 +145,7 @@ def load_deploy_training_packs(*, prior_source: str | None = None, verbose: bool
     deployment (RGP_DEQ_REPAIR_PLAN.md §16.5).  These packs ARE the deployment regime, and
     `y[0]` is COMSOL's own `t=0` velocity -- the same field the clot stack consumes.
 
-    The steady `graphs_kinematics_anchors/` sidecars that `KINEMATICS_INCLUDE_PATIENT_ANCHORS`
+    The steady `graphs_kinematics_anchors/` sidecars that `KINEMATICS_INCLUDE_COMSOL_ANCHORS`
     expects do not exist on this machine; this reads the deploy packs directly instead.
 
     **Disjoint from selection by construction.**  Every stem the run selects on is excluded
@@ -195,7 +195,7 @@ def load_deploy_training_packs(*, prior_source: str | None = None, verbose: bool
             # Stem BEFORE the prior rewrite -- see `load_selection_packs`.
             g.graph_stem = stem
             g = apply_prior_source(g, source)
-            g.is_clinical_anchor = True
+            g.is_comsol_anchor = True
             out.append(g)
         except Exception as exc:
             print(f"[kin] WARN deploy training pack {stem}: {type(exc).__name__}: {exc}")

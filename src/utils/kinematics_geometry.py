@@ -360,44 +360,44 @@ def _ensure_min_geometry_level_in_val(
     return train, val
 
 
-def split_clinical_anchor_train_val(
+def split_comsol_anchor_train_val(
     dataset: Sequence[Any],
     *,
     seed: int = 42,
     train_ratio: float = 0.9,
     holdout_stems: Sequence[str] | None = None,
 ) -> Dict[str, Any]:
-    """Train/val split with fixed clinical patient holdout + stratified synthetic val.
+    """Train/val split with fixed comsol COMSOL anchor holdout + stratified synthetic val.
 
-    Clinical graphs (``is_clinical_anchor``) with stems in *holdout_stems* are **val-only**.
-    Other clinical patients train. Non-clinical graphs use ``split_anchor_physics_stratified``.
+    COMSOL graphs (``is_comsol_anchor``) with stems in *holdout_stems* are **val-only**.
+    Other comsol COMSOL anchors train. Non-comsol graphs use ``split_anchor_physics_stratified``.
   """
     import os
 
-    # RGP_DEQ_REPAIR_PLAN.md B21.  The default used to be the single stem "patient007", so the
+    # RGP_DEQ_REPAIR_PLAN.md B21.  The default used to be the single stem "comsol007", so the
     # other three FINAL_HALF vessels (013/031/043) were TRAINED ON.  Setting the env var in
-    # `finetune_kine_patient_anchors.py` fixed only that launcher: anything invoking
+    # `finetune_kine_comsol_anchors.py` fixed only that launcher: anything invoking
     # `train_kinematics_predictor` directly still got the one-stem holdout and silently
     # contaminated the seal.  Derive it from the canonical split definitions here, at the point
     # of use, so the protection does not depend on how training was started.
-    raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", "").strip()
+    raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS", "").strip()
     if not raw:
         try:
             from src.core_physics.wall_cohort_splits import DEV, SEALED
 
             raw = ",".join(sorted(set(SEALED) | set(DEV)))
         except Exception:
-            raw = "patient007"
+            raw = "comsol007"
     if holdout_stems is None:
         holdout = {s.strip() for s in raw.split(",") if s.strip()}
     else:
         holdout = {str(s).strip() for s in holdout_stems if str(s).strip()}
 
-    clinical = [d for d in dataset if getattr(d, "is_clinical_anchor", False)]
-    other = [d for d in dataset if not getattr(d, "is_clinical_anchor", False)]
+    comsol = [d for d in dataset if getattr(d, "is_comsol_anchor", False)]
+    other = [d for d in dataset if not getattr(d, "is_comsol_anchor", False)]
 
-    val_clinical = [d for d in clinical if getattr(d, "graph_stem", "") in holdout]
-    train_clinical = [d for d in clinical if getattr(d, "graph_stem", "") not in holdout]
+    val_comsol = [d for d in comsol if getattr(d, "graph_stem", "") in holdout]
+    train_comsol = [d for d in comsol if getattr(d, "graph_stem", "") not in holdout]
 
     if other:
         # Dedicated synthetic val holdout (stratified by geometry level, L2 floor).
@@ -423,14 +423,14 @@ def split_clinical_anchor_train_val(
         syn_train, syn_val = _ensure_min_geometry_level_in_val(
             syn_train, syn_val, level=2, min_count=min_syn_val_l2
         )
-        train = train_clinical + syn_train
-        val = val_clinical + syn_val
+        train = train_comsol + syn_train
+        val = val_comsol + syn_val
         n_anchors = len([d for d in train if graph_has_anchor(d)])
         n_physics = len([d for d in train if not graph_has_anchor(d)])
     else:
-        train = train_clinical
-        val = val_clinical
-        n_anchors = len(train_clinical)
+        train = train_comsol
+        val = val_comsol
+        n_anchors = len(train_comsol)
         n_physics = 0
 
     import random
@@ -439,16 +439,16 @@ def split_clinical_anchor_train_val(
     rng.shuffle(train)
     rng.shuffle(val)
     if holdout or other:
-        syn_val_n = len(val) - len(val_clinical)
+        syn_val_n = len(val) - len(val_comsol)
         syn_l2_val = sum(
             1 for d in val
-            if not getattr(d, "is_clinical_anchor", False)
+            if not getattr(d, "is_comsol_anchor", False)
             and graph_geometry_level(d, default=-1) == 2
         )
         print(
-            f"[kin] Clinical split: holdout val stems={sorted(holdout)} "
-            f"(train clinical={len(train_clinical)}, val clinical={len(val_clinical)}, "
-            f"synthetic train={len(train) - len(train_clinical)}, "
+            f"[kin] COMSOL split: holdout val stems={sorted(holdout)} "
+            f"(train comsol={len(train_comsol)}, val comsol={len(val_comsol)}, "
+            f"synthetic train={len(train) - len(train_comsol)}, "
             f"synthetic val={syn_val_n} (L2 in syn val={syn_l2_val})"
         )
     return {
@@ -469,7 +469,7 @@ __all__ = [
     "graph_geometry_level",
     "read_geometry_level_from_mesh_json",
     "split_anchor_physics_stratified",
-    "split_clinical_anchor_train_val",
+    "split_comsol_anchor_train_val",
     "train_pool_for_epoch",
     "vessel_index_from_stem",
     "warn_if_single_level_cohort",

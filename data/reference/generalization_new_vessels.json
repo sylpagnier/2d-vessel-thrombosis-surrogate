@@ -1,18 +1,18 @@
 {
   "updated": "2026-08-03",
   "source": "Extracted on another machine; graphs under data/processed/graphs_biochem_anchors + graphs_kinematics_anchors/carreau. Classified with scripts/eda_generalization.py profile() using plan clot-rich rule (T>=200, offwall_frac>=0.30, mat_max>=0.0015).",
-  "notes": "Re=450 monoculture unchanged. Primary wall-gen holdout remains patient020. Sealed batch-1b split is authoritative (not merely 'eligible'). Do not fold clot-free/short vessels into clot-rich means.",
+  "notes": "Re=450 monoculture unchanged. Primary wall-gen holdout remains comsol020. Sealed batch-1b split is authoritative (not merely 'eligible'). Do not fold clot-free/short vessels into clot-rich means.",
   "sealed_split": {
-    "primary_holdout_gate": "patient020",
-    "train": ["patient012", "patient040", "patient041", "patient042"],
-    "challenge": ["patient043", "patient044"],
-    "neg_control": ["patient027"],
-    "exclude": ["patient039"],
+    "primary_holdout_gate": "comsol020",
+    "train": ["comsol012", "comsol040", "comsol041", "comsol042"],
+    "challenge": ["comsol043", "comsol044"],
+    "neg_control": ["comsol027"],
+    "exclude": ["comsol039"],
     "rationale": "Train sees both pathologies (stenosis 012/041/042 + aneurysm 040). Seal one aneurysm (043) and one stenosis (044) as geometry challenge. Keep 020 as the continuous wall-gen decision gate; report 043/044 separately."
   },
   "vessels": [
     {
-      "anchor": "patient012",
+      "anchor": "comsol012",
       "sim_status": "full_finish",
       "pathology": "stenosis",
       "bucket": "clot-rich",
@@ -24,7 +24,7 @@
       "comment": "Strong stenosis (stenosis_ratio~2.4); highest Mat in this batch."
     },
     {
-      "anchor": "patient027",
+      "anchor": "comsol027",
       "sim_status": "full_finish",
       "pathology": "stenosis",
       "bucket": "zero/near-zero",
@@ -33,10 +33,10 @@
       "mat_max": 0.0,
       "eda_family": "stenosis",
       "role": "neg_control",
-      "comment": "Full-length but empty GT clot (like patient034). Empty-GT FP grading only."
+      "comment": "Full-length but empty GT clot (like comsol034). Empty-GT FP grading only."
     },
     {
-      "anchor": "patient039",
+      "anchor": "comsol039",
       "sim_status": "half_finished",
       "pathology": "aneurysm",
       "bucket": "low/short",
@@ -49,7 +49,7 @@
       "comment": "Half-finished aneurysm; truncated COMSOL horizon."
     },
     {
-      "anchor": "patient040",
+      "anchor": "comsol040",
       "sim_status": "full_finish",
       "pathology": "aneurysm",
       "bucket": "clot-rich",
@@ -61,7 +61,7 @@
       "comment": "Full-finish aneurysm; train-side expansion coverage (challenge twin is 043)."
     },
     {
-      "anchor": "patient041",
+      "anchor": "comsol041",
       "sim_status": "full_finish",
       "pathology": "stenosis",
       "bucket": "clot-rich",
@@ -73,7 +73,7 @@
       "comment": "Full-finish stenosis."
     },
     {
-      "anchor": "patient042",
+      "anchor": "comsol042",
       "sim_status": "full_finish",
       "pathology": "stenosis",
       "bucket": "clot-rich",
@@ -85,7 +85,7 @@
       "comment": "Full-finish stenosis; near twin of 041."
     },
     {
-      "anchor": "patient043",
+      "anchor": "comsol043",
       "sim_status": "full_finish",
       "pathology": "aneurysm",
       "bucket": "clot-rich",
@@ -97,7 +97,7 @@
       "comment": "Sealed aneurysm challenge (train twin is 040)."
     },
     {
-      "anchor": "patient044",
+      "anchor": "comsol044",
       "sim_status": "full_finish",
       "pathology": "stenosis",
       "bucket": "clot-rich",

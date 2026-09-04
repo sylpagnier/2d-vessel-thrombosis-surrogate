@@ -17,7 +17,7 @@ from src.data_gen.lib.node_feature_assembly import (
     build_biochem_bc_x_tensor,
     kinematics_uv_prior_max,
 )
-from src.utils.channel_schema import BIO_Y_SCHEMA, attach_patient_anchor_graph_metadata
+from src.utils.channel_schema import BIO_Y_SCHEMA, attach_comsol_anchor_graph_metadata
 from src.data_gen.lib.centerline_utils import write_anchor_sidecar_from_masks
 from src.data_gen.lib.kinematics_graph_builder import (
     build_kinematics_graph_from_comsol_steady,
@@ -82,7 +82,7 @@ def validate_graph_physical_integrity(data: Data, stem: str, avg_flux_imbalance:
         )
 
 
-class PatientDataExtractor:
+class ComsolAnchorDataExtractor:
     """
     Extracts and processes Eulerian node-wise COMSOL data into PyTorch Geometric Data objects.
 
@@ -91,8 +91,8 @@ class PatientDataExtractor:
     ``PhysicsConfig.viscosity_si_to_nd`` (canonical cross-phase ND viscosity reference).
 
     Default entry: ``python -m src.data_gen.lib.extract_biochem_comsol_data`` pulls solved
-    ``comsol_models/phase2_nowound_XXX.mph`` (``patientXXX``) and
-    ``comsol_models/phase2_wound_XXX.mph`` (``wound_patientXXX``) via ``pull_comsol_exports``,
+    ``comsol_models/phase2_nowound_XXX.mph`` (``comsolXXX``) and
+    ``comsol_models/phase2_wound_XXX.mph`` (``wound_comsolXXX``) via ``pull_comsol_exports``,
     then builds graphs. The two families never share a stem. Manual COMSOL txt only with
     ``--no-from-comsol``.
 
@@ -549,7 +549,7 @@ class PatientDataExtractor:
             force=force,
         )
 
-    def process_patient(self, stem):
+    def process_comsol_anchor(self, stem):
         """
         Full extraction pipeline with Physics-Informed Sanity Checks and
         Training Metadata generation.
@@ -579,7 +579,7 @@ class PatientDataExtractor:
         if sidecar_path.exists():
             with open(sidecar_path, "r", encoding="utf-8") as _f:
                 sidecar_meta = json.load(_f)
-        assert_mesh_unit(sidecar_meta, MESH_UNIT_CM, stem=stem, builder="PatientDataExtractor")
+        assert_mesh_unit(sidecar_meta, MESH_UNIT_CM, stem=stem, builder="ComsolAnchorDataExtractor")
 
         txt_path = self.label_dir / f"{stem}.txt"
         inlet_path = self.label_dir / f"{stem}_inlet.txt"
@@ -965,7 +965,7 @@ class PatientDataExtractor:
             u_prior=u_prior,
             mu_prior=mu_prior,
         )
-        data = attach_patient_anchor_graph_metadata(data, mask_wall=mask_wall)
+        data = attach_comsol_anchor_graph_metadata(data, mask_wall=mask_wall)
         data.centerline_source = centerline_source
         data.graph_stem = stem
         data.biochem_variant = biochem_variant
@@ -1083,7 +1083,7 @@ class PatientDataExtractor:
                         print(f"[ERR] COMSOL pull failed for {stem}: {exc}", flush=True)
                         if not domain_txt.is_file():
                             continue
-            self.process_patient(stem)
+            self.process_comsol_anchor(stem)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1092,22 +1092,22 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Extract biochem anchor graphs. Default: pull solved COMSOL fields from "
-            "comsol_models/phase2_nowound_XXX.mph (patientXXX) and "
-            "phase2_wound_XXX.mph (wound_patientXXX) via mph, then write .pt graphs."
+            "comsol_models/phase2_nowound_XXX.mph (comsolXXX) and "
+            "phase2_wound_XXX.mph (wound_comsolXXX) via mph, then write .pt graphs."
         )
     )
     parser.add_argument(
         "--stem",
         type=str,
         default="",
-        help="One or more stems: patient007 | wound_patient007 | 7 | 5,8,9 | 5-9 "
-        "(default: all meshes in table). Combine with --variant wound to restamp patientXXX.",
+        help="One or more stems: comsol007 | wound_comsol007 | 7 | 5,8,9 | 5-9 "
+        "(default: all meshes in table). Combine with --variant wound to restamp comsolXXX.",
     )
     parser.add_argument(
         "--variant",
         choices=("nowound", "wound", "all"),
         default="all",
-        help="Restrict extraction to nowound (patientXXX) or wound (wound_patientXXX).",
+        help="Restrict extraction to nowound (comsolXXX) or wound (wound_comsolXXX).",
     )
     parser.add_argument("--force", action="store_true", help="Re-pull COMSOL txt and overwrite graphs.")
     parser.add_argument(
@@ -1127,7 +1127,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from src.data_gen.pipeline_biochem import _auto_scaffold_anchor_sidecars
 
-    extractor = PatientDataExtractor(phase="biochem_anchors")
+    extractor = ComsolAnchorDataExtractor(phase="biochem_anchors")
     _auto_scaffold_anchor_sidecars(extractor.raw_dir)
 
     stem_list = None

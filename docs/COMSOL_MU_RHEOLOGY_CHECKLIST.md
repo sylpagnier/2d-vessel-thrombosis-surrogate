@@ -88,7 +88,7 @@ Live anchors use **`spf.mu`** via mph Export nodes (`BIOCHEM_COMSOL_USE_MPH_EXPO
 | Offline Carreau vs GT | `carreau_mu_si_from_uv` | fixed mu0/mu_inf; interior gamma~0 | gel-scaled limits + better gamma |
 | Fallback export expr | `biochem_comsol_auto_export.py` default | gelation only | mph uses `spf.mu` (OK) |
 
-**Not a primary bug:** Poise->Pa*s `x0.1` on export (confirmed on patient007).
+**Not a primary bug:** Poise->Pa*s `x0.1` on export (confirmed on comsol007).
 
 ---
 
@@ -96,10 +96,10 @@ Live anchors use **`spf.mu`** via mph Export nodes (`BIOCHEM_COMSOL_USE_MPH_EXPO
 
 ```powershell
 # Export vs Carreau vs mu_b hypotheses
-python scripts/diagnose_mu_export_shear.py --anchor patient007
+python scripts/diagnose_mu_export_shear.py --anchor comsol007
 
 # T0 factorized Carreau x gelation (GT u,v + species)
-python scripts/diagnose_t0_carreau_gelation.py --anchor patient007
+python scripts/diagnose_t0_carreau_gelation.py --anchor comsol007
 ```
 
 Outputs:
@@ -129,9 +129,9 @@ Outputs:
 
 **Do you need `gamma_dot` in production graphs?** No. Deploy physics uses
 `max(WLS graph, Poiseuille wall, |u|/width_nd)`; bulk `spf.mu` at M=1 already
-matches COMSOL on patient007 without a COMSOL shear channel.
+matches COMSOL on comsol007 without a COMSOL shear channel.
 
-**When to export anyway:** One-time validation on **patient007** (or any single
+**When to export anyway:** One-time validation on **comsol007** (or any single
 anchor) to confirm wall shear and tune `CLOT_PHI_PHYSICS_GAMMA_SCALE` if needed.
 
 1. In COMSOL Results > Export > `sol_data`, add a **separate** export node (do
@@ -140,15 +140,15 @@ anchor) to confirm wall shear and tune `CLOT_PHI_PHYSICS_GAMMA_SCALE` if needed.
    magnitude used by COMSOL Carreau; [1/s] in SI). Do **not** use `spf.gammat`
    — it is not a standard Laminar Flow built-in and the Description column
    stays empty. Pick via Laminar Flow > Variables > **Shear rate (spf.sr)**.
-2. Match nodes to the graph (same mesh / spatial join as `patient007.txt`).
+2. Match nodes to the graph (same mesh / spatial join as `comsol007.txt`).
 3. Save matched per-node SI shear as::
 
-       data/processed/cfd_results_biochem_diag/patient007_gammat.pt
+       data/processed/cfd_results_biochem_diag/comsol007_gammat.pt
 
    with contents ``{"gamma_si": tensor shape [N]}`` (float32, units 1/s).
 4. Re-run::
 
-       python scripts/diagnose_t0_physics_baseline.py --anchor patient007
+       python scripts/diagnose_t0_physics_baseline.py --anchor comsol007
 
    The JSON will include `pearson_gamma_kinematic_vs_comsol` and
    `pearson_gamma_resolved_vs_comsol`.
@@ -171,7 +171,7 @@ mu_pred = Carreau_Yasuda(gamma_dot; mu0_si, mu_inf_si, lam, n)
 ```
 
 **Shear rate on graphs:** WLS `G_x`/`G_y` gradients underestimate interior
-`gamma_dot` vs COMSOL FEM (~1000x on patient007 bulk). Use
+`gamma_dot` vs COMSOL FEM (~1000x on comsol007 bulk). Use
 `gamma_dot_nd = max(graph, poiseuille, |u|/width_nd)` where `width_nd` is
 hydraulic width from node features (`NodeFeat.WIDTH_ND`). Kinematic
 `|u|/width` alone matches bulk `spf.mu` at M=1 (median GT/pred ~1.04 on p007).
@@ -184,6 +184,6 @@ Env knobs: `CLOT_PHI_PHYSICS_MU_BASE=comsol_carreau`,
 
 Oracle validation: build sidecar via ``scripts/build_comsol_sr_sidecar.py``,
 then ``CLOT_PHI_PHYSICS_GAMMA_MODE=comsol_sr`` +
-``CLOT_PHI_PHYSICS_COMSOL_SR_ANCHOR=patient007`` reproduces GT ``spf.mu`` exactly.
+``CLOT_PHI_PHYSICS_COMSOL_SR_ANCHOR=comsol007`` reproduces GT ``spf.mu`` exactly.
 
 See [CLOT_TRIGGER_LADDER.md](CLOT_TRIGGER_LADDER.md) Star 1 and T0 sweep scripts.

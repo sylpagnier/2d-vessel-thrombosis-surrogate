@@ -18,14 +18,14 @@ from __future__ import annotations
 from typing import Any
 
 # Orig10 focus + standard idle spray negatives
-DEFAULT_TEACHER_ANCHORS = ("patient001", "patient007")
-DEFAULT_IDLE_ANCHORS = ("patient002", "patient004", "patient008")
+DEFAULT_TEACHER_ANCHORS = ("comsol001", "comsol007")
+DEFAULT_IDLE_ANCHORS = ("comsol002", "comsol004", "comsol008")
 DEFAULT_FOCUS_ANCHORS = (
-    "patient001",
-    "patient002",
-    "patient007",
-    "patient008",
-    "patient010",
+    "comsol001",
+    "comsol002",
+    "comsol007",
+    "comsol008",
+    "comsol010",
 )
 
 # Idle: allow some hop_ge2 paint if precision stays healthy

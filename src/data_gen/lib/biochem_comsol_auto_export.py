@@ -1,6 +1,6 @@
 """Pull biochem anchor fields from a solved COMSOL ``.mph`` via LiveLink (``mph``).
 
-Writes the same ``.txt`` layout that ``PatientDataExtractor`` expects under
+Writes the same ``.txt`` layout that ``ComsolAnchorDataExtractor`` expects under
 ``data/processed/cfd_results_biochem/``. Boundary ``*_inlet/outlet/wall.txt``
 files are generated from Gmsh mesh tags (no COMSOL boundary export needed).
 
@@ -14,10 +14,10 @@ Typical workflow::
        Edge2D dataset and snapped to mesh nodes.
     3. ``python -m src.tools.extract_biochem_comsol`` (default) runs those exports + builds graphs.
 
-Extract identity (do not collapse both physics onto ``patientXXX``)::
+Extract identity (do not collapse both physics onto ``comsolXXX``)::
 
-    phase2_nowound_007.mph  ->  patient007          (canonical nowound cohort)
-    phase2_wound_007.mph    ->  wound_patient007    (wound physics, separate graph)
+    phase2_nowound_007.mph  ->  comsol007          (canonical nowound cohort)
+    phase2_wound_007.mph    ->  wound_comsol007    (wound physics, separate graph)
 
     Mesh from ``comp1`` / ``mesh1``; domain from ``sol_data`` (Study 1 / ``sol1`` dataset in the .mph).
     Set ``BIOCHEM_COMSOL_USE_MPH_EXPORTS=0`` to use Interp sampling instead of Export nodes.
@@ -112,9 +112,9 @@ def _parse_expr_list(raw: str | None) -> tuple[str, ...]:
     return tuple(parts)
 
 
-_PATIENT_STEM_RE = re.compile(r"^patient(\d+)$", re.IGNORECASE)
+_COMSOL_STEM_RE = re.compile(r"^comsol(\d+)$", re.IGNORECASE)
 _EXTRACT_STEM_RE = re.compile(
-    r"^(?:wound_patient(\d+)|patient(\d+)(?:_(nowound|wound))?)$",
+    r"^(?:wound_comsol(\d+)|comsol(\d+)(?:_(nowound|wound))?)$",
     re.IGNORECASE,
 )
 _PHASE2_MPH_RE = re.compile(r"^phase2_(nowound|wound)_(\d+)\.mph$", re.IGNORECASE)
@@ -122,9 +122,9 @@ _PHASE2_MPH_RE = re.compile(r"^phase2_(nowound|wound)_(\d+)\.mph$", re.IGNORECAS
 
 @dataclass(frozen=True)
 class BiochemExtractRef:
-    """Identity for one biochem COMSOL solve: patient index + wound/nowound physics."""
+    """Identity for one biochem COMSOL solve: COMSOL anchor index + wound/nowound physics."""
 
-    patient_id: int
+    comsol_anchor_id: int
     variant: str
 
     def __post_init__(self) -> None:
@@ -132,50 +132,50 @@ class BiochemExtractRef:
         if variant not in BIOCHEM_SIM_VARIANTS:
             raise ValueError(f"Unknown biochem variant {self.variant!r}; expected nowound|wound.")
         object.__setattr__(self, "variant", variant)
-        object.__setattr__(self, "patient_id", int(self.patient_id))
+        object.__setattr__(self, "comsol_anchor_id", int(self.comsol_anchor_id))
 
     @property
     def stem(self) -> str:
-        """Canonical extract stem. Nowound stays ``patient007`` (existing cohort)."""
-        base = f"patient{self.patient_id:03d}"
+        """Canonical extract stem. Nowound stays ``comsol007`` (existing cohort)."""
+        base = f"comsol{self.comsol_anchor_id:03d}"
         if self.variant == "nowound":
             return base
         return f"wound_{base}"
 
     @property
     def mph_name(self) -> str:
-        return f"phase2_{self.variant}_{self.patient_id:03d}.mph"
+        return f"phase2_{self.variant}_{self.comsol_anchor_id:03d}.mph"
 
     @property
-    def canonical_patient_stem(self) -> str:
-        return f"patient{self.patient_id:03d}"
+    def canonical_comsol_stem(self) -> str:
+        return f"comsol{self.comsol_anchor_id:03d}"
 
 
 def parse_biochem_extract_stem(stem: str) -> BiochemExtractRef | None:
-    """Parse ``patient007``, ``wound_patient007``, or ``patient007_wound``."""
+    """Parse ``comsol007``, ``wound_comsol007``, or ``comsol007_wound``."""
     raw = str(stem).strip()
     if not raw:
         return None
     m = _EXTRACT_STEM_RE.match(raw)
     if m:
-        wound_id, patient_id, suffix = m.group(1), m.group(2), m.group(3)
+        wound_id, comsol_anchor_id, suffix = m.group(1), m.group(2), m.group(3)
         if wound_id is not None:
             return BiochemExtractRef(int(wound_id), "wound")
         variant = (suffix or "nowound").lower()
-        return BiochemExtractRef(int(patient_id), variant)
+        return BiochemExtractRef(int(comsol_anchor_id), variant)
     m_phase2 = _PHASE2_MPH_RE.match(Path(raw).name)
     if m_phase2:
         return BiochemExtractRef(int(m_phase2.group(2)), m_phase2.group(1).lower())
     return None
 
 
-def is_canonical_nowound_patient_stem(stem: str) -> bool:
-    """True for ``patient007`` (not ``wound_patient007`` / mirrors / other suffixes)."""
-    return bool(_PATIENT_STEM_RE.match(str(stem).strip()))
+def is_canonical_nowound_comsol_stem(stem: str) -> bool:
+    """True for ``comsol007`` (not ``wound_comsol007`` / mirrors / other suffixes)."""
+    return bool(_COMSOL_STEM_RE.match(str(stem).strip()))
 
 
-def patient_stem_from_phase2_mph(path: Path) -> str | None:
-    """Map ``phase2_nowound_008.mph`` -> ``patient008``; ``phase2_wound_008.mph`` -> ``wound_patient008``."""
+def comsol_stem_from_phase2_mph(path: Path) -> str | None:
+    """Map ``phase2_nowound_008.mph`` -> ``comsol008``; ``phase2_wound_008.mph`` -> ``wound_comsol008``."""
     m = _PHASE2_MPH_RE.match(Path(path).name)
     if not m:
         return None
@@ -191,21 +191,21 @@ def phase2_mph_name_for_stem(stem: str) -> str | None:
 
 
 def phase2_wound_mph_name_for_stem(stem: str) -> str | None:
-    """Wound mph filename for a patient-like stem (``patient007`` -> ``phase2_wound_007.mph``)."""
+    """Wound mph filename for a COMSOL anchor-like stem (``comsol007`` -> ``phase2_wound_007.mph``)."""
     ref = parse_biochem_extract_stem(stem)
     if ref is None:
         return None
-    return BiochemExtractRef(ref.patient_id, "wound").mph_name
+    return BiochemExtractRef(ref.comsol_anchor_id, "wound").mph_name
 
 
 def apply_variant_to_stem(stem: str, variant: str | None) -> str:
-    """Re-stamp a patient-like stem with ``nowound`` / ``wound``. Unknown stems pass through."""
+    """Re-stamp a COMSOL anchor-like stem with ``nowound`` / ``wound``. Unknown stems pass through."""
     if not variant or variant == "all":
         return stem
     ref = parse_biochem_extract_stem(stem)
     if ref is None:
         return stem
-    return BiochemExtractRef(ref.patient_id, variant).stem
+    return BiochemExtractRef(ref.comsol_anchor_id, variant).stem
 
 
 def resolve_stem_selection(
@@ -215,10 +215,10 @@ def resolve_stem_selection(
     stem_attr: str = "stem",
     variant: str | None = None,
 ) -> list[str]:
-    """Parse ``5,8-10``, ``patient005,patient008``, ``wound_patient007``, or ``5 8 9``.
+    """Parse ``5,8-10``, ``comsol005,comsol008``, ``wound_comsol007``, or ``5 8 9``.
 
     ``statuses`` is the status table order (1-based indices match the printed ``#`` column).
-    ``variant`` restamps patient tokens (``patient007`` + wound -> ``wound_patient007``).
+    ``variant`` restamps COMSOL anchor tokens (``comsol007`` + wound -> ``wound_comsol007``).
     """
     if not raw or not str(raw).strip():
         return []
@@ -308,7 +308,7 @@ def stems_from_phase2_mph(
     want = None if not variant or variant == "all" else str(variant).strip().lower()
     out: list[str] = []
     for p in sorted(root.glob("phase2_*.mph")):
-        stem = patient_stem_from_phase2_mph(p)
+        stem = comsol_stem_from_phase2_mph(p)
         if not stem:
             continue
         ref = parse_biochem_extract_stem(stem)
@@ -319,20 +319,20 @@ def stems_from_phase2_mph(
 
 
 def stems_from_phase2_wound_mph(models_dir: Path | None = None) -> list[str]:
-    """Anchor stems implied by ``comsol_models/phase2_wound_*.mph`` (``wound_patientXXX``)."""
+    """Anchor stems implied by ``comsol_models/phase2_wound_*.mph`` (``wound_comsolXXX``)."""
     return stems_from_phase2_mph(models_dir, variant="wound")
 
 
 def stems_from_phase2_nowound_mph(models_dir: Path | None = None) -> list[str]:
-    """Anchor stems implied by ``comsol_models/phase2_nowound_*.mph`` (``patientXXX``)."""
+    """Anchor stems implied by ``comsol_models/phase2_nowound_*.mph`` (``comsolXXX``)."""
     return stems_from_phase2_mph(models_dir, variant="nowound")
 
 
 def resolve_biochem_comsol_model_path(stem: str, explicit: Path | None = None) -> Path | None:
     """Return first existing ``.mph`` for ``stem`` (explicit path, env, then search dirs).
 
-    ``patientXXX`` -> ``phase2_nowound_XXX.mph`` only.
-    ``wound_patientXXX`` / ``patientXXX_wound`` -> ``phase2_wound_XXX.mph`` only.
+    ``comsolXXX`` -> ``phase2_nowound_XXX.mph`` only.
+    ``wound_comsolXXX`` / ``comsolXXX_wound`` -> ``phase2_wound_XXX.mph`` only.
     The other variant is never used as a silent fallback.
     """
     if explicit is not None:
@@ -484,7 +484,7 @@ def write_wide_domain_txt(
                 f"time {t}: expected fields shape ({n_rows}, {len(DOMAIN_FIELD_NAMES)}), got {arr.shape}"
             )
 
-    # Match PatientDataExtractor.load_comsol_trajectory: "% x y name @ t=... ..."
+    # Match ComsolAnchorDataExtractor.load_comsol_trajectory: "% x y name @ t=... ..."
     # with body columns [x, y, ...fields per time in header order].
     header_tokens = ["%", "x", "y"]
     for t in times_s:

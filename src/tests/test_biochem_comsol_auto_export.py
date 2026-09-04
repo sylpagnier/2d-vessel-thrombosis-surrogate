@@ -9,7 +9,7 @@ from src.data_gen.lib.biochem_comsol_auto_export import (
     apply_variant_to_stem,
     collect_biochem_extract_stems,
     parse_biochem_extract_stem,
-    patient_stem_from_phase2_mph,
+    comsol_stem_from_phase2_mph,
     phase2_mph_name_for_stem,
     phase2_wound_mph_name_for_stem,
     resolve_biochem_comsol_model_path,
@@ -20,33 +20,33 @@ from src.data_gen.lib.biochem_comsol_auto_export import (
     write_boundary_txt_from_mesh,
     write_wide_domain_txt,
 )
-from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 
 
-def test_phase2_wound_mph_name_for_patient_stem():
-    assert phase2_wound_mph_name_for_stem("patient007") == "phase2_wound_007.mph"
-    assert phase2_wound_mph_name_for_stem("patient7") == "phase2_wound_007.mph"
-    assert phase2_wound_mph_name_for_stem("wound_patient007") == "phase2_wound_007.mph"
+def test_phase2_wound_mph_name_for_comsol_stem():
+    assert phase2_wound_mph_name_for_stem("comsol007") == "phase2_wound_007.mph"
+    assert phase2_wound_mph_name_for_stem("comsol7") == "phase2_wound_007.mph"
+    assert phase2_wound_mph_name_for_stem("wound_comsol007") == "phase2_wound_007.mph"
     assert phase2_wound_mph_name_for_stem("vessel_001") is None
 
 
 def test_parse_biochem_extract_stem_aliases():
-    nowound = parse_biochem_extract_stem("patient007")
+    nowound = parse_biochem_extract_stem("comsol007")
     assert nowound is not None
-    assert nowound.stem == "patient007"
+    assert nowound.stem == "comsol007"
     assert nowound.variant == "nowound"
     assert nowound.mph_name == "phase2_nowound_007.mph"
-    assert parse_biochem_extract_stem("patient007_nowound").stem == "patient007"
+    assert parse_biochem_extract_stem("comsol007_nowound").stem == "comsol007"
 
-    wound = parse_biochem_extract_stem("wound_patient007")
+    wound = parse_biochem_extract_stem("wound_comsol007")
     assert wound is not None
-    assert wound.stem == "wound_patient007"
+    assert wound.stem == "wound_comsol007"
     assert wound.variant == "wound"
     assert wound.mph_name == "phase2_wound_007.mph"
-    assert parse_biochem_extract_stem("patient007_wound").stem == "wound_patient007"
-    assert apply_variant_to_stem("patient007", "wound") == "wound_patient007"
-    assert phase2_mph_name_for_stem("patient007") == "phase2_nowound_007.mph"
-    assert phase2_mph_name_for_stem("wound_patient007") == "phase2_wound_007.mph"
+    assert parse_biochem_extract_stem("comsol007_wound").stem == "wound_comsol007"
+    assert apply_variant_to_stem("comsol007", "wound") == "wound_comsol007"
+    assert phase2_mph_name_for_stem("comsol007") == "phase2_nowound_007.mph"
+    assert phase2_mph_name_for_stem("wound_comsol007") == "phase2_wound_007.mph"
 
 
 def test_stems_from_phase2_mph_keeps_variants_apart(tmp_path, monkeypatch):
@@ -60,15 +60,15 @@ def test_stems_from_phase2_mph_keeps_variants_apart(tmp_path, monkeypatch):
         "src.data_gen.lib.biochem_comsol_auto_export.comsol_models_dir",
         lambda: models,
     )
-    assert stems_from_phase2_wound_mph() == ["wound_patient008"]
-    assert stems_from_phase2_nowound_mph() == ["patient008"]
-    assert stems_from_phase2_mph() == ["patient008", "wound_patient008"]
-    assert patient_stem_from_phase2_mph(models / "phase2_wound_011.mph") == "wound_patient011"
-    assert patient_stem_from_phase2_mph(models / "phase2_nowound_011.mph") == "patient011"
-    assert patient_stem_from_phase2_mph(models / "phase2_template_wound.mph") is None
+    assert stems_from_phase2_wound_mph() == ["wound_comsol008"]
+    assert stems_from_phase2_nowound_mph() == ["comsol008"]
+    assert stems_from_phase2_mph() == ["comsol008", "wound_comsol008"]
+    assert comsol_stem_from_phase2_mph(models / "phase2_wound_011.mph") == "wound_comsol011"
+    assert comsol_stem_from_phase2_mph(models / "phase2_nowound_011.mph") == "comsol011"
+    assert comsol_stem_from_phase2_mph(models / "phase2_template_wound.mph") is None
 
 
-def test_resolve_patient_stem_does_not_cross_variants(tmp_path, monkeypatch):
+def test_resolve_comsol_stem_does_not_cross_variants(tmp_path, monkeypatch):
     models = tmp_path / "comsol_models"
     models.mkdir()
     (models / "phase2_wound_003.mph").write_bytes(b"stub")
@@ -81,18 +81,18 @@ def test_resolve_patient_stem_does_not_cross_variants(tmp_path, monkeypatch):
         "src.data_gen.lib.biochem_comsol_auto_export.data_root",
         lambda: tmp_path,
     )
-    assert resolve_biochem_comsol_model_path("patient003") is None
-    assert resolve_biochem_comsol_model_path("wound_patient003") == (
+    assert resolve_biochem_comsol_model_path("comsol003") is None
+    assert resolve_biochem_comsol_model_path("wound_comsol003") == (
         models / "phase2_wound_003.mph"
     ).resolve()
-    assert resolve_biochem_comsol_model_path("patient003_wound") == (
+    assert resolve_biochem_comsol_model_path("comsol003_wound") == (
         models / "phase2_wound_003.mph"
     ).resolve()
-    assert resolve_biochem_comsol_model_path("patient004") == (
+    assert resolve_biochem_comsol_model_path("comsol004") == (
         models / "phase2_nowound_004.mph"
     ).resolve()
-    assert resolve_biochem_comsol_model_path("wound_patient004") is None
-    assert resolve_biochem_comsol_model_path("patient999") is None
+    assert resolve_biochem_comsol_model_path("wound_comsol004") is None
+    assert resolve_biochem_comsol_model_path("comsol999") is None
 
 
 def test_collect_stems_keeps_domain_wound_files_apart(tmp_path, monkeypatch):
@@ -108,22 +108,22 @@ def test_collect_stems_keeps_domain_wound_files_apart(tmp_path, monkeypatch):
     label = tmp_path / "label"
     raw.mkdir()
     label.mkdir()
-    (label / "patient007.txt").write_text("domain\n", encoding="utf-8")
-    (label / "patient007_wall.txt").write_text("wall\n", encoding="utf-8")
-    (label / "wound_patient007.txt").write_text("domain\n", encoding="utf-8")
-    (label / "wound_patient007_wound.txt").write_text("wound-bc\n", encoding="utf-8")
+    (label / "comsol007.txt").write_text("domain\n", encoding="utf-8")
+    (label / "comsol007_wall.txt").write_text("wall\n", encoding="utf-8")
+    (label / "wound_comsol007.txt").write_text("domain\n", encoding="utf-8")
+    (label / "wound_comsol007_wound.txt").write_text("wound-bc\n", encoding="utf-8")
     stems = collect_biochem_extract_stems(raw, label)
-    assert "patient007" in stems
-    assert "wound_patient007" in stems
-    assert "patient007_wall" not in stems
-    assert "wound_patient007_wound" not in stems
+    assert "comsol007" in stems
+    assert "wound_comsol007" in stems
+    assert "comsol007_wall" not in stems
+    assert "wound_comsol007_wound" not in stems
 
 
 def test_resolve_stem_selection_accepts_wound_aliases():
-    table = ["patient005", "wound_patient007", "patient008"]
-    assert resolve_stem_selection("patient007_wound", table) == ["wound_patient007"]
-    assert resolve_stem_selection("patient007", table, variant="wound") == ["wound_patient007"]
-    assert resolve_stem_selection("2", table) == ["wound_patient007"]
+    table = ["comsol005", "wound_comsol007", "comsol008"]
+    assert resolve_stem_selection("comsol007_wound", table) == ["wound_comsol007"]
+    assert resolve_stem_selection("comsol007", table, variant="wound") == ["wound_comsol007"]
+    assert resolve_stem_selection("2", table) == ["wound_comsol007"]
 
 
 def test_write_wide_domain_txt_roundtrip_with_extractor(tmp_path):
@@ -138,7 +138,7 @@ def test_write_wide_domain_txt_roundtrip_with_extractor(tmp_path):
     fp = tmp_path / f"{stem}.txt"
     write_wide_domain_txt(fp, times_s=times, coords_xy_cm=coords, fields_by_time=fields_by_time)
 
-    ext = PatientDataExtractor(phase="biochem_anchors", raw_dir=tmp_path, label_dir=tmp_path, proc_dir=tmp_path)
+    ext = ComsolAnchorDataExtractor(phase="biochem_anchors", raw_dir=tmp_path, label_dir=tmp_path, proc_dir=tmp_path)
     blocks = ext.load_comsol_trajectory(fp)
     assert set(blocks.keys()) == {0.0, 10.0}
     for t in times:
@@ -281,11 +281,11 @@ def test_ensure_wound_from_comsol_selection_mask(tmp_path, monkeypatch):
         coords,
         None,
         tmp_path,
-        "wound_patient001",
+        "wound_comsol001",
         force=True,
     )
     assert ok
-    text = (tmp_path / "wound_patient001_wound.txt").read_text(encoding="utf-8")
+    text = (tmp_path / "wound_comsol001_wound.txt").read_text(encoding="utf-8")
     assert "0.5000000000 0.0000000000" in text
     assert "1.0000000000 0.0000000000" not in text
 
@@ -317,11 +317,11 @@ def test_ensure_wound_from_geometry_selection_snap(tmp_path, monkeypatch):
         coords,
         None,
         tmp_path,
-        "wound_patient001",
+        "wound_comsol001",
         force=True,
     )
     assert ok
-    text = (tmp_path / "wound_patient001_wound.txt").read_text(encoding="utf-8")
+    text = (tmp_path / "wound_comsol001_wound.txt").read_text(encoding="utf-8")
     assert "selection 'sel1'" in text
     assert "0.5000000000 0.0000000000" in text
     assert "1.0000000000 0.0000000000" not in text
@@ -340,7 +340,7 @@ def test_wound_snap_retries_meter_to_cm(tmp_path, monkeypatch):
         tmp_path / "w.txt",
         pts,
         ref_m,
-        stem="wound_patient001",
+        stem="wound_comsol001",
         source="selection 'sel1'",
     )
     assert ok

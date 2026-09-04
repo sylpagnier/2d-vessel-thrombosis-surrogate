@@ -246,7 +246,7 @@ def discover_anchor_paths(anchor_dir: Path | None = None) -> list[Path]:
     root = anchor_dir or (Path(__file__).resolve().parents[2] / "data" / "processed" / "graphs_biochem_anchors")
     if not root.is_dir():
         return []
-    return sorted(root.glob("patient*.pt"))
+    return sorted(root.glob("comsol*.pt"))
 
 
 def survey_all_anchors(anchor_dir: Path | None = None) -> list[AnchorClotSurvey]:

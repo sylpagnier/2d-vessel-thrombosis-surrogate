@@ -301,7 +301,7 @@ def _candidate_mask_family(S, sc_by_arm, set_th):
     domain-restricted (`docs/PHASE9_ML.md` 0 already reports a domain-specialised ensemble)
     and necessary because the two domains disagree about it: measured strictly-nested, the
     wall prefers a plain cut (FIN 0.9167 against 0.9046) and off-wall prefers the
-    physics-conditioned one (FIN 0.7075 against 0.6431).  On `patient032` a plain cut
+    physics-conditioned one (FIN 0.7075 against 0.6431).  On `comsol032` a plain cut
     commits **nothing** off-wall (0.000 against 0.432) because its score is uniformly low
     there and the physics mask is the only thing separating its 120 off-wall nodes.
     """
@@ -719,7 +719,7 @@ def tune_lag(V, anchors, Pin, oofs, set_th, time_th, lag_pred=None):
     The learned per-node lag regression wins the in-fold selection every time and, held out,
     gains **+0.056 on the priority class** while losing 0.023 on the low-burden baseline
     vessels (docs/PHASE10_V4.md 12.2b).  That split is not mysterious: the stenoses carry 84
-    and 122 off-wall GT nodes and `patient005` carries 4, so on a low-burden vessel the
+    and 122 off-wall GT nodes and `comsol005` carries 4, so on a low-burden vessel the
     regression is extrapolating and a single mistimed node is most of the score.
 
     So the lag rule is GATED on the predicted off-wall burden, which needs no label -- it is

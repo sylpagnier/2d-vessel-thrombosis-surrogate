@@ -7,7 +7,7 @@ is disposable experiment cruft.
 
 | Path | Stack |
 |------|--------|
-| `outputs/kinematics/` | RGP-DEQ production + clinical finetune checkpoints |
+| `outputs/kinematics/` | RGP-DEQ production + comsol finetune checkpoints |
 | `outputs/clot_ml/locked/` | Shipped deploy-clot (`clot_ml_0`) artifact |
 | `outputs/clot_ml/wound_rate/` | Wound complement LOVO constants |
 | `outputs/phase9_scores/` | CV caches for `eval_strict*.py` |

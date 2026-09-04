@@ -3,7 +3,7 @@
 This is the protocol used by ``scripts/eval_wall_protocol.py`` and
 ``docs/WALL_MODEL_PLAN.md`` §21.1. Phase-7/8 evals that average
 ``WALL_COHORT_V2_TRAIN`` (27, or the 19 eligible full-horizon clot-carrying subset)
-are mixing FIT with DEV, and ``patient020`` is a FIT vessel -- not a holdout.
+are mixing FIT with DEV, and ``comsol020`` is a FIT vessel -- not a holdout.
 
     FIT        TRAIN minus DEV-train
     DEV        039, 040, 041, 042, 044 -- selection only, never fitted

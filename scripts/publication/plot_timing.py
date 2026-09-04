@@ -68,7 +68,7 @@ def main() -> int:
     burden_line = "median share:  " + "  ·  ".join(
         f"{label} {pct_by_stage[label]:.0f}%" for _key, label, _color in STAGES)
     ax0.set_xticks(x)
-    ax0.set_xticklabels([r["stem"].replace("patient", "p").replace("wound_p", "w")
+    ax0.set_xticklabels([r["stem"].replace("comsol", "p").replace("wound_p", "w")
                          for r in rows], rotation=90, fontsize=CONFIG.font_size - 4)
     ax0.set_ylabel("wall-clock (s)")
     ax0.set_title(f"(a) deploy cost per vessel  (n = {len(rows)})\n{burden_line}",

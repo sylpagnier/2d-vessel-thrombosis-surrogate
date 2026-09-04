@@ -101,8 +101,8 @@ class ClotMlV0Config:
     #: (`scripts/eval_replace_scope.py`).  The two scopes are IDENTICAL on wall, wound region
     #: and wound lumen -- 0.8866 / 0.8642 / 0.8285 either way, to four decimals -- and differ
     #: only in the far field, where `all_lumen` reads 0.0817 against `wound_region`'s 0.2448.
-    #: `wound_patient004/005/006` go from exactly 0.0000 to 0.356 / 0.179 / 0.164; only
-    #: `wound_patient003` gives back 0.047.  All six leave-one-vessel-out folds pick
+    #: `wound_comsol004/005/006` go from exactly 0.0000 to 0.356 / 0.179 / 0.164; only
+    #: `wound_comsol003` gives back 0.047.  All six leave-one-vessel-out folds pick
     #: `wound_region`.  At n=3 there was no basis to choose and WOUND_PROGRESS 19 shipped
     #: `all_lumen`; there is now.
     #:
@@ -131,7 +131,7 @@ def _replace_target(data, off: np.ndarray, scope: str) -> np.ndarray:
     The wound-region scope is a spatial stitch, not a learned selector: it makes the
     physics and GNN responsible for disjoint parts of the lumen.  That preserves the
     GNN's far-field decision, which the all-lumen chemistry replacement can otherwise
-    erase on wound_patient003.
+    erase on wound_comsol003.
     """
     scope = str(scope)
     if scope == REPLACE_SCOPE_ALL_LUMEN:

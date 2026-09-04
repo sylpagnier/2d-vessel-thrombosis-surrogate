@@ -70,6 +70,10 @@ if ($LASTEXITCODE -ne 0) { throw "dependency install failed" }
 # --- 3. App source + project marker -----------------------------------------------------
 Write-Host "[i] Copying app source..." -ForegroundColor DarkGray
 Copy-Item -Recurse -Force (Join-Path $RepoRoot "src") (Join-Path $BundleDir "src")
+# `src/archive/` is retired code kept locally, and `__pycache__` carries stale bytecode for
+# modules deleted long ago.  Neither is reachable from the deploy path, and shipping them puts
+# dead code and out-of-date naming in front of every customer who unzips the bundle.
+Remove-Item -Recurse -Force (Join-Path $BundleDir "src/archive") -ErrorAction SilentlyContinue
 Copy-Item -Force (Join-Path $RepoRoot "pyproject.toml") $BundleDir
 
 # `src/clot_ml/locked.py`'s readout selection (`expected_tuned` / `resid_adapt`, the deploy
@@ -79,15 +83,31 @@ Copy-Item -Force (Join-Path $RepoRoot "pyproject.toml") $BundleDir
 # (7 MB of source, cheap) rather than hand-picking which of the ~15 possible lazy imports in
 # `locked.py` a given run happens to hit.
 Copy-Item -Recurse -Force (Join-Path $RepoRoot "scripts") (Join-Path $BundleDir "scripts")
+Remove-Item -Recurse -Force (Join-Path $BundleDir "scripts/git-hooks") -ErrorAction SilentlyContinue
+
+# One-off `diag_*` / `diagnose_*` probes are local-only research scratch (they are gitignored
+# for the same reason) and nothing on the deploy path imports them -- only `eval_*.py` is
+# lazily reachable from `locked.py`.  Left in, they ship stale naming to every customer.
+foreach ($pattern in @("diag_*.py", "diagnose_*.py")) {
+    Get-ChildItem -Path (Join-Path $BundleDir "scripts") -File -Filter $pattern |
+        ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+}
+
+# Drop every __pycache__ the wholesale copies dragged in.
+Get-ChildItem -Path $BundleDir -Directory -Recurse -Filter "__pycache__" |
+    Sort-Object { $_.FullName.Length } -Descending |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
 
 $InboxDir = Join-Path $BundleDir "customer_geometries"
 New-Item -ItemType Directory -Force -Path $InboxDir | Out-Null
 Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\README.txt") $InboxDir
 
-# Seed the inbox with one real, non-synthetic vessel so first launch shows a prediction
-# immediately instead of an empty dropdown -- patient041, a stenosis anchor the shipped
+# Seed the inbox with a COMSOL anchor (rather than a parametric sweep vessel) so first launch
+# shows a prediction immediately instead of an empty dropdown -- comsol041, a stenosis anchor
+# the shipped
 # clot_ml_0 was actually trained on, so a customer (or we) can sanity-check the model against
-# a known-good case rather than only ever seeing parametric geometries. Trimmed of G_x/G_y/
+# a known-good case with a COMSOL ground truth behind it.  Every vessel in this project is
+# synthetic geometry; "anchor" refers to having a COMSOL solve, not to any clinical origin. Trimmed of G_x/G_y/
 # Laplacian/z_kin_pred (stale mesh operators + a cached embedding, unused by the deploy path --
 # see mls_gradient.py) to cut ~20 MB of dead weight; still ~235 MB because the real 201-step
 # species/velocity history (y) is what the deploy pipeline derives its own rollout step count
@@ -96,7 +116,7 @@ Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\README.txt") $InboxDi
 Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\demo_stenosis_vessel.pt") $InboxDir
 $DemoMeshDir = Join-Path $BundleDir "data\raw\biochem_anchors"
 New-Item -ItemType Directory -Force -Path $DemoMeshDir | Out-Null
-Copy-Item -Force (Join-Path $RepoRoot "data\raw\biochem_anchors\patient041.msh") $DemoMeshDir
+Copy-Item -Force (Join-Path $RepoRoot "data\raw\biochem_anchors\comsol041.msh") $DemoMeshDir
 
 # --- 4. The ~11 MB of checkpoints this tool actually loads ------------------------------
 # Traced from CustomerDeployPipeline.run() -> load_v0_bundle("clot_ml_0"): only

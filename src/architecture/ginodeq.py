@@ -222,8 +222,8 @@ def _canonical_coords(nodes_nd: Tensor) -> Tensor:
 
     ```
     shift of vessel length      1%      10%     100%
-    patient020  rel change    0.059    0.391    0.552
-    patient041  rel change    0.206    0.264    0.286
+    comsol020  rel change    0.059    0.391    0.552
+    comsol041  rel change    0.206    0.264    0.286
     ```
 
     against a model whose total error versus COMSOL is ~0.20.  A 10% translation moves the
@@ -278,10 +278,12 @@ class RGP_DEQ(nn.Module):
         wss_fuse: Optional[bool] = None,
         bc_envelope: Optional[bool] = None,
         bc_lambda: Optional[float] = None,
+        bc_envelope_decay: Optional[float] = None,
         fourier_learnable: Optional[bool] = None,
         shear_head: bool = True,
         decoder_skip: Optional[bool] = None,
         residual_gain: Optional[bool] = None,
+        residual_rezero: Optional[bool] = None,
     ):
         super().__init__()
         self.shear_head = shear_head
@@ -325,6 +327,25 @@ class RGP_DEQ(nn.Module):
             bc_lambda
             if bc_lambda is not None
             else os.environ.get("KINEMATICS_BC_LAMBDA", "10.0")
+        )
+        # Far-field decay on the hard-BC envelope, so the residual is BAND-LOCALISED:
+        #
+        #     env(sdf) = (1 - exp(-bc_lambda*sdf)) * exp(-bc_envelope_decay*sdf)
+        #
+        # zero at the wall (the BC is untouched), peaking in the near-wall band, decaying in the
+        # core.  `0.0` is exactly the plain envelope, so this defaults to a no-op.
+        #
+        # The plain envelope is backwards for a residual on an already-accurate prior.  Measured
+        # on the deploy packs against the FEM prior: the outer 40% of the domain by wall distance
+        # carries 17% of the prior's squared error and is handed envelope 1.000, while the
+        # near-wall decile that the wall-shear metrics read is damped to 0.45-0.59.  The head's
+        # output is correlated with the prior's error in the wall band (+0.25) and uncorrelated
+        # globally (-0.03), so the plain envelope gives it the most authority exactly where it
+        # has the least signal -- which is how a head that improves the gate still loses rel-L2.
+        self.bc_envelope_decay = float(
+            bc_envelope_decay
+            if bc_envelope_decay is not None
+            else os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0")
         )
         self.wss_fuse = (
             bool(wss_fuse)
@@ -377,10 +398,10 @@ class RGP_DEQ(nn.Module):
         # the model emits, `uvp = (pred - uv_prior)/sdf`, against the one the labels require:
         #
         #   vessel        |uvp| p99/p50 (model)   (labels need)
-        #   patient003            9.07                24.33
-        #   patient008            8.69                20.58
-        #   patient015            9.80                30.35
-        #   patient021            7.02                26.99
+        #   comsol003            9.07                24.33
+        #   comsol008            8.69                20.58
+        #   comsol015            9.80                30.35
+        #   comsol021            7.02                26.99
         #
         # Medians agree (0.37-0.62 against 0.30-0.65); the model is short by ~3x on the TAIL, and
         # wall `dsrx` spread is a tail statistic.  This is why s16.10's 48x reweighting of
@@ -452,6 +473,33 @@ class RGP_DEQ(nn.Module):
             nn.init.zeros_(self.residual_gain_head[-1].bias)
         else:
             self.residual_gain_head = None
+
+        # ReZero on the hard-BC residual: one learnable scalar, initialised to 0, so a fresh
+        # model predicts `u = uv_prior` EXACTLY and every departure from the prior has to be
+        # earned by the objective.
+        #
+        # Without it the decoder is a randomly-initialised map on a LayerNorm shell, so it emits
+        # an O(1) field regardless of what the prior needs.  That was harmless while the prior
+        # was analytic Poiseuille -- its error is O(0.4) and an O(0.2) initial residual is the
+        # right order.  Under the FEM prior the target error is O(0.01), and the SAME
+        # initialisation overshoots it by ~20x (measured 19-24x on the deploy packs): the run
+        # then spends itself suppressing its own initialisation noise instead of learning where
+        # the FEM was wrong, gets to 1.4-3.4x, and stops.  What survives is uncorrelated --
+        # corr(delta, prior_error) = +0.03, and the best possible rescaling of it removes 0.1%
+        # of the prior's error (`src.tools.diagnostics.residual_head_audit`).
+        #
+        # The same trick is already used twice in this file, for the same reason: the residual
+        # gain head and `AttentionGlobalMixingBlock.cross_att_broadcast` are both zero-initialised
+        # so they start inactive.  Defaults OFF, so existing checkpoints are untouched.
+        self.residual_rezero = (
+            bool(residual_rezero)
+            if residual_rezero is not None
+            else bool(int(os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0")))
+        )
+        if self.residual_rezero:
+            self.residual_scale = nn.Parameter(torch.zeros(1))
+        else:
+            self.register_parameter("residual_scale", None)
 
         self.mu_decoder = nn.Sequential(
             SpectralLinear(latent_dim, latent_dim),
@@ -612,7 +660,7 @@ class RGP_DEQ(nn.Module):
                 pos_nd = pos_nd.clone().requires_grad_(True)
             # The SIREN is a COORDINATE network -- feeding it the absolute frame is the single
             # strongest memorisation path in the model, stronger than the encoder's Fourier
-            # block.  Centring the encoder alone left `patient041` at 0.715 relative change
+            # block.  Centring the encoder alone left `comsol041` at 0.715 relative change
             # under a full-span translation (0.284 before); both paths have to be canonicalised
             # together or the invariance is not real.  See `_canonical_coords`.
             pos_nd = _canonical_coords(pos_nd)
@@ -635,6 +683,12 @@ class RGP_DEQ(nn.Module):
             )
             u_v_p = torch.cat([u_v_p[:, :2] * torch.exp(log_g), u_v_p[:, 2:3]], dim=1)
 
+        if getattr(self, "residual_scale", None) is not None:
+            # Applied to the VELOCITY residual only.  Pressure is decoded absolutely, not as a
+            # correction to a prior, so gating it to zero would suppress a head rather than
+            # start it neutral.
+            u_v_p = torch.cat([u_v_p[:, :2] * self.residual_scale, u_v_p[:, 2:3]], dim=1)
+
         if self.use_hard_bcs:
             # SDF is already [N, 1]; do not add another singleton (would break broadcast with [N, 2]).
             sdf = data.x[:, NodeFeat.SDF]
@@ -642,6 +696,8 @@ class RGP_DEQ(nn.Module):
             if self.bc_envelope:
                 # Soft-envelope hard-BC: exact at sdf=0, but keeps derivatives closer to wall.
                 envelope = 1.0 - torch.exp(-self.bc_lambda * sdf)
+                if self.bc_envelope_decay > 0.0:
+                    envelope = envelope * torch.exp(-self.bc_envelope_decay * sdf)
                 u_v_constrained = uv_prior + envelope * u_v_p[:, :2]
             else:
                 u_v_constrained = uv_prior + sdf * u_v_p[:, :2]

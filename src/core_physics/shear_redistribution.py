@@ -57,7 +57,7 @@ def build_crosssection_operator(
 
     The ball radius is the local lumen half-width times ``radius_mult``, so the stencil
     reaches across the lumen to the opposite wall and no further.  Node areas are taken as
-    uniform (the meshes are near-uniform: patient007 edge-length CV is small).
+    uniform (the meshes are near-uniform: comsol007 edge-length CV is small).
     """
     r0 = local_half_width(pos, sdf, wall, probe=probe)
     tree = cKDTree(pos)
@@ -92,7 +92,7 @@ def make_blockage(
 
     ``feedback='occlude'``  shear RISES as the lumen narrows, ``1/(1-phi)**p``.  Measured
         against GT this is the wrong sign: ``scripts/diag_gt_shear_evolution.py`` finds the
-        low-shear gate open fraction *rising* over the run (patient007 0.153 -> 0.298),
+        low-shear gate open fraction *rising* over the run (comsol007 0.153 -> 0.298),
         and the occluded fraction never exceeds a few percent anyway.
     ``feedback='wake'``  shear FALLS next to committed tissue, ``1 - wake*phi``.  Committed
         tissue is a no-slip obstacle at 80x viscosity, so it sheds a stagnation wake rather

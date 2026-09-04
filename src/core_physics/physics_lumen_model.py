@@ -6,7 +6,7 @@ entirely at 2-3 graph hops from the wall, and -- measured over 34 vessels -- **n
 nucleates away from committed wall tissue (0 orphans out of 890 off-wall clot nodes).
 So the lumen arm is a propagation rule seeded by the wall arm, not an independent model.
 
-It is genuinely clot, not a rheology artefact: on the patient007 domain export the COMSOL
+It is genuinely clot, not a rheology artefact: on the comsol007 domain export the COMSOL
 gelation step ``mu1(Mat)`` is fully saturated (79 of a possible 80) at off-wall clot nodes,
 fibrin ``mu2`` is identically zero, and clear-lumen nodes show ``d(spf.mu) = -3e-4``.
 
@@ -95,7 +95,7 @@ def wall_normal_projection(pos: np.ndarray, wall: np.ndarray):
 
     Graph-hop dilation is the wrong operator for the lumen. Measured across the cohort,
     off-wall GT clot sits in a razor-thin shell at a near-constant NORMAL offset from the
-    wall (patient032: all 120 nodes between 0.0459 and 0.0477), and each one's nearest
+    wall (comsol032: all 120 nodes between 0.0459 and 0.0477), and each one's nearest
     wall node is always a committed one. Normalised by the mesh's median edge length that
     offset is ~1.7-1.8 on every vessel. So the lumen arm is a thickness in the wall-normal
     direction, and the pack's ``edge_index`` -- 64% of whose nodes are unreachable from
@@ -294,7 +294,7 @@ def solid_boundary_shells(
 ) -> tuple[list[np.ndarray], np.ndarray]:
     """Corner shells off the WHOLE solid boundary, plus a nearest-solid owner.
 
-    Two departures from a wound-anchored ring, both forced by ``wound_patient003``
+    Two departures from a wound-anchored ring, both forced by ``wound_comsol003``
     (docs/WOUND_PROGRESS.md 17.1): shells are taken off ``solid`` (wall union wound),
     because 003's missing lumen clot sits ~14 hops from the wound beside the healthy
     wall; and shell 1 stays exactly :func:`first_corner_shell` -- a hop-2 ring is a

@@ -56,7 +56,7 @@ def load_corpus(corpus_dir: Path, *, min_sr0: float = 1e-2, max_abs_log: float =
       for the same reason, and matching it is what makes these numbers comparable to its
       null 0.630 / prior 0.327.  ``scope="all"`` reports the whole wall instead.
     * A node whose clot-free shear is ~0 carries no ratio information and its denominator would
-      dominate a log target -- patient005 produces a ratio of 1053 that way.  ``min_sr0`` and
+      dominate a log target -- comsol005 produces a ratio of 1053 that way.  ``min_sr0`` and
       ``max_abs_log`` drop those rather than let Huber quietly absorb them.
     """
     if scope not in ("clot", "all"):

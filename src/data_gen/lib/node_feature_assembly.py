@@ -1,6 +1,6 @@
 """Shared kinematics / biochem node-feature builders for graph pipelines.
 
-Anchor patient graphs store:
+Anchor COMSOL anchor graphs store:
   - ``data.x`` (18ch, ``KINE_X_SCHEMA``) for Stage-A GINO-DEQ
   - ``data.x_biochem`` (15ch, ``BIO_X_SCHEMA``) for biochem encoder / physics BC layout
 """
@@ -302,7 +302,7 @@ def build_kinematics_node_x_tensor(
 def _resolve_graph_stem(data, stem: Optional[str] = None) -> str:
     if stem:
         return str(stem).strip()
-    for attr in ("stem", "patient_id", "case_id", "name"):
+    for attr in ("stem", "comsol_anchor_id", "case_id", "name"):
         val = getattr(data, attr, None)
         if val is not None and str(val).strip():
             return str(val).strip()
@@ -405,7 +405,7 @@ def refresh_kinematics_node_x_on_graph(
     preserve_width: bool = True,
     width_nd_max_sane: float = 4.0,
 ) -> bool:
-    """Rebuild ``data.x`` (18ch kine layout) with Poiseuille priors + patient FD inlet BCs.
+    """Rebuild ``data.x`` (18ch kine layout) with Poiseuille priors + COMSOL anchor FD inlet BCs.
 
     Returns True when ``data.x`` was updated. Skips when existing priors look healthy unless
     ``force=True``.

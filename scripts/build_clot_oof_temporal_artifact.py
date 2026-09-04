@@ -111,10 +111,10 @@ def main() -> None:
         callout = (
             '<div class="callout"><b>No genuinely held-out vessel is shown for '
             f'<code>{model_name}</code>.</b> Per <code>docs/SEALED_SPLIT.md</code>\'s '
-            '2026-08-22 amendment, <code>patient001/010/014/042</code> (VIZ_HALF) moved from '
+            '2026-08-22 amendment, <code>comsol001/010/014/042</code> (VIZ_HALF) moved from '
             'held-out into the training pool for this model generation -- they were the only '
             'genuinely held-out evidence the earlier <code>clot_gnn_v4</code>/<code>v4w</code> '
-            'viz had. <code>patient007/013/031/043</code> (FINAL_HALF) remain sealed by '
+            'viz had. <code>comsol007/013/031/043</code> (FINAL_HALF) remain sealed by '
             'project policy, reserved for the one true final read, and are deliberately not '
             'opened here. The strict, nested CV number below is the real generalization '
             f'estimate for {model_name}.</div>'
@@ -305,8 +305,8 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
       <tr><td>v3, same strict protocol</td><td>0.9014</td><td>0.7011</td></tr>
       <tr><td class="trust">v4, strict CV, all 19 &mdash; <b>the comparator for the two rows below</b></td><td class="trust">0.9176</td><td class="trust">0.7366</td></tr>
       <tr><td>v4, strict CV, per-vessel spread (median / 10th pct / min)</td><td>0.959 / 0.821 / 0.613</td><td>0.772 / 0.496 / 0.267</td></tr>
-      <tr><td><b>v4, patient042 (SEALED, stenosis)</b></td><td><b>0.716</b></td><td><b>0.696</b></td></tr>
-      <tr><td><b>v4, patient001 (SEALED)</b></td><td><b>0.741</b></td><td><b>0.785</b></td></tr>
+      <tr><td><b>v4, comsol042 (SEALED, stenosis)</b></td><td><b>0.716</b></td><td><b>0.696</b></td></tr>
+      <tr><td><b>v4, comsol001 (SEALED)</b></td><td><b>0.741</b></td><td><b>0.785</b></td></tr>
       <tr><td>v4, training-pool tabs below (in-sample, for contrast)</td><td>~0.96</td><td>~0.93</td></tr>
     </tbody>
     <thead><tr><th>MEAN-OVER-TIME &mdash; averaged across the run</th><th>wall</th><th>off-wall</th></tr></thead>
@@ -342,11 +342,11 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
   </p>
   <p class="section-note">
     <b>The wall shortfall is two vessels failing for unrelated reasons</b>
-    (<code>scripts/diag_sealed_wall_readout.py</code>). On <code>patient001</code> the
+    (<code>scripts/diag_sealed_wall_readout.py</code>). On <code>comsol001</code> the
     network ranks correctly &mdash; a per-vessel oracle cut scores <b>0.980</b> against the
     shipped readout's 0.741 &mdash; but its mean wall score, 0.448, sits far outside the
     0.11&ndash;0.39 range the cohort cut was calibrated on, so a fixed cut commits 252
-    nodes against 183 true ones. On <code>patient042</code> the oracle cut itself only
+    nodes against 183 true ones. On <code>comsol042</code> the oracle cut itself only
     reaches <b>0.768</b>: no readout recovers it, the network simply does not separate
     that vessel. The first is extrapolation past the calibration range, the second is a
     plain model failure, and averaging them into one number hides both.
@@ -355,8 +355,8 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
     <b>A cohort mean is not a per-vessel promise.</b> The strict-CV wall mean has a
     standard error of 0.023, but the standard deviation of a <i>single new vessel</i> is
     0.103 &mdash; an 80% interval of [0.79, 1.00]. The 0.9176 mean is also not a typical
-    vessel: the median is 0.959, and <code>patient028</code> (0.613) and
-    <code>patient018</code> (0.731) carry the whole left tail. <code>patient042</code>
+    vessel: the median is 0.959, and <code>comsol028</code> (0.613) and
+    <code>comsol018</code> (0.731) carry the whole left tail. <code>comsol042</code>
     joins that tail rather than departing from it. The training-pool tabs below read far
     higher (~0.96/0.93) because they are in-sample &mdash; the gap between those numbers
     and these two is most of what "in-sample" actually costs you.
@@ -420,16 +420,16 @@ h2.section { font-family: var(--serif); font-weight: 600; font-size: 1.3rem; mar
 
   <h2 class="section">What to read off this</h2>
   <div class="finding-box">
-    Start with <code>patient042</code> and <code>patient001</code> &mdash; they're first
+    Start with <code>comsol042</code> and <code>comsol001</code> &mdash; they're first
     for a reason, and they're the only two tabs whose score means anything about
-    generalization on their own. Then flip to <code>patient040</code>/<code>041</code>/<code>044</code>/<code>012</code>/<code>032</code>
+    generalization on their own. Then flip to <code>comsol040</code>/<code>041</code>/<code>044</code>/<code>012</code>/<code>032</code>
     and notice how much cleaner the model/GT match looks &mdash; that visual gap <em>is</em>
     the in-sample effect, not a difference in vessel difficulty. Both panels genuinely
     move now, so watch the <em>Model</em> window's own front advance, not just Ground
     Truth's; where the two shapes diverge in time is a real read on the learned schedule.
     Off-wall is where v4 earned its place over v3 in CV (statistically significant), and
     off-wall is the domain that held up out of sample. On the wall, watch
-    <code>patient001</code> specifically: the model paints <em>more</em> clot than the
+    <code>comsol001</code> specifically: the model paints <em>more</em> clot than the
     ground truth, not less. That over-commitment is the cut landing in the wrong place on
     a vessel outside the range it was calibrated on, not the network mistaking where the
     clot is &mdash; the same score field, cut per-vessel, would read 0.980.

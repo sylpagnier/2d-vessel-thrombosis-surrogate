@@ -10,11 +10,11 @@ not evidence of generalisation.
 WHY A FIXED RE-CUT CANNOT FIX IT.  Of the 19 eligible vessels outside SEALED
 (T >= 150, non-empty GT) exactly **three** are priority class:
 
-    patient040  aneurysm      patient041  stenosis      patient044  stenosis
+    comsol040  aneurysm      comsol041  stenosis      comsol044  stenosis
 
-`patient039` is also an aneurysm but T = 92, and a truncated run is a different quantity
-(PHASE6_RESULTS 6.2), so it is excluded everywhere.  `patient042` (stenosis) and
-`patient043` (aneurysm) are in SEALED and stay there.
+`comsol039` is also an aneurysm but T = 92, and a truncated run is a different quantity
+(PHASE6_RESULTS 6.2), so it is excluded everywhere.  `comsol042` (stenosis) and
+`comsol043` (aneurysm) are in SEALED and stay there.
 
 **With one non-SEALED aneurysm, no fixed FIT/DEV cut can put an aneurysm on both sides.**
 Putting 040 in FIT means aneurysm generalisation is never measured; putting it in DEV means
@@ -29,7 +29,7 @@ non-SEALED pool.  Every vessel is held out exactly once, so:
     contains at least two of them.
 
 The one thing it still cannot do is train on an aneurysm while measuring a different
-aneurysm.  That needs either `patient039` re-run to full horizon, or SEALED opened.  Until
+aneurysm.  That needs either `comsol039` re-run to full horizon, or SEALED opened.  Until
 then **aneurysm performance is an n=1 out-of-fold number and must be quoted as such.**
 """
 from __future__ import annotations

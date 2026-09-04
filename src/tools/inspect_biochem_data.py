@@ -10,7 +10,7 @@ left/right keys) to cycle stems manually; ``r`` still jumps to random. For the *
 Examples:
     python -m src.tools.inspect_biochem_data --phase biochem_anchors
     python -m src.tools.inspect_biochem_data --phase biochem_anchors --summary
-    python -m src.tools.inspect_biochem_data --phase biochem_anchors --stem patient001
+    python -m src.tools.inspect_biochem_data --phase biochem_anchors --stem comsol001
     python -m src.tools.inspect_biochem_data --phase biochem_anchors --stem vessel_001 --unit-audit
     python -m src.tools.inspect_biochem_data --phase biochem_anchors --stem vessel_001 --graph-summary
     python -m src.tools.inspect_biochem_data --phase biochem_anchors --stem vessel_001 --plot-domain
@@ -56,7 +56,7 @@ FIELD_COLUMNS = [
     "Mat",
 ]
 
-_PHASE_CHOICES = ("biochem", "biochem_anchors", "biochem_mix", "biochem_patients")
+_PHASE_CHOICES = ("biochem", "biochem_anchors", "biochem_mix", "biochem_anchors")
 U_CMAP = "jet"
 MU_CMAP = "viridis"
 

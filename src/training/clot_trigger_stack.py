@@ -425,7 +425,7 @@ def apply_star1_train_env(*, fast: bool = False) -> None:
     os.environ["CLOT_PHI_WEIGHT_DECAY"] = "1e-4"
     os.environ["CLOT_PHI_TIME_STRIDE"] = "2"
     os.environ["CLOT_PHI_TIME_STRIDE_AUTO"] = "1"
-    os.environ["CLOT_PHI_VAL_ANCHOR"] = "patient007"
+    os.environ["CLOT_PHI_VAL_ANCHOR"] = "comsol007"
     os.environ["CLOT_PHI_EPOCHS"] = "16" if fast else "48"
 
 

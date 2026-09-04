@@ -33,7 +33,7 @@ def test_cohort_levels_mixed_shuffle():
 
 
 def test_sample_params_level2_matches_the_deploy_shape_mix():
-    """L2 is the deployment class -- every biochem patient pack is level 2 -- so it is drawn
+    """L2 is the deployment class -- every biochem COMSOL anchor pack is level 2 -- so it is drawn
     like one rather than as a guaranteed-pathology extreme.  Both shares are configurable and
     both are checked, because the old contract (never straight, always diseased) put a hard
     floor of 1.42 under the L2 lumen ratio while 28% of deploy vessels sit below 1.15."""

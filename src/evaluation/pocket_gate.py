@@ -3,7 +3,7 @@
 docs/WALL_MODEL_PLAN.md s2 diagnosed the wall model's failure as pocket SELECTION, not
 growth: predicted connected components are pure, but the model commits to ~6x too many of
 them. s2.3 found each component's own min hop-2 wall-node speed separates true pockets
-from false ones (AUC 0.02 i.e. |sep| 0.96 on patient020; mechanism holds cross-vessel in
+from false ones (AUC 0.02 i.e. |sep| 0.96 on comsol020; mechanism holds cross-vessel in
 s2.5). This module is s4 Step 1: drop predicted components whose min hop-2 speed sits above
 a per-vessel percentile of that vessel's own wall-node hop-2 speed distribution.
 
@@ -77,7 +77,7 @@ def hop2_speed_field(data, device: torch.device, u: torch.Tensor, v: torch.Tenso
 # `resolve_species_rollout_uv`, which in deploy mode returns the **kinematics-predicted**
 # field -- and scripts/probe_regime_route.py measured that the RGP-DEQ predictor inflates
 # band_speed_q25 by a median 1.37x, worst (up to 9x) on exactly the slowest/most stagnant
-# vessels where it has a resolution floor (patient043 0.0031 -> 0.0283). Rank order survives
+# vessels where it has a resolution floor (comsol043 0.0031 -> 0.0283). Rank order survives
 # (Spearman +0.967), so the router still works -- but at the GT threshold it drops to 81.2%.
 # Refit on predicted flow: 0.0822 -> 93.8% (matching GT), leave-one-vessel-out 84.4%.
 DEFAULT_REGIME_BAND_SPEED_THRESH = 0.0822   # calibrated on PREDICTED (deploy) flow
@@ -185,7 +185,7 @@ def apply_pocket_gate(
         inverted = bool(np.isfinite(bq) and bq >= route_thresh)
         stats["deploy_regime_inverted"] = float(inverted)
         if inverted:
-            # Gate is net-harmful here (s2.7 patient037: F1 0.285 -> 0.172). Leave the
+            # Gate is net-harmful here (s2.7 comsol037: F1 0.285 -> 0.172). Leave the
             # prediction untouched rather than applying a rule built for the other regime.
             stats["deploy_pocket_gate_skipped_inverted"] = 1.0
             return phi_pred, stats

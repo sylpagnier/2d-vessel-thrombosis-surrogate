@@ -1,13 +1,13 @@
 """Near-field stall: committed solid thickens the no-slip; 1-corner-shell neighbours feel ``mu1``.
 
-WHY THIS EXISTS.  Hop-wake cannot open ``wound_patient003``'s blind owners even as a
+WHY THIS EXISTS.  Hop-wake cannot open ``wound_comsol003``'s blind owners even as a
 GT-oracle: they sit at ``sr = 118 /s`` against ``lss = 25``.  A hop disk of
 :data:`GELLED_SR_RATIO` is the on-node ``mu1`` step, not a far-field superposition.
 
 WHAT THE MEASUREMENTS SAY (``scripts/diag_stall_deploy_oracle.py``,
 ``scripts/diag_nonlocal_flow_gate.py``).  The GT gate that opens those blinds is the
 **B-branch only**.  Scaling ``dsrx`` is the wrong lever (it *closes* A-gates on
-``wound_patient001``: 63 ignitions -> 45).  A 1-hop stencil does not march -- newly
+``wound_comsol001``: 63 ignitions -> 45).  A 1-hop stencil does not march -- newly
 gelled hop-1 nodes do not pull hop-2 blinds over the truncated horizon.  ``STALL_HOPS = 2``
 is one corner shell on these quadratic meshes (PHASE7_FINDINGS 8).  Occupancy that waits
 for the wall ODE's ``Mat >= crit`` on the wound starves the kernel until the flash at
@@ -90,7 +90,7 @@ def make_near_stall_blockage(
         g = np.asarray(gate0, dtype=np.float64).copy()
 
         # The low-shear branch only.  Scaling `dsrx` by the same factor CLOSES separation
-        # gates rather than opening stagnation ones -- on `wound_patient001` it takes the
+        # gates rather than opening stagnation ones -- on `wound_comsol001` it takes the
         # ODE from 63 ignitions to 45 -- so `scale_dsrx` stays off by default and exists to
         # keep that negative result reproducible.
         dsrx = fields.dsrx * amp if scale_dsrx else fields.dsrx

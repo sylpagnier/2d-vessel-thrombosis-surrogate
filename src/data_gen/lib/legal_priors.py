@@ -226,8 +226,8 @@ def _lsq_gradient(f, pos, row, col, n, dev):
 #: the absolute 2.0 in ``graph_velocity_priors``.  The absolute cap was set because uncapped
 #: ``1/R`` reached ~8 ND on tight stenoses; but the vessels it clips are precisely the stenoses
 #: and wound packs the clot model exists to score.  Measured inlet-to-throat radius ratios:
-#: patient020 1.10, patient001 1.51, wound_patient001 3.50, patient041 4.55 -- and COMSOL's own
-#: peak on patient041 is 5.32 ND against the 2.0 clip, a 2.7x truncation of a real physical
+#: comsol020 1.10, comsol001 1.51, wound_comsol001 3.50, comsol041 4.55 -- and COMSOL's own
+#: peak on comsol041 is 5.32 ND against the 2.0 clip, a 2.7x truncation of a real physical
 #: acceleration.  A relative cap keeps the blow-up guard without deleting the signal.
 UMAX_CAP_X_INLET = 6.0
 

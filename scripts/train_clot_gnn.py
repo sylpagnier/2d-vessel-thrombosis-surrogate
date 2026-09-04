@@ -375,7 +375,7 @@ def train_one(train_anchors, cache, args, dev_t, seed=0):
 
             # --- 3.4(1): CONSTRAIN THE SHAPE, NOT THE COUNT --------------------------------
             # The invariant that breaks across vessels is the SCALE of the score field, not
-            # its burden: `patient032`'s off-wall GT sits at score 0.1156 while `patient014`'s
+            # its burden: `comsol032`'s off-wall GT sits at score 0.1156 while `comsol014`'s
             # no-GT tail reaches 0.8551, so one cohort cut cannot serve both (MODEL_REVIEW
             # 8f.2).  This penalises each vessel's within-domain logit SPREAD toward a running
             # cohort reference, and deliberately leaves the MEAN free -- constraining the mean

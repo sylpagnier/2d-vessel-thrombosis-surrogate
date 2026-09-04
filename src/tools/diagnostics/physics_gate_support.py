@@ -1,4 +1,4 @@
-﻿"""Does the COMSOL gate structure actually discriminate clot on OUR data?
+"""Does the COMSOL gate structure actually discriminate clot on OUR data?
 
 This is the empirical check the physics-mirroring Phase 3 plan rests on
 (docs/PHASE3_HANDOFF.md 1.4), and there is a real tension to resolve:
@@ -20,7 +20,7 @@ Measured per vessel, on wall-band nodes:
 
 Usage:
     python scripts/diag_physics_gate_support.py
-    python scripts/diag_physics_gate_support.py --anchors patient041,patient020
+    python scripts/diag_physics_gate_support.py --anchors comsol041,comsol020
 """
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         paths = [Path(f"data/processed/graphs_biochem_anchors/{a.strip()}.pt")
                  for a in args.anchors.split(",") if a.strip()]
     else:
-        paths = [Path(p) for p in sorted(glob.glob("data/processed/graphs_biochem_anchors/patient*.pt"))
+        paths = [Path(p) for p in sorted(glob.glob("data/processed/graphs_biochem_anchors/comsol*.pt"))
                  if "mirror" not in p]
 
     print(f"lss = {lss} 1/s   band = wall + {CEILING_HOPS} hops   commit = Mat > 10% of vessel peak\n")

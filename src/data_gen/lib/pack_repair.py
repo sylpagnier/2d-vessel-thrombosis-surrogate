@@ -1,7 +1,7 @@
 """Rebuild a pack's node features in place, faithfully to the extractor.
 
 The COMSOL exports behind `data/processed/graphs_biochem_anchors` are multi-GB and several
-are gone (all three `wound_patient*` runs), so a pack whose builder had a bug cannot simply
+are gone (all three `wound_comsol*` runs), so a pack whose builder had a bug cannot simply
 be re-extracted.  It has to be repaired on disk, and a repair is only trustworthy if it goes
 through **the same call the extractor uses** -- `build_kinematics_node_x_tensor` with
 `resolve_anchor_kine_phys_cfg`'s Carreau config -- changing exactly one input.
@@ -21,7 +21,7 @@ TWO THINGS EVERY CALLER MUST KNOW.
 
 **A full rebuild does NOT reproduce the stored packs**, and that is not this code's fault:
 the cohort was written by more than one extractor revision and they disagree about the
-*prior* channels.  On `patient020` a fresh build puts `wss_prior_nd` at ~45 at the wall where
+*prior* channels.  On `comsol020` a fresh build puts `wss_prior_nd` at ~45 at the wall where
 the pack has 0, and moves `u_prior` by 0.55 in the interior (WOUND_PROGRESS 8, last
 paragraph -- still unresolved).  So a repair must never write `rebuild_x`'s output wholesale;
 it writes either the affected *rows* or the *delta* against a pre-fix rebuild.

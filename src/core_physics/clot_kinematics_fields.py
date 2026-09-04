@@ -1,6 +1,6 @@
 """Raw kinematic fields and COMSOL-aligned clot-risk scoring.
 
-COMSOL wall clots on patient007 correlate with strong negative ``d(spf.sr,x)``
+COMSOL wall clots on comsol007 correlate with strong negative ``d(spf.sr,x)``
 (≈ −800 1/(m·s)). The legacy prior used streamwise ``dshear/ds`` with per-graph
 ``max`` normalisation, which flattened that signal on late-time anchors.
 

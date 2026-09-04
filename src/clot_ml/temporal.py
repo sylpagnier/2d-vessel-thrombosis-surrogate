@@ -176,14 +176,14 @@ def union_ungated_stall_series(data, bio_cfg, series: dict, times, *, flow: str 
     """OR t=0-ungated wall that the stall ODE ignites into an existing series.
 
     Measured on ``clot_gnn_v5w`` (GT t=0 flow, ``STALL_HOPS = 2``, wound acting as a ``Mat``
-    source): **+22 wall TP / 0 wall FP** on ``wound_patient003``, and a trickle of 8 nodes
-    (6 TP / 2 FP) on each of ``wound_patient001/002``, whose near-wound wall is already
+    source): **+22 wall TP / 0 wall FP** on ``wound_comsol003``, and a trickle of 8 nodes
+    (6 TP / 2 FP) on each of ``wound_comsol001/002``, whose near-wound wall is already
     gated.  Net wall deploy score +0.0246 / +0.0026 / +0.0060.
 
     Reached only through :func:`~src.clot_ml.locked.predict_temporal_v4_wound`, which
     short-circuits on ``has_wound``, so no cohort pack ever sees it -- the seeded stall is
     NOT inert on a no-wound pack (it fires on committed healthy wall too: 29 extra on
-    ``patient012``), it is simply unreachable there.
+    ``comsol012``), it is simply unreachable there.
 
     Does NOT add owner-basin lumen -- that is 450+ false positives on 003, and
     ``scripts/diag_wound_lumen_shell.py`` re-measured the whole shell family as losing even

@@ -44,7 +44,7 @@ LOCKED = REPO / "outputs/clot_ml/locked"
 POINTER = REPO / "data/reference/clot_gnn_locked.json"
 GRAPHS = REPO / "data/processed/graphs_biochem_anchors"
 WOUND_STEMS = WOUND_COHORT
-NOWOUND_CHECK = ("patient012", "patient020", "patient044")
+NOWOUND_CHECK = ("comsol012", "comsol020", "comsol044")
 DEFAULT_BASE = "clot_gnn_v5w"
 
 
@@ -102,7 +102,7 @@ def _assert_wound_is_covered(bundle: dict, flow: str = "gt") -> dict:
         cov = float(pred["mask"][w].mean()) if w.any() else float("nan")
         # Full wound coverage is required only where the wound branch's PREMISE holds: an
         # ungated patch inside a gated wall.  `wound_flow_regime` decides that from the t=0
-        # flow alone, and `wound_patient006` is the one vessel that fails it -- its wound
+        # flow alone, and `wound_comsol006` is the one vessel that fails it -- its wound
         # sits in a stagnation zone where 35% of the patch never clots in the ground truth
         # either, because species supply is limiting there.  Same rule as
         # `promote_clot_gnn_v4_wound.py`; see docs/DEPLOYCLOT.md 5b.
@@ -348,7 +348,7 @@ def main() -> int:
     print("[i] wound coverage gate")
     covered = _assert_wound_is_covered(bundle, args.flow)
 
-    # THE GATE RESULTS TRAVEL ON THE ARTIFACT, not just in a log.  `wound_patient006` passes
+    # THE GATE RESULTS TRAVEL ON THE ARTIFACT, not just in a log.  `wound_comsol006` passes
     # only because its wound is in the stagnation regime, and an artifact that records a
     # conditional pass as a bare pass is exactly the kind of silence this project's promotion
     # gates exist to prevent.  Written after the gates run, so a failure never reaches disk.

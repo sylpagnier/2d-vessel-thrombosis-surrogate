@@ -12,9 +12,9 @@ monotone union, via ``predict_clot_ml_0(..., mat_field=...)``.
 
 WHAT CHANGED SINCE THE 2026-08 RUN (docs/WOUND_PROGRESS.md 17), and why it is re-run:
 
-* **six wound vessels, not three.**  17.3's verdict was that ``wound_patient003`` is out of
+* **six wound vessels, not three.**  17.3's verdict was that ``wound_comsol003`` is out of
   distribution and the residual collapses onto the physics there.  That was measured with
-  ONE stagnation-regime wound in the corpus and it in the test set.  ``wound_patient004/005/
+  ONE stagnation-regime wound in the corpus and it in the test set.  ``wound_comsol004/005/
   006`` arrived 2026-09-02 and 006 is a second stagnation wound, so the claim is now testable
   rather than structural.
 * **deploy-legal flow.**  v6 was trained and scored on COMSOL's velocity field.  Everything
@@ -80,7 +80,7 @@ def cache_stems() -> list[str]:
 def train_stems(all_stems: list[str], holdout=()) -> list[str]:
     """Everything legal minus the holdout.
 
-    A holdout drops its MIRROR too (``patient005_mirror_y`` is the same vessel reflected), or
+    A holdout drops its MIRROR too (``comsol005_mirror_y`` is the same vessel reflected), or
     the "held-out" score would be read off a vessel the model trained on.
     """
     drop: set[str] = set()

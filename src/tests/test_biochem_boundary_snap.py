@@ -60,7 +60,7 @@ def test_mesh_snap_writes_volume_node_coords(tmp_path, monkeypatch):
 def test_boundary_snap_tol_scales_with_mesh_edge(monkeypatch):
     monkeypatch.delenv("BIOCHEM_BOUNDARY_SNAP_CM", raising=False)
     assert boundary_snap_tol_m(mesh_edge_scale_m=None) == pytest.approx(BOUNDARY_SNAP_FLOOR_M)
-    edge = 3.54e-4  # patient048 mesh_edge_scale_m
+    edge = 3.54e-4  # comsol048 mesh_edge_scale_m
     tol = boundary_snap_tol_m(mesh_edge_scale_m=edge)
     assert tol == pytest.approx(BOUNDARY_SNAP_EDGE_FRAC * edge)
     # 048 inlet d_max was 179 um; scaled tol must clear that and stay under the 1 mm unit floor.

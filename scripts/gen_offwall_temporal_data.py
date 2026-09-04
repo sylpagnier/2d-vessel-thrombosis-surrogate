@@ -49,11 +49,11 @@ from scripts.predict_wall_clot import (  # noqa: E402
 
 DIR = Path("data/processed/graphs_biochem_anchors")
 VESSELS = [
-    ("patient012", "gt"),
-    ("patient044", "gt"),
-    ("patient042", "gt"),
-    ("patient007", "pred"),
-    ("patient032", "pred"),
+    ("comsol012", "gt"),
+    ("comsol044", "gt"),
+    ("comsol042", "gt"),
+    ("comsol007", "pred"),
+    ("comsol032", "pred"),
 ]
 N_FRAMES = 13
 MAX_BG_POINTS = 1800

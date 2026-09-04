@@ -19,7 +19,7 @@ from src.core_physics.wall_ap_renewal import WallApRenewal, make_species_from_re
 
 # Find a sample pack for realistic geometry (we need edge_index and positions for upwind)
 PACK_DIR = REPO / "data/processed/graphs_biochem_anchors"
-SAMPLE_PACK_PATH = PACK_DIR / "patient020.pt"
+SAMPLE_PACK_PATH = PACK_DIR / "comsol020.pt"
 
 @pytest.fixture(scope="module")
 def sample_pack():

@@ -457,7 +457,7 @@ def _plot_band_panels(fig, plot_i, args, pos, m, idx, phi_gt, phi_pr, mu_gt, mu_
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Viz clot_phi_simple model")
-    parser.add_argument("--anchor", default="patient007", help="Anchor stem (default patient007)")
+    parser.add_argument("--anchor", default="comsol007", help="Anchor stem (default comsol007)")
     parser.add_argument(
         "--checkpoint",
         default="outputs/biochem/clot_phi_best.pth",

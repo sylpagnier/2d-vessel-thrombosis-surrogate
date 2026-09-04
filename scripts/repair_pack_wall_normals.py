@@ -27,7 +27,7 @@ WHAT THIS INVALIDATES, deliberately and with the decision recorded:
 THE WRITE IS A DELTA, NOT A REBUILD -- and that is load-bearing.  A wholesale `rebuild_x`
 does not reproduce the stored packs, for a reason that has nothing to do with this fix: the
 cohort was extracted by two different builder revisions and they disagree about the *prior*
-channels.  On `patient020` a fresh build puts `wss_prior_nd` at ~45 at the wall where the
+channels.  On `comsol020` a fresh build puts `wss_prior_nd` at ~45 at the wall where the
 stored pack has 0, and moves `u_prior` by 0.55 in the interior (WOUND_PROGRESS 8, last
 paragraph).  Rewriting those would be a second, undecided change riding along on this one.
 
@@ -81,7 +81,7 @@ EXPECTED = ("wall_normal_x", "wall_normal_y",
 def pack_stems() -> list[str]:
     """Every pack this repair covers: the pool, SEALED, the clot-free set, and the wounds."""
     stems = list(FIT) + list(DEV) + list(SEALED) + list(CLOT_FREE)
-    stems += sorted(p.stem for p in PACKS.glob("wound_patient*.pt"))
+    stems += sorted(p.stem for p in PACKS.glob("wound_comsol*.pt"))
     seen, out = set(), []
     for s in stems:
         if s not in seen and (PACKS / f"{s}.pt").exists():

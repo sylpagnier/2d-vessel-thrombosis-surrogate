@@ -12,9 +12,9 @@ from pathlib import Path
 from src.utils.paths import get_project_root
 
 PRODUCTION_OUTPUT_DIR = Path("outputs/kinematics/production_allfix")
-CLINICAL_OUTPUT_DIR = Path("outputs/kinematics/clinical_anchor_finetune")
+COMSOL_OUTPUT_DIR = Path("outputs/kinematics/comsol_anchor_finetune")
 PROMOTED_BEST_PATH = Path("outputs/kinematics/kinematics_best.pth")
-CLINICAL_ANCHOR_DIR = Path("data/processed/graphs_kinematics_anchors/carreau")
+COMSOL_ANCHOR_DIR = Path("data/processed/graphs_kinematics_anchors/carreau")
 
 # Architecture toggles shared by production + finetune legs.
 ALLFIX_ARCH_ENV: dict[str, str] = {
@@ -37,11 +37,11 @@ def _abs(path: Path | str) -> Path:
     return p if p.is_absolute() else get_project_root() / p
 
 
-def has_clinical_anchor_packs() -> bool:
-    root = _abs(CLINICAL_ANCHOR_DIR)
+def has_comsol_anchor_packs() -> bool:
+    root = _abs(COMSOL_ANCHOR_DIR)
     if not root.is_dir():
         return False
-    return any(root.glob("patient*.pt"))
+    return any(root.glob("comsol*.pt"))
 
 
 def bind_env(updates: dict[str, str | None]) -> None:
@@ -135,34 +135,34 @@ class SyntheticPolishConfig:
 
 
 @dataclass
-class ClinicalFinetuneConfig:
-    """Phase 3: patient anchor finetune."""
+class ComsolFinetuneConfig:
+    """Phase 3: COMSOL anchor anchor finetune."""
 
     resume: Path = field(
         default_factory=lambda: _abs(PRODUCTION_OUTPUT_DIR / BEST_CKPT)
     )
-    holdout: str = "patient007"
+    holdout: str = "comsol007"
     finetune_epochs: int = 25
     finetune_lr: float = 5e-6
     synthetic_cap: int = 120
-    clinical_boost: float = 10.0
-    output_dir: Path = field(default_factory=lambda: _abs(CLINICAL_OUTPUT_DIR))
+    comsol_boost: float = 10.0
+    output_dir: Path = field(default_factory=lambda: _abs(COMSOL_OUTPUT_DIR))
 
     def bind_process_env(self) -> None:
         bind_allfix_arch()
         bind_env(
             {
                 "KINEMATICS_SKIP_LBFGS": "1",
-                "KINEMATICS_INCLUDE_PATIENT_ANCHORS": "1",
-                "KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS": self.holdout,
-                "KINEMATICS_CLINICAL_ANCHOR_BOOST": str(self.clinical_boost),
+                "KINEMATICS_INCLUDE_COMSOL_ANCHORS": "1",
+                "KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS": self.holdout,
+                "KINEMATICS_COMSOL_ANCHOR_BOOST": str(self.comsol_boost),
                 "KINEMATICS_OUTPUT_DIR": str(self.output_dir.as_posix()),
                 "KINEMATICS_GRAPH_CAP": str(self.synthetic_cap),
                 "KINEMATICS_SYNTHETIC_VAL_RATIO": "0.15",
                 "KINEMATICS_SYNTHETIC_VAL_MIN": "20",
                 "KINEMATICS_SYNTHETIC_VAL_MIN_L2": "6",
                 "KINEMATICS_DUAL_PROMOTION_GATES": "1",
-                "KINEMATICS_GATE_MAX_PATIENT_REL_L2": "0.25",
+                "KINEMATICS_GATE_MAX_COMSOL_REL_L2": "0.25",
                 "KINEMATICS_GATE_MAX_SYNTHETIC_REL_L2": "0.20",
                 "KINEMATICS_GATE_MAX_SYNTHETIC_L2_REL_L2": "0.22",
                 "KINEMATICS_QUIET": "1",
@@ -173,16 +173,16 @@ class ClinicalFinetuneConfig:
 
 @dataclass
 class LadderConfig:
-    """Full Stage-A ladder: foundation -> polish -> clinical -> promote."""
+    """Full Stage-A ladder: foundation -> polish -> comsol -> promote."""
 
     foundation: FoundationConfig = field(default_factory=FoundationConfig)
     polish: SyntheticPolishConfig = field(default_factory=SyntheticPolishConfig)
-    clinical: ClinicalFinetuneConfig = field(default_factory=ClinicalFinetuneConfig)
+    comsol: ComsolFinetuneConfig = field(default_factory=ComsolFinetuneConfig)
     skip_foundation: bool = False
     skip_synthetic_polish: bool = False
-    skip_clinical_anchors: bool = False
+    skip_comsol_anchors: bool = False
     skip_promote: bool = False
-    require_clinical: bool = False
+    require_comsol: bool = False
     resume_after_foundation: Path | None = None
 
 
@@ -198,9 +198,9 @@ __all__ = [
     "ALLFIX_ARCH_ENV",
     "BEST_CKPT",
     "CKPT_LATEST",
-    "CLINICAL_ANCHOR_DIR",
-    "CLINICAL_OUTPUT_DIR",
-    "ClinicalFinetuneConfig",
+    "COMSOL_ANCHOR_DIR",
+    "COMSOL_OUTPUT_DIR",
+    "ComsolFinetuneConfig",
     "FoundationConfig",
     "LadderConfig",
     "PRODUCTION_OUTPUT_DIR",
@@ -212,5 +212,5 @@ __all__ = [
     "bind_allfix_arch",
     "bind_env",
     "bind_quiet",
-    "has_clinical_anchor_packs",
+    "has_comsol_anchor_packs",
 ]

@@ -10,7 +10,7 @@ graph work — they dominate Drive time and are unused on the analysis laptop.
 On the COMSOL PC::
 
     python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --only-new
-    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --mesh-only --stem patient009,patient041
+    python -m src.tools.extract_biochem_comsol --pack-transfer --zip-transfer --mesh-only --stem comsol009,comsol041
 
 ``--mesh-only`` builds a small FEM mesh drop (``.nas``/``.msh`` + sidecar, no ``graph.pt``).
 

@@ -64,3 +64,41 @@ Thumbs.db
 
 # Build output (large binaries, never push)
 /dist/
+
+# AI-assistant / editor config and history-hygiene tooling (local only)
+AGENTS.md
+.cursorrules
+.cursorignore
+scripts/git-hooks/
+scripts/strip_ai_coauthor_history.ps1
+
+# Retired code eras (local only)
+src/archive/
+docs/archive/
+
+# One-off diagnostic probes; the supported surface is `python -m src.tools.diagnostics`
+scripts/diag_*.py
+scripts/diagnose_*.py
+
+# Internal research journals -- working logs, not documentation (local only)
+docs/BIOCHEM_LEGACY_LESSONS.md
+docs/DEPLOYCLOT.md
+docs/DEPLOY_FLOW_PLAN.md
+docs/GENERALIZATION_PLAN.md
+docs/KINE_ADJUSTMENTS.md
+docs/LOCAL_KINEMATIC_CORRECTOR.md
+docs/MAT_GROWTH.md
+docs/MODEL_REVIEW_2026-08-22.md
+docs/PHASE10_V4.md
+docs/PHASE3_HANDOFF.md
+docs/PHASE3_RESULTS.md
+docs/PHASE6_HANDOFF.md
+docs/PHASE6_RESULTS.md
+docs/PHASE7_FINDINGS.md
+docs/PHASE9_ML.md
+docs/PILOT_COHORT_RUNBOOK.md
+docs/PUBLICATION_NOTES.md
+docs/PUBLICATION_PLAN.md
+docs/RGP_DEQ_REPAIR_PLAN.md
+docs/WALL_MODEL_PLAN.md
+docs/WOUND_PROGRESS.md

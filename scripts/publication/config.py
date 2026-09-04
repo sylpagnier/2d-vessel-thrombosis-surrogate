@@ -22,10 +22,10 @@ class PubConfig:
     oof_set_masks: str = "outputs/v4_set_masks.npz"
 
     # Cohorts (all must appear in the OOF archive)
-    fig1_vessels: tuple = ("patient020", "patient005")
-    fig3_vessels: tuple = ("patient020", "patient005", "patient012", "patient041")
-    fig4_vessels: tuple = ("patient020", "patient005")
-    fig6_vessels: tuple = ("patient005", "patient014")
+    fig1_vessels: tuple = ("comsol020", "comsol005")
+    fig3_vessels: tuple = ("comsol020", "comsol005", "comsol012", "comsol041")
+    fig4_vessels: tuple = ("comsol020", "comsol005")
+    fig6_vessels: tuple = ("comsol005", "comsol014")
 
     # Research sweeps (outputs from scripts/run_research_sweep.py)
     research_sweep_root: Path = field(default_factory=lambda: REPO_ROOT / "outputs" / "research_sweeps")

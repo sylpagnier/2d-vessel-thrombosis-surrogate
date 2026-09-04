@@ -20,7 +20,7 @@ pack, where the union is a no-op, and reports the per-channel drift against what
 If that round-trips, the same code applied to a wound pack is trustworthy.
 
 Usage:
-    python scripts/repair_wound_pack_geometry.py --verify patient012
+    python scripts/repair_wound_pack_geometry.py --verify comsol012
     python scripts/repair_wound_pack_geometry.py --dry-run
     python scripts/repair_wound_pack_geometry.py
 """

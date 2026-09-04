@@ -2,7 +2,7 @@
 
 The wall model reproduces the final committed set at deploy score 0.79/0.91 with zero
 learned parameters, but ``scripts/diag_ignition_timing.py`` showed the trajectory behind
-that mask is wrong: on patient043 all 84 nodes cross the threshold in the SAME step
+that mask is wrong: on comsol043 all 84 nodes cross the threshold in the SAME step
 (onset spread 0.000 of the horizon against GT's 0.725), because its gate is 100%
 low-shear, ``gate == 1`` uniformly, and every node then has an identical ODE.
 

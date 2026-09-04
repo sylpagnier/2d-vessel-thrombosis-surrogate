@@ -98,7 +98,7 @@ def test_the_wound_patch_is_almost_all_gt_clot_but_006_is_not():
     """The other half of the A3 justification (WOUND_PROGRESS 13), as MEASURED at n=6.
 
     This asserted `frac == 1.0` on every wound, which was true of the three that existed when
-    it was written.  `wound_patient004/005/006` arrived 2026-09-02 and **006 is 70.2% -- 73 of
+    it was written.  `wound_comsol004/005/006` arrived 2026-09-02 and **006 is 70.2% -- 73 of
     104 wound nodes clot, not all of them.**  It also carries the lowest wound `Mat` in the
     cohort (median 4.77x crit against 8.0-103.8x on the other five), the same marginality that
     makes it the one stagnation-regime wound.
@@ -110,7 +110,7 @@ def test_the_wound_patch_is_almost_all_gt_clot_but_006_is_not():
     100%" as accuracy: on 006 committing the whole patch is ~30% false positives and the gate
     still reports a pass.  See docs/DEPLOYCLOT.md 28.
     """
-    packs = sorted(PACKS.glob("wound_patient*.pt"))
+    packs = sorted(PACKS.glob("wound_comsol*.pt"))
     if not packs:
         pytest.skip("no wound packs on disk")
     fracs = {}
@@ -129,7 +129,7 @@ def test_the_wound_patch_is_almost_all_gt_clot_but_006_is_not():
             % (stem, 100 * frac))
 
     partial = sorted(k for k, v in fracs.items() if v < 1.0)
-    assert set(partial) <= {"wound_patient006"}, (
+    assert set(partial) <= {"wound_comsol006"}, (
         "a wound other than 006 is no longer fully clotted: %s.  If a NEW wound is partial, "
         "the 'coverage 100%%' promotion gate is over-reporting on it too." % partial)
     assert sum(1 for v in fracs.values() if v == 1.0) >= 5

@@ -1,5 +1,5 @@
 [project]
-name = "thrombus-ml-model"
+name = "local-fem-solver"
 version = "0.1.0"
 description = "Vessel clot forecasting: research training/eval stack + the customer Predict UX."
 requires-python = ">=3.11"

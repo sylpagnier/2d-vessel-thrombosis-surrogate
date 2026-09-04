@@ -22,21 +22,21 @@ from scripts.publication.config import CONFIG, DATA_DIR, FIG_DIR  # noqa: E402
 from scripts.publication.utils import setup_matplotlib_style  # noqa: E402
 
 VESSEL_COLORS = {
-    "patient005": "#c44e52",
-    "patient012": "#4c72b0",
-    "patient020": "#55a868",
-    "patient041": "#8172b2",
-    "patient014": "#dd8452",
+    "comsol005": "#c44e52",
+    "comsol012": "#4c72b0",
+    "comsol020": "#55a868",
+    "comsol041": "#8172b2",
+    "comsol014": "#dd8452",
 }
 
 # (vessel, metric, label, xy(time, score), xytext-offset) -- exact values read off
 # fig34_metrics.csv / fig6_metrics.csv, not eyeballed off the rendered figure.
 CALLOUTS = [
-    dict(vessel="patient014", metric="wall", t=40, note="single-frame collapse to 0.0 at "
+    dict(vessel="comsol014", metric="wall", t=40, note="single-frame collapse to 0.0 at "
          "t=40,\nfully recovers to 0.98 by t=100", dx=20, dy=0.32),
-    dict(vessel="patient020", metric="off", t=160, note="off-wall dips to 0.14 near t=160,\n"
+    dict(vessel="comsol020", metric="off", t=160, note="off-wall dips to 0.14 near t=160,\n"
          "recovers to 0.53 by t=200", dx=-100, dy=0.30),
-    dict(vessel="patient014", metric="off", t=200, note="off-wall keeps declining to 0.07 --\n"
+    dict(vessel="comsol014", metric="off", t=200, note="off-wall keeps declining to 0.07 --\n"
          "no recovery within the horizon", dx=-135, dy=0.22),
 ]
 

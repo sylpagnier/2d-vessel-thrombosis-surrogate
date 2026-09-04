@@ -57,7 +57,7 @@ from src.utils.kinematics_geometry import (
     count_anchor_physics,
     geometry_sample_weight,
     split_anchor_physics_stratified,
-    split_clinical_anchor_train_val,
+    split_comsol_anchor_train_val,
     train_pool_for_epoch,
     warn_if_single_level_cohort,
 )
@@ -87,15 +87,15 @@ def resolve_kinematics_train_val_split(
     seed: int = 42,
     train_ratio: float = 0.9,
 ):
-    """Clinical holdout split when patient anchors merged; else stratified default."""
-    use_clinical = os.environ.get("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "").strip().lower() in (
+    """COMSOL holdout split when COMSOL anchor anchors merged; else stratified default."""
+    use_comsol = os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip().lower() in (
         "1",
         "true",
         "yes",
         "on",
     )
-    if use_clinical and any(getattr(d, "is_clinical_anchor", False) for d in dataset):
-        return split_clinical_anchor_train_val(dataset, seed=seed, train_ratio=train_ratio)
+    if use_comsol and any(getattr(d, "is_comsol_anchor", False) for d in dataset):
+        return split_comsol_anchor_train_val(dataset, seed=seed, train_ratio=train_ratio)
     if geometry_enabled:
         return split_anchor_physics_stratified(dataset, seed=seed, train_ratio=train_ratio)
     return split_anchor_physics(dataset, seed=seed, train_ratio=train_ratio)
@@ -108,7 +108,7 @@ def _mean_rel_l2_on_graphs(
     device,
     *,
     stems: set[str] | None = None,
-    clinical_only: bool = False,
+    comsol_only: bool = False,
     synthetic_only: bool = False,
     geometry_levels: set[int] | None = None,
 ):
@@ -120,10 +120,10 @@ def _mean_rel_l2_on_graphs(
     subset = graphs
     if stems is not None:
         subset = [d for d in subset if getattr(d, "graph_stem", "") in stems]
-    if clinical_only:
-        subset = [d for d in subset if getattr(d, "is_clinical_anchor", False)]
+    if comsol_only:
+        subset = [d for d in subset if getattr(d, "is_comsol_anchor", False)]
     if synthetic_only:
-        subset = [d for d in subset if not getattr(d, "is_clinical_anchor", False)]
+        subset = [d for d in subset if not getattr(d, "is_comsol_anchor", False)]
     if geometry_levels is not None:
         subset = [
             d for d in subset if graph_geometry_level(d, default=-1) in geometry_levels
@@ -155,7 +155,7 @@ def _kinematics_promotion_gate_limits() -> dict[str, float]:
             return float(default)
 
     return {
-        "max_patient": _f("KINEMATICS_GATE_MAX_PATIENT_REL_L2", 0.25),
+        "max_comsol": _f("KINEMATICS_GATE_MAX_COMSOL_REL_L2", 0.25),
         "max_synthetic": _f("KINEMATICS_GATE_MAX_SYNTHETIC_REL_L2", 0.20),
         "max_synthetic_l2": _f("KINEMATICS_GATE_MAX_SYNTHETIC_L2_REL_L2", 0.22),
     }
@@ -287,8 +287,8 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
 
 def _kinematics_promotion_gates_pass(
     *,
-    patient_rel: float,
-    patient_n: int,
+    comsol_rel: float,
+    comsol_n: int,
     synthetic_rel: float,
     synthetic_n: int,
     synthetic_l2_rel: float,
@@ -297,10 +297,10 @@ def _kinematics_promotion_gates_pass(
     gate_jaccard: float = float("nan"),
 ) -> tuple[bool, dict[str, bool]]:
     limits = _kinematics_promotion_gate_limits()
-    patient_ok = (
-        patient_n > 0
-        and math.isfinite(patient_rel)
-        and patient_rel <= limits["max_patient"]
+    comsol_ok = (
+        comsol_n > 0
+        and math.isfinite(comsol_rel)
+        and comsol_rel <= limits["max_comsol"]
     )
     synth_ok = (
         synthetic_n > 0
@@ -317,8 +317,8 @@ def _kinematics_promotion_gates_pass(
     # rather than passes, so a missing metric never looks like a passing one.
     import os as _os
 
-    bits = {"patient": patient_ok, "synthetic": synth_ok, "synthetic_l2": synth_l2_ok}
-    ok = patient_ok and synth_ok and synth_l2_ok
+    bits = {"comsol_anchor": comsol_ok, "synthetic": synth_ok, "synthetic_l2": synth_l2_ok}
+    ok = comsol_ok and synth_ok and synth_l2_ok
 
     min_corr = _os.environ.get("KINEMATICS_MIN_DSRX_CORR", "").strip()
     if min_corr:
@@ -501,29 +501,29 @@ def load_dataset(
             print("[kin] WARN KINEMATICS_TRAIN_ON_DEPLOY_PACKS=1 but no usable deploy packs "
                   "were found; training on synthetic vessels ONLY.")
 
-    if os.environ.get("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "").strip() in ("1", "true", "yes"):
-        from src.utils.kinematics_paths import load_patient_kine_anchor_graphs
+    if os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip() in ("1", "true", "yes"):
+        from src.utils.kinematics_paths import load_comsol_kine_anchor_graphs
 
-        patient_graphs = load_patient_kine_anchor_graphs(
+        comsol_anchor_graphs = load_comsol_kine_anchor_graphs(
             rheology=rheology or "carreau",
             attach_geometry=attach_geometry,
         )
-        if patient_graphs:
+        if comsol_anchor_graphs:
             existing = {getattr(d, "graph_stem", "") for d in dataset}
-            added = [g for g in patient_graphs if getattr(g, "graph_stem", "") not in existing]
+            added = [g for g in comsol_anchor_graphs if getattr(g, "graph_stem", "") not in existing]
             dataset.extend(added)
             print(
-                f"[kin] Merged {len(added)} clinical patient kine anchors "
-                f"(KINEMATICS_INCLUDE_PATIENT_ANCHORS=1)."
+                f"[kin] Merged {len(added)} comsol COMSOL anchor kine anchors "
+                f"(KINEMATICS_INCLUDE_COMSOL_ANCHORS=1)."
             )
         else:
             # Asked for explicitly and silently absent is the worst combination: the run looks
-            # configured for clinical anchors and trains without a single one.
+            # configured for comsol anchors and trains without a single one.
             from src.utils.kinematics_paths import kinematics_anchor_graph_dir
 
             _anchor_dir = kinematics_anchor_graph_dir(rheology=rheology or "carreau")
             print(
-                f"[kin] WARN KINEMATICS_INCLUDE_PATIENT_ANCHORS=1 but NO clinical kine anchors "
+                f"[kin] WARN KINEMATICS_INCLUDE_COMSOL_ANCHORS=1 but NO comsol kine anchors "
                 f"were found under {_anchor_dir}"
             )
             print(
@@ -611,8 +611,8 @@ def _subsample_prepared(dataset):
 
     # Deploy packs are few and are the only graphs in the deployment regime; a subsample meant
     # to trade SYNTHETIC cohort size for turnaround must not thin them out.
-    keep_always = [d for d in dataset if getattr(d, "is_clinical_anchor", False)]
-    dataset = [d for d in dataset if not getattr(d, "is_clinical_anchor", False)]
+    keep_always = [d for d in dataset if getattr(d, "is_comsol_anchor", False)]
+    dataset = [d for d in dataset if not getattr(d, "is_comsol_anchor", False)]
     n = max(1, n - len(keep_always))
     if n >= len(dataset):
         return keep_always + dataset
@@ -736,7 +736,7 @@ def _elevate_dataset_to_p2(dataset):
     Interpolated mid-side labels cost 0.2-2.2% mean relative error against a true P2 solution,
     an order of magnitude under the model's own ~15-20%, so no new CFD is required.
 
-    Off by default: an unset environment reproduces historical runs exactly.  The clinical
+    Off by default: an unset environment reproduces historical runs exactly.  The comsol
     anchors are already P2 and are skipped.
     """
     import os as _os
@@ -768,7 +768,7 @@ def _elevate_dataset_to_p2(dataset):
         d = src.pop()
         try:
             already, _ = identify_midside_nodes(d)
-            if bool(already.any()):     # clinical anchors are native P2
+            if bool(already.any()):     # comsol anchors are native P2
                 out.append(d)
                 continue
             out.append(elevate_to_p2(d, keep_wls=keep_wls))
@@ -791,7 +791,7 @@ def _apply_prior_source_to_dataset(dataset):
 
     The RGP-DEQ consumes ``x[:, UV_PRIOR|MU_PRIOR]`` three times over -- encoder input, the
     ``z_prior_proj`` warm start, and the hard BC ``u = uv_prior + sdf * uvp`` -- and on the
-    clinical anchor packs those columns are bit-identical to COMSOL's ``t=0`` velocity on 43 of
+    comsol anchor packs those columns are bit-identical to COMSOL's ``t=0`` velocity on 43 of
     43 vessels.  Training against them teaches a near-identity map that no deploy-time input
     can reproduce.  ``legal_priors`` has existed to fix this since the s17 Z2 decision; nothing
     ever called it from here.
@@ -1435,13 +1435,13 @@ def train_kinematics(
         if n_anchors > 0 and n_physics > 0:
             w_anchor = 0.5 / n_anchors
             w_phys = 0.5 / n_physics
-            clinical_boost = float(os.environ.get("KINEMATICS_CLINICAL_ANCHOR_BOOST", "1.0"))
+            comsol_boost = float(os.environ.get("KINEMATICS_COMSOL_ANCHOR_BOOST", "1.0"))
             weights = []
             for d in data_split:
                 geo = geometry_sample_weight(d, level_weights) if geometry_cfg.enabled else 1.0
                 if graph_has_anchor(d):
                     gkey = int(getattr(d, "config_id", 0))
-                    boost = clinical_boost if getattr(d, "is_clinical_anchor", False) else 1.0
+                    boost = comsol_boost if getattr(d, "is_comsol_anchor", False) else 1.0
                     weights.append(w_anchor * geo * hard_anchor_multiplier.get(gkey, 1.0) * boost)
                 else:
                     weights.append(w_phys * geo)
@@ -1870,8 +1870,8 @@ def train_kinematics(
                 if val is not None and val == val:
                     level_bits.append(f"L{lvl}={float(val):.3f}")
             level_msg = f" | {' '.join(level_bits)}" if level_bits else ""
-            holdout_raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", "").strip()
-            patient_msg = ""
+            holdout_raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS", "").strip()
+            comsol_msg = ""
             p_rel, p_n = float("nan"), 0
             s_rel, s_n = float("nan"), 0
             s_l2_rel, s_l2_n = float("nan"), 0
@@ -1883,7 +1883,7 @@ def train_kinematics(
             sel_where = "none"
             # RGP_DEQ_REPAIR_PLAN.md s10.3.  Selection runs on EVERY validation, on real
             # deployment packs when they are present.  It used to be gated behind
-            # `KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS` AND clinical steady-kine sidecars that do
+            # `KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS` AND comsol steady-kine sidecars that do
             # not exist on this cohort -- so the block never ran and promotion silently fell
             # back to `rel_l2 + 100*continuity`, which s10.3 measured as not predicting the
             # clot outcome.  Synthetic val is the fallback, never the silent default.
@@ -1900,13 +1900,13 @@ def train_kinematics(
             sel_ceil = sel["gate_jaccard_ceiling"]
             sel_frac = sel["gate_jaccard_frac"]
             sel_n = int(sel["n"])
-            if holdout_raw and os.environ.get("KINEMATICS_INCLUDE_PATIENT_ANCHORS", "").strip():
+            if holdout_raw and os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip():
                 holdout = {s.strip() for s in holdout_raw.split(",") if s.strip()}
                 p_rel, p_n = _mean_rel_l2_on_graphs(
                     model, val_data, kernels, device, stems=holdout
                 )
                 if p_n > 0 and math.isfinite(p_rel):
-                    patient_msg = f" | patient_holdout_rel_L2={p_rel:.3f} (n={p_n})"
+                    comsol_msg = f" | comsol_holdout_rel_L2={p_rel:.3f} (n={p_n})"
                 if dual_gates:
                     s_rel, s_n = _mean_rel_l2_on_graphs(
                         model, val_data, kernels, device, synthetic_only=True
@@ -1920,15 +1920,15 @@ def train_kinematics(
                         geometry_levels={2},
                     )
                     if s_n > 0 and math.isfinite(s_rel):
-                        patient_msg += (
+                        comsol_msg += (
                             f" | synthetic_val_rel_L2={s_rel:.3f} (n={s_n})"
                         )
                     if s_l2_n > 0 and math.isfinite(s_l2_rel):
-                        patient_msg += (
+                        comsol_msg += (
                             f" | synthetic_L2_val_rel_L2={s_l2_rel:.3f} (n={s_l2_n})"
                         )
             if sel_n > 0 and (math.isfinite(sel_corr) or math.isfinite(sel_jac)):
-                patient_msg += (
+                comsol_msg += (
                     f" | SELECT[{sel_where}] dsrx_corr={sel_corr:.3f} gate_J={sel_jac:.3f} "
                     f"ceil={sel_ceil:.3f} (n={sel_n})"
                 )
@@ -1947,7 +1947,7 @@ def train_kinematics(
                 print(
                     f"[kin] ep{epoch:<4d} SELECT {sel_txt} | trainL2={train_rel:.3f} "
                     f"relL2={rel_l2:.4f} "
-                    f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{patient_msg}{shear_msg}"
+                    f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{comsol_msg}{shear_msg}"
                 )
                 # The REAL metric, not a proxy.  Measured against 33 vessels of actual deploy
                 # F1, every Stage-A diagnostic is weak or unrelated (gate Jaccard +0.613 is the
@@ -1960,7 +1960,7 @@ def train_kinematics(
                     _dp = deploy_f1_probe(model, device)
                     if _dp:
                         _per = " ".join(f"{k[-3:]}={v:.3f}" for k, v in _dp.items()
-                                        if k.startswith("patient") and not k.endswith("/off"))
+                                        if k.startswith("comsol") and not k.endswith("/off"))
                         print(f"[kin] ep{epoch:<4d} DEPLOY-F1 "
                               f"wall={_dp.get('mean_wall', float('nan')):.3f}"
                               f"({_dp.get('wall_drop', float('nan')):+.3f}) "
@@ -2006,8 +2006,8 @@ def train_kinematics(
                 )
                 if dual_gates:
                     gates_ok, gate_bits = _kinematics_promotion_gates_pass(
-                        patient_rel=p_rel,
-                        patient_n=p_n,
+                        comsol_rel=p_rel,
+                        comsol_n=p_n,
                         synthetic_rel=s_rel,
                         synthetic_n=s_n,
                         synthetic_l2_rel=s_l2_rel,
@@ -2083,8 +2083,8 @@ def train_kinematics(
                     lvl_val = scores.get(key)
                     if lvl_val is not None and lvl_val == lvl_val:
                         val_record[key] = float(lvl_val)
-                if patient_msg:
-                    val_record["patient_holdout_rel_l2"] = float(p_rel)
+                if comsol_msg:
+                    val_record["comsol_holdout_rel_l2"] = float(p_rel)
                 if sel_n > 0:
                     val_record["select_on"] = sel_where
                     val_record["select_n"] = int(sel_n)
@@ -2097,7 +2097,7 @@ def train_kinematics(
                         k: {kk: float(vv) for kk, vv in v.items()}
                         for k, v in sel.get("per_vessel", {}).items()
                     }
-                    val_record["patient_holdout_n"] = int(p_n)
+                    val_record["comsol_holdout_n"] = int(p_n)
                 if dual_gates and s_n > 0:
                     val_record["synthetic_val_rel_l2"] = float(s_rel)
                     val_record["synthetic_val_n"] = int(s_n)

@@ -10,113 +10,113 @@ from __future__ import annotations
 
 # 2026-08-22: VIZ_HALF released from SEALED into TRAIN (docs/SEALED_SPLIT.md).
 WALL_COHORT_V2_VIZ_RELEASED: tuple[str, ...] = (
-    "patient001",
-    "patient010",
-    "patient014",
-    "patient042",
+    "comsol001",
+    "comsol010",
+    "comsol014",
+    "comsol042",
 )
 
-#: 2026-09-02: the final synthetic corpus landed -- `patient045`-`patient048` (full horizon,
-#: clot-carrying) and `patient038` (full horizon, empty GT).  `patient047` is the SECOND
+#: 2026-09-02: the final synthetic corpus landed -- `comsol045`-`comsol048` (full horizon,
+#: clot-carrying) and `comsol038` (full horizon, empty GT).  `comsol047` is the SECOND
 #: non-SEALED aneurysm, which is what `src/clot_ml/geometry_splits.py` says the protocol was
 #: missing: with one, no split could train on an aneurysm and measure a different one.
-#: `patient048` is the no-wound half of the matched A/B pair whose wound half is
-#: `wound_patient005` -- same outline to 0.0000 median wall-node distance, remeshed.
+#: `comsol048` is the no-wound half of the matched A/B pair whose wound half is
+#: `wound_comsol005` -- same outline to 0.0000 median wall-node distance, remeshed.
 WALL_COHORT_V3_ADDED: tuple[str, ...] = (
-    "patient045",
-    "patient046",
-    "patient047",
-    "patient048",
+    "comsol045",
+    "comsol046",
+    "comsol047",
+    "comsol048",
 )
 
 #: The paired counterfactual: identical vessel outline, wound and no-wound.  Held for the
-#: A/B read; both halves are scored by the fold model that held `patient048` out, and no
+#: A/B read; both halves are scored by the fold model that held `comsol048` out, and no
 #: wound pack is ever in the GNN training pool, so neither half is in-sample.
-WOUND_AB_PAIR: tuple[str, str] = ("wound_patient005", "patient048")
+WOUND_AB_PAIR: tuple[str, str] = ("wound_comsol005", "comsol048")
 
 #: Every wound simulation, in run order.  T < `wall_cohort_splits.MIN_T` on all six, so they
 #: are NOT in the GNN training pool -- a truncated horizon is a different label quantity
 #: (docs/PHASE6_RESULTS.md 6.2).  They fit the wound complement (leave-one-vessel-out) and
 #: they are the unified artifact's held-out wound evaluation.
 WOUND_COHORT: tuple[str, ...] = (
-    "wound_patient001",
-    "wound_patient002",
-    "wound_patient003",
-    "wound_patient004",
-    "wound_patient005",
-    "wound_patient006",
+    "wound_comsol001",
+    "wound_comsol002",
+    "wound_comsol003",
+    "wound_comsol004",
+    "wound_comsol005",
+    "wound_comsol006",
 )
 
 WALL_COHORT_V2_TRAIN: tuple[str, ...] = (
-    "patient003",
-    "patient004",
-    "patient005",
-    "patient006",
-    "patient008",
-    "patient009",
-    "patient011",
-    "patient012",
-    "patient015",
-    "patient016",
-    "patient018",
-    "patient019",
-    "patient020",
-    "patient021",
-    "patient024",
-    "patient025",
-    "patient028",
-    "patient029",
-    "patient032",
-    "patient035",
-    "patient036",
-    "patient037",
-    "patient039",
-    "patient040",
-    "patient041",
-    "patient044",
+    "comsol003",
+    "comsol004",
+    "comsol005",
+    "comsol006",
+    "comsol008",
+    "comsol009",
+    "comsol011",
+    "comsol012",
+    "comsol015",
+    "comsol016",
+    "comsol018",
+    "comsol019",
+    "comsol020",
+    "comsol021",
+    "comsol024",
+    "comsol025",
+    "comsol028",
+    "comsol029",
+    "comsol032",
+    "comsol035",
+    "comsol036",
+    "comsol037",
+    "comsol039",
+    "comsol040",
+    "comsol041",
+    "comsol044",
 ) + WALL_COHORT_V2_VIZ_RELEASED + WALL_COHORT_V3_ADDED
 
 # FINAL_HALF only since 2026-08-22.
 WALL_COHORT_V2_GENERALIZATION: tuple[str, ...] = (
-    "patient007",
-    "patient013",
-    "patient031",
-    "patient043",
+    "comsol007",
+    "comsol013",
+    "comsol031",
+    "comsol043",
 )
 
 WALL_COHORT_V2_SEALED_PRE_20260822: tuple[str, ...] = (
-    "patient001",
-    "patient007",
-    "patient010",
-    "patient013",
-    "patient014",
-    "patient031",
-    "patient042",
-    "patient043",
+    "comsol001",
+    "comsol007",
+    "comsol010",
+    "comsol013",
+    "comsol014",
+    "comsol031",
+    "comsol042",
+    "comsol043",
 )
 
 WALL_COHORT_V2_CLOT_FREE: tuple[str, ...] = (
-    "patient017",
-    "patient022",
-    "patient023",
-    "patient026",
-    "patient027",
-    "patient030",
-    "patient033",
-    "patient034",
-    "patient038",
+    "comsol017",
+    "comsol022",
+    "comsol023",
+    "comsol026",
+    "comsol027",
+    "comsol030",
+    "comsol033",
+    "comsol034",
+    "comsol038",
 )
 
 WALL_COHORT_V2_DEV: tuple[str, ...] = (
-    "patient039",
-    "patient040",
-    "patient041",
-    "patient042",
-    "patient043",
-    "patient044",
+    "comsol039",
+    "comsol040",
+    "comsol041",
+    "comsol042",
+    "comsol043",
+    "comsol044",
 )
 
-WALL_COHORT_V2_DEV_HOLDOUT: tuple[str, ...] = ("patient043",)
+WALL_COHORT_V2_DEV_HOLDOUT: tuple[str, ...] = ("comsol043",)
 
 WALL_COHORT_V2_DEV_TRAIN: tuple[str, ...] = tuple(
     n for n in WALL_COHORT_V2_DEV if n not in WALL_COHORT_V2_DEV_HOLDOUT

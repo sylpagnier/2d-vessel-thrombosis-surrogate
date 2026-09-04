@@ -1,4 +1,4 @@
-﻿"""Reproduce docs/WOUND_PROGRESS.md ┬º14 -- why `wound_patient003` misses its wound-region clot.
+"""Reproduce docs/WOUND_PROGRESS.md §14 -- why `wound_comsol003` misses its wound-region clot.
 
 Four blocks, in the order the argument runs:
 
@@ -7,7 +7,7 @@ Four blocks, in the order the argument runs:
   owners    who owns the missed lumen nodes -- the wound, or healthy wall the ODE never
             ignites.
   gate      the near-wound wall gate under the t=0 field AND under the GT flow oracle at
-            every step.  This is what rules out the WOUND_PROGRESS ┬º11 neighbour trigger:
+            every step.  This is what rules out the WOUND_PROGRESS §11 neighbour trigger:
             a gate already at 1.0 has nothing left to open.
   species   GT AP amplification across the whole cohort, and the falsification of the one
             vessel-level selector the code nominates (`wall_gate_frac_vessel`).
@@ -48,7 +48,7 @@ from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 
 PACKS = biochem_packs_dir()
 LOVO = repo_root() / "outputs/clot_ml/wound_rate/lovo.json"
-STEM = "wound_patient003"
+STEM = "wound_comsol003"
 
 
 def gt_mat(data, bio):
@@ -157,7 +157,7 @@ def block_species(bio):
     print("\n--- SPECIES (and the falsification of the only vessel-level selector) ---")
     pool = json.loads(
         (repo_root() / "outputs/clot_ml/locked/clot_gnn_v5/manifest.json").read_text())
-    stems = ["wound_patient001", "wound_patient002", "wound_patient003"] + [
+    stems = ["wound_comsol001", "wound_comsol002", "wound_comsol003"] + [
         s for s in pool["training_pool"] if (PACKS / f"{s}.pt").exists()]
     rows = []
     for stem in stems:
@@ -177,7 +177,7 @@ def block_species(bio):
         tag = "   <-- WOUND" if stem.startswith("wound") else ""
         print(f"   {stem:22s} {gf:10.3f} {md:11.3f} {p9:11.3f}{tag}")
     hi = [r for r in rows if not r[0].startswith("wound") and r[1] >= 0.30]
-    print("   cohort vessels as gated as wound_patient003 (0.352): "
+    print("   cohort vessels as gated as wound_comsol003 (0.352): "
           + ", ".join(f"{r[0]} ({r[1]:.3f}, AP amp {r[2]:.3f})" for r in hi))
     print("   -> `wall_gate_frac_vessel` does NOT predict activation.  Selector falsified.")
 

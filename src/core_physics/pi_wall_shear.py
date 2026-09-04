@@ -14,7 +14,7 @@ rather than unlikely:
   training distribution (`corrector-is-delta-mu-blind`).  Here `A(dmu)` is analytic and
   anchored on a measured constant, so no amount of bad data can flatten it.
 * **The flux term is the input every existing operator lacks.**  FEM shows `sr/sr0` RISING
-  with occlusion in 5 of 5 vessels and exceeding 1.0 on patient008 -- viscous shielding at low
+  with occlusion in 5 of 5 vessels and exceeding 1.0 on comsol008 -- viscous shielding at low
   occlusion, flux-redistribution acceleration at high (`clot-shear-map-is-non-monotone`).  A
   function of `dmu` alone is ANTI-correlated with truth (-0.374); adding `(h0/h)^p` at the
   textbook exponent flips that to +0.554 (+0.677 in log).  That measurement is what fixes the

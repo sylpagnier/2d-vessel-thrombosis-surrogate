@@ -1,4 +1,4 @@
-﻿"""Predict the wall clot map for a vessel. Entry point for the Phase-3 physics model.
+"""Predict the wall clot map for a vessel. Entry point for the Phase-3 physics model.
 
 Deploy-legal inputs only: node positions, mesh connectivity, ``u_ref``/``d_bar``, the
 initial/boundary conditions, and a t=0 velocity field.
@@ -9,7 +9,7 @@ initial/boundary conditions, and a t=0 velocity field.
 Zero learned parameters.  The three scalars below were fit on WALL_COHORT_V2_TRAIN;
 see docs/PHASE3_RESULTS.md.
 
-    python scripts/predict_wall_clot.py --anchor patient043 --flow pred
+    python scripts/predict_wall_clot.py --anchor comsol043 --flow pred
     python scripts/predict_wall_clot.py --pack path/to/vessel.pt --flow pred --save out.npz
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ RELAX = 2.0
 # GROW_HOPS 6 -> 20 on 2026-08-16.  The wall mask is the t=0 gate plus shear-admitted
 # graph growth; every wall false negative is a CLOSED t=0 gate (19.3% of GT), and of those
 # 181/339 sit inside the admission band (sr < 2*lss) but more than 6 hops from a seed.
-# Filling the whole admission component overshoots (patient020 0.725 -> 0.596 at 66 hops).
+# Filling the whole admission component overshoots (comsol020 0.725 -> 0.596 at 66 hops).
 # The hop cap is a crude front-speed: unimodal on TRAIN (6: 0.783, 20: 0.802, 80: 0.789)
 # and leave-one-vessel-out picks 20 on every fold (+0.018).  Under deployable predicted
 # t=0 flow the same change is +0.025 (0.708 -> 0.733, 15 vessels with u0_pred).

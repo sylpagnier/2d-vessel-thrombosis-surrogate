@@ -1,7 +1,7 @@
 """Single protocol for the deploy clot metric, shared by training and offline eval.
 
 Training and `scripts/eval_mat_growth_simple.py` both call `eval_deploy_clot_f1`, yet reported
-0.877 vs 0.2996 for the same checkpoint on `patient020` (docs/GENERALIZATION_PLAN.md s2b-quater).
+0.877 vs 0.2996 for the same checkpoint on `comsol020` (docs/GENERALIZATION_PLAN.md s2b-quater).
 The rollout was never the difference -- the *protocol around it* was:
 
 1. **Flow cache.** The offline path calls `reset_species_rollout_flow_cache()` **before** each

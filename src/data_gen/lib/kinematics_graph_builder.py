@@ -1,6 +1,6 @@
 """Build trainer-compatible kinematics graphs (``KINE_X_SCHEMA`` / ``KINE_Y_SCHEMA``).
 
-Shared between synthetic ``MeshToGraph`` and COMSOL patient re-extraction so Stage-A
+Shared between synthetic ``MeshToGraph`` and COMSOL COMSOL anchor re-extraction so Stage-A
 ``train_kinematics_predictor`` sees the same node layout, priors, and label semantics.
 """
 
@@ -182,7 +182,7 @@ def resolve_d_bar_si_from_sidecar_or_inlet(
     mask_inlet: torch.Tensor,
 ) -> float:
     if sidecar_meta is not None and "d_bar" in sidecar_meta:
-        d_bar, _ = d_bar_si_from_sidecar(sidecar_meta, stem=stem, builder="PatientDataExtractor")
+        d_bar, _ = d_bar_si_from_sidecar(sidecar_meta, stem=stem, builder="ComsolAnchorDataExtractor")
         return float(d_bar)
     inlet_coords = mesh_nodes_si[mask_inlet.detach().cpu().numpy()]
     if len(inlet_coords) > 1:

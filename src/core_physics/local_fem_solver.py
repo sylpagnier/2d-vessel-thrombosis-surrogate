@@ -34,7 +34,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
     The nonlinearity is handled by a damped Picard iteration accelerated three ways, none of
     which changes the converged answer -- the operator is reassembled from the current iterate
     every step, so the fixed point is the same one textbook Picard reaches (verified to 1e-8
-    relative, and exactly on the wall band, on patients 001/008/041/042 and the wounds):
+    relative, and exactly on the wall band, on COMSOL anchors 001/008/041/042 and the wounds):
 
     ``damping``    initial under-relaxation, released to 1.0 as soon as the increment falls
                    monotonically.  Holding it at 0.5 for the whole solve, as this did, caps the
@@ -71,7 +71,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
     d_bar = float(data.d_bar.item()) if hasattr(data.d_bar, 'item') else float(data.d_bar)
     u_ref = float(data.u_ref.item()) if hasattr(data.u_ref, 'item') else float(data.u_ref)
 
-    # Mesh units are not uniform across the two mesh families: the patient `.nas` anchors
+    # Mesh units are not uniform across the two mesh families: the COMSOL anchor `.nas` anchors
     # are in cm, the research `.msh` vessels gmsh writes are already in metres.  A
     # hardcoded 0.01 was right for the anchors and 100x wrong for every research vessel,
     # which collapsed the whole mesh onto ~3 pack nodes -- so the wall and outlet tagged
@@ -122,8 +122,8 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
         """Boundary facets lying on the plane the tagged nodes span, inside their extent.
 
         The node tags come off COMSOL's own selections and are not always complete on a
-        quadratic mesh: `patient038` tags no two adjacent corners of its inlet at all (0
-        facets under the corner rule) and `patient048` tags 4 of its 21 outlet facets with
+        quadratic mesh: `comsol038` tags no two adjacent corners of its inlet at all (0
+        facets under the corner rule) and `comsol048` tags 4 of its 21 outlet facets with
         only one corner each, which silently handed those 4 to the no-slip wall.  An inlet
         or outlet is a straight cut through the lumen, so the tagged nodes determine it
         completely: fit the line through them and take every boundary facet whose midpoint
@@ -206,7 +206,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
                 f"{pos_target_nd.shape[0]} (one per graph node)")
         dmu_mesh = np.clip(dmu_nodal[skfem_to_target], 0.0, None)
         # The anchor meshes are QUADRATIC (`MeshTri2`): `mesh.p` holds the vertices followed
-        # by the mid-side nodes (patient001: 9490 = 2447 + 7043).  A scalar P2 basis sharing
+        # by the mid-side nodes (comsol001: 9490 = 2447 + 7043).  A scalar P2 basis sharing
         # `basis`'s quadrature therefore takes the field exactly as stored, using the same
         # nodal-then-facet convention the velocity is written back out with below -- and it
         # keeps the clot resolved on the near-wall mid-side ring rather than averaging it away.
@@ -278,7 +278,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
         # COMSOL's Laminar Flow interface applies by default and which is therefore baked into
         # the labels.  It is NOT physics: the Carreau law above was verified against COMSOL's
         # own `spf.mu` to within 1.5% (p25/med/p75 0.00551/0.00651/0.00855 against
-        # 0.00559/0.00655/0.00867 on patient001).  `art_visc` was 1.0, which put 0.045 Pa.s of
+        # 0.00559/0.00655/0.00867 on comsol001).  `art_visc` was 1.0, which put 0.045 Pa.s of
         # cross-stream diffusion on top of that 0.0065 and reattached the post-stenotic
         # separation bubble two deciles early; 0.70 is the fitted value -- see the sweep in the
         # solver notes.  Streamline-only stabilisation (SUPG/SU) does NOT substitute: the jet
@@ -619,7 +619,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
 
     # Interpolate results to target nodes (velocity lives on geometric mesh nodes).
     # P2 velocity lives on BOTH the vertices and the mid-side nodes, and the anchor meshes
-    # carry both (patient001: 9490 points = 2447 vertices + 7043 mid-sides).  Writing only the
+    # carry both (comsol001: 9490 points = 2447 vertices + 7043 mid-sides).  Writing only the
     # vertex block leaves every mid-side node at zero -- and the mid-sides are exactly the
     # near-wall ring the shear stencil differentiates across.  Restored after a 2026-08 edit
     # dropped the facet half and started raising a broadcast error on every P2 anchor mesh.

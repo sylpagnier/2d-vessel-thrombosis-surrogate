@@ -7,9 +7,9 @@
   "baseline_ckpt": "outputs/biochem/biochem_gnn/wall_gen_baseline/species/best.pth",
   "note": "Phase1 / wall-gen generalization baseline from flow-source A/B. Train+deploy use RGP-DEQ base flow and local tiling (no GT velocity). Does not replace locked WC_v7 for compound/in-family warm-starts.",
   "cohort": {
-    "train": "patient005,patient006,patient010,patient023,patient002",
-    "val": "patient020",
-    "holdout": "patient020"
+    "train": "comsol005,comsol006,comsol010,comsol023,comsol002",
+    "val": "comsol020",
+    "holdout": "comsol020"
   },
   "config_kwargs": {
     "dual_head": true,
@@ -52,7 +52,7 @@
   },
   "scores": {
     "eval_json": "outputs/biochem/eda/flow_source_ab/flow_source_ab_summary.csv",
-    "note": "Recorded from completed flow-source A/B cold deploy (anchors were 020+034 mean at promote time; primary gate is patient020 going forward).",
+    "note": "Recorded from completed flow-source A/B cold deploy (anchors were 020+034 mean at promote time; primary gate is comsol020 going forward).",
     "mean": {
       "deploy_clot_score": 0.2765,
       "deploy_clot_f1": 0.265,
@@ -63,8 +63,8 @@
       "deploy_faithful": true,
       "flow": "RGP-DEQ @ t=0 frozen kinematics (no GT velocity)",
       "no_gt_velocity": true,
-      "holdout_at_ab_run": "patient020,patient034",
-      "holdout_policy_going_forward": "patient020"
+      "holdout_at_ab_run": "comsol020,comsol034",
+      "holdout_policy_going_forward": "comsol020"
     }
   },
   "flow_source_ab": {

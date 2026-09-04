@@ -2,7 +2,7 @@
 
 CONTEXT (docs/WOUND_PROGRESS.md §18).  The shipped model holds ``AP`` at its
 spatially-uniform t=0 value.  COMSOL's own Transport of Diluted Species solve shows AP is
-depleted to 18.9% of its inlet value on ``wound_patient003`` (CV 1.23 — 4× the dataset
+depleted to 18.9% of its inlet value on ``wound_comsol003`` (CV 1.23 — 4× the dataset
 maximum) because the wound sits in a stagnating zone where replenishment is slow and
 consumption is fast.  A time-varying AP field is the missing input that drives the ODE
 ``Mat`` from its current 1.96× to the 20.22× crit needed by the off-wall readout.
@@ -52,7 +52,7 @@ INTEGRATE VIA `integrate_mat_trajectory`.  The convenience entry point is to pas
 DEPLOY LEGALITY.  Transport uses ``fields.u`` / ``fields.v`` (t=0 ``u0_pred`` or GT at t=0
 only).  No GT velocity or chemistry after t=0 enters the computation.
 
-MEASURED ON ``wound_patient003`` (docs/WOUND_PROGRESS.md §18.2):
+MEASURED ON ``wound_comsol003`` (docs/WOUND_PROGRESS.md §18.2):
     GT-chem + gate + wash + da_scale_auto=123  →  far-field AUC 0.966, off 0.8512
     wall_ap_renewal + gate + wash + da_scale_auto=123  →  measured by diag_wall_ap_renewal.py
 

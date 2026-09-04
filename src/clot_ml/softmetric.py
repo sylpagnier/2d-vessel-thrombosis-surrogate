@@ -70,7 +70,7 @@ def soft_score(p: torch.Tensor, gt: torch.Tensor, D: torch.Tensor,
 
     ``shape_w`` exists because the two halves are NOT equally binding.  Measured per vessel
     on the shipped off-wall mask (docs/PHASE10_V4.md 13.1), recall is already 1.000 on nine
-    of thirteen vessels and `patient012` still scores 0.845 with precision 1.000 and recall
+    of thirteen vessels and `comsol012` still scores 0.845 with precision 1.000 and recall
     0.988 -- because its dilation IoU is 0.691.  Above ~0.85 the off-wall score is a SHAPE
     problem, and the training loss has always weighted shape at exactly the 0.5 the
     evaluation metric uses.  The EVALUATION weight never changes; this is the loss only.

@@ -1,7 +1,7 @@
 """Shared COMSOL-boundary to mesh-vertex snap tolerance.
 
 Geometry samples on a slanted/curved inlet sit ~0.3-0.5 mesh edges off vertices
-(patient048: 90-180 um on a 354 um edge). A fixed 10 um remap dropped those
+(comsol048: 90-180 um on a 354 um edge). A fixed 10 um remap dropped those
 points and shipped a 3-node Dirichlet mask. First-snap (volume nodes onto
 datasets) and remap (csv onto mesh) share this helper.
 

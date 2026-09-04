@@ -9,7 +9,7 @@ t=0 only**.
 
 The one substantive change from the previous stack: shear rate and its x-gradient are
 computed with :mod:`src.core_physics.mls_gradient` instead of the packs' ``G_x``/``G_y``.
-Audited against COMSOL's own ``spf.sr`` / ``d(spf.sr,x)`` on patient007:
+Audited against COMSOL's own ``spf.sr`` / ``d(spf.sr,x)`` on comsol007:
 
     operator                  spearman(spf.sr)   spearman(d(spf.sr,x))
     packs' G_x / G_y                0.19                0.00
@@ -231,7 +231,7 @@ def t0_flow_fields(
             raise ValueError(f"pack has no u0_pred (flow_source={flow_source!r})")
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
         v = data.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)
-        # MLS on predicted velocity, not the kinematics shear head.  On patient005 the
+        # MLS on predicted velocity, not the kinematics shear head.  On comsol005 the
         # cached head has wall corr 0.17 vs GT MLS (median 54 1/s against 193) and
         # dsrx from that field never trips sgt, so the wall gate is empty.  MLS-on-u0
         # keeps wall corr 0.82.  ``sr0_pred`` stays on the pack for a later head.

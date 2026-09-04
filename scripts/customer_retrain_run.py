@@ -174,7 +174,7 @@ def _classify_mph(mph_files: list[Path], data_dir: Path, accepted: dict[str, obj
 
 def _convert_mph(mph_path: Path, mesh_path: Path, stem: str, data_dir: Path) -> None:
     """Best-effort real extraction, reusing the researcher .mph -> graph pipeline."""
-    from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+    from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
     from src.tools.prepare_biochem_anchors import enrich_anchor_meshes
 
     raw_dir = REPO / "data/raw/biochem_anchors"
@@ -185,11 +185,11 @@ def _convert_mph(mph_path: Path, mesh_path: Path, stem: str, data_dir: Path) -> 
     if sidecar.exists():
         shutil.copy2(sidecar, raw_dir / f"{stem}.json")
 
-    extractor = PatientDataExtractor(phase="biochem_anchors", raw_dir=raw_dir,
+    extractor = ComsolAnchorDataExtractor(phase="biochem_anchors", raw_dir=raw_dir,
                                       label_dir=label_dir, proc_dir=PROC_DIR)
     extractor.pull_comsol_exports(stem, model_path=mph_path, force=True)
     enrich_anchor_meshes(raw_dir, overwrite=False, dry_run=False, stems=[stem], quiet=True)
-    extractor.process_patient(stem)
+    extractor.process_comsol_anchor(stem)
 
 
 def build_cache(anchors: dict[str, object], report: RunReport) -> dict[str, dict]:

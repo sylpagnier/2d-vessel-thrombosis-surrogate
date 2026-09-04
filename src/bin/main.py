@@ -20,10 +20,10 @@ import sys
 
 MODULE_MAP: dict[tuple[str, str], str] = {
     ("train", "kinematics"): "src.training.train_kinematics_predictor",
-    ("train", "biochem-gnn"): "src.archive.mat_growth.train_biochem_gnn",
-    ("train", "biochem_gnn"): "src.archive.mat_growth.train_biochem_gnn",
-    ("train", "biochem-deploy"): "src.archive.mat_growth.train_biochem_gnn",
-    ("train", "biochem_deploy"): "src.archive.mat_growth.train_biochem_gnn",
+    ("train", "biochem-gnn"): "src.training.train_biochem_gnn",
+    ("train", "biochem_gnn"): "src.training.train_biochem_gnn",
+    ("train", "biochem-deploy"): "src.training.train_biochem_gnn",
+    ("train", "biochem_deploy"): "src.training.train_biochem_gnn",
     ("train", "rgp-deq-kine"): "src.training.train_kinematics_predictor",
     ("train", "rgp_deq_kine"): "src.training.train_kinematics_predictor",
     ("train", "pmgp-deq-kine"): "src.training.train_kinematics_predictor",

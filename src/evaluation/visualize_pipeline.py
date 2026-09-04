@@ -32,7 +32,7 @@ from src.utils.paths import get_project_root, resolve_checkpoint
 # Standard channel indices across all models for kinematics
 _CHANNEL = dict(u=0, v=1, p=2, mu_eff=STATE_CHANNEL_MU_EFF_ND)
 _KIN_CKPT_CANDIDATES = ("kinematics_best.pth", "kinematics_ckpt_latest.pth", "kinematics_ckpt_100.pth")
-_DEFAULT_VAL_ANCHOR_STEM = "patient007"
+_DEFAULT_VAL_ANCHOR_STEM = "comsol007"
 
 
 def _anchor_graph_dir() -> Path:
@@ -56,7 +56,7 @@ def _default_val_anchor_stem(stems: List[str]) -> str:
 
 
 def _parser_default_anchor_stem() -> str:
-    """CLI default for ``--anchor`` (patient007 when present, else first biochem anchor)."""
+    """CLI default for ``--anchor`` (comsol007 when present, else first biochem anchor)."""
     stems = _list_anchor_stems()
     if stems:
         return _default_val_anchor_stem(stems)
@@ -368,7 +368,7 @@ def run_steady_kinematics_viz(
     print(f"[i] Steady kinematics-only viz on {device}")
     model = _load_kinematics_gino_deq(device)
     for cohort, label, graph_path in cases:
-        phase_hint = "biochem" if cohort == "patient" else "kinematics"
+        phase_hint = "biochem" if cohort == "comsol_anchor" else "kinematics"
         data = _load_graph_pt(graph_path, device, phase_hint=phase_hint)
         with torch.no_grad():
             pred = _run_model_once(model, data)
@@ -414,7 +414,7 @@ def _run_phase_comparison_graphsage_redirect(
 
     print(f"[i]  Stage-A kinematics viz for {stem} (GINO-DEQ)", flush=True)
     try:
-        run_steady_kinematics_viz(cases=[("patient", stem, anchor_path)], time_index=time_index)
+        run_steady_kinematics_viz(cases=[("comsol_anchor", stem, anchor_path)], time_index=time_index)
     except Exception as exc:  # viz is best-effort
         print(f"[WARN] kinematics viz failed: {exc}", flush=True)
 
@@ -527,7 +527,7 @@ if __name__ == "__main__":
         "--steady-kin-compare",
         action="store_true",
         help=(
-            "With --steady-kin-only: one patient anchor (see --anchor) and one kinematics "
+            "With --steady-kin-only: one COMSOL anchor anchor (see --anchor) and one kinematics "
             "synthetic graph (--kine-vessel or --kine-graph)."
         ),
     )
@@ -536,7 +536,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         metavar="PATH",
-        help="Processed kinematics or patient .pt for steady-kin-only mode.",
+        help="Processed kinematics or COMSOL anchor .pt for steady-kin-only mode.",
     )
     parser.add_argument(
         "--kine-vessel",
@@ -584,10 +584,10 @@ if __name__ == "__main__":
             anchor_stem = _resolve_anchor_stem(args.anchor)
             k_anchor = _kinematics_anchor_graph_path(anchor_stem, "newtonian")
             if k_anchor.is_file():
-                cases.append(("patient", anchor_stem, k_anchor))
+                cases.append(("comsol_anchor", anchor_stem, k_anchor))
             else:
                 cases.append(
-                    ("patient", anchor_stem, _anchor_graph_dir() / f"{anchor_stem}.pt")
+                    ("comsol_anchor", anchor_stem, _anchor_graph_dir() / f"{anchor_stem}.pt")
                 )
             if args.kine_graph:
                 kpath = Path(args.kine_graph)
@@ -602,12 +602,12 @@ if __name__ == "__main__":
             kpath = Path(args.kine_graph)
             if not kpath.is_absolute():
                 kpath = get_project_root() / kpath
-            cohort = "patient" if "biochem_anchors" in kpath.as_posix() else "kinematics"
+            cohort = "comsol_anchor" if "biochem_anchors" in kpath.as_posix() else "kinematics"
             cases.append((cohort, kpath.stem, kpath))
         elif args.anchor or not args.synthetic:
             anchor_stem = _resolve_anchor_stem(args.anchor)
             cases.append(
-                ("patient", anchor_stem, _anchor_graph_dir() / f"{anchor_stem}.pt")
+                ("comsol_anchor", anchor_stem, _anchor_graph_dir() / f"{anchor_stem}.pt")
             )
         else:
             raise ValueError(

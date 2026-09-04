@@ -88,9 +88,9 @@ def subset(V: dict, wound_ap_closure: bool = True) -> dict:
     ``wound_ap_closure=False`` drops the wall-AP CONSUMPTION closure at the wound.  That
     closure (`src/core_physics/ap_closure.py`) is a Damkohler balance for a GATED wall
     reaction depleting activated platelets faster than shear renews them.  A wound deletes
-    the gate and is a net platelet PRODUCER, and COMSOL says so: on `wound_patient003` GT
+    the gate and is a net platelet PRODUCER, and COMSOL says so: on `wound_comsol003` GT
     `AP` ends at 10.3x its initial value where the closure predicts 0.96, and on
-    `wound_patient006` the closure suppresses `AP` 5x (multiplier 0.188) where GT leaves it
+    `wound_comsol006` the closure suppresses `AP` 5x (multiplier 0.188) where GT leaves it
     at 0.93 after the first interval.  Applying a depletion model to a source has the wrong
     sign, and it is the single largest error in the wound ODE -- see docs/DEPLOYCLOT.md 5c.
     """

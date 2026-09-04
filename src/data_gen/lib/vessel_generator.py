@@ -178,7 +178,7 @@ def resolve_bend_sign_mode(explicit: Optional[str] = None) -> str:
 def default_level_mix(n: int) -> Dict[int, int]:
     """Default kinematics cohort: all level 2, because that is the whole deployment domain.
 
-    Every biochem patient pack carries ``level: 2`` (40 of 40 that record one).  The old
+    Every biochem COMSOL anchor pack carries ``level: 2`` (40 of 40 that record one).  The old
     default put 40% of the corpus in L0, whose vessels are effectively straight -- measured
     centreline excursion 0.16 diameters against deployment's 2.69 -- and whose `dsrx` gate
     branch decides 1.3% of firing wall nodes against deployment's 93%.  That is a vessel class
@@ -526,7 +526,7 @@ def _sample_params(
             v_type = "aneurysm"
             magnitude_mode = "max_aneurysm"
         elif pro_thrombotic:
-            # L2 IS the deployment class -- every biochem patient pack is level 2 -- so it is
+            # L2 IS the deployment class -- every biochem COMSOL anchor pack is level 2 -- so it is
             # drawn like one.  This used to guarantee a pathology, which put a hard floor of
             # 1.42 under the L2 lumen max/min ratio while 28% of deploy vessels sit below 1.15,
             # and left corpus L2 with 7.3x deployment's share of stagnant wall nodes (`sr < lss`
@@ -547,7 +547,7 @@ def _sample_params(
     t = np.linspace(0, 1, n)
     hit_configured_max = False
 
-    # 1. Main Clinical Pathology
+    # 1. Main COMSOL Pathology
     offsets = np.zeros(n)
     pathology_peak_frac: float | None = None
     if v_type != "straight":

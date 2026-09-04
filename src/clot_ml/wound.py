@@ -120,7 +120,7 @@ def wound_features(data, f0, bio_cfg) -> np.ndarray:
     """Per-node t=0 features, ``[N, len(WOUND_FEATURES)]``.
 
     ``wall_gate_frac_vessel`` is the one that carries the across-vessel signal: the wound on
-    ``wound_patient003`` gels 5x faster than the other two and its *vessel* is 35% gated at
+    ``wound_comsol003`` gels 5x faster than the other two and its *vessel* is 35% gated at
     t=0 against 16% / 12%. The k-hop versions let the network localise that.
     """
     n = int(data.num_nodes)
@@ -257,7 +257,7 @@ def mat_trajectory_torch(
     ``ext_weight`` / ``reach`` add the NEIGHBOUR trigger. The self-trigger above assumes a
     node's gate opens because of its *own* clot, which is what happens on a wound in healthy
     flow. It is not what happens when the wound sits near wall that was already going to clot:
-    on ``wound_patient003`` 21 wall nodes gel at step 2, the wound's shear falls 128 -> 84 /s
+    on ``wound_comsol003`` 21 wall nodes gel at step 2, the wound's shear falls 128 -> 84 /s
     and its gate opens to 42% by step 3 -- all before the wound's own gelation at step 5
     (WOUND_PROGRESS 11). ``ext_weight`` is ``[T, M]`` committed weight in [0, 1] on some other
     set of nodes and ``reach`` is ``[N, M]`` boolean neighbourhood; the switch then takes the
@@ -636,7 +636,7 @@ def predict_wound_series(
     if lumen == "recursive":
         # STRICTLY ADDITIVE, and that is load-bearing.  The shipped `owned_off` comes from
         # `first_corner_shell`, which navigates the P2 mid-side family; a plain hop-2 ring is
-        # a DIFFERENT and smaller set (80 nodes vs 43 on `wound_patient001`).  Rebuilding
+        # a DIFFERENT and smaller set (80 nodes vs 43 on `wound_comsol001`).  Rebuilding
         # shell 1 from hops therefore replaces a good shell with a worse one and costs
         # 001/002 `w_lum` 0.0160 -- measured.  So shell 1 stays exactly as shipped and the
         # recursion only ADDS deeper rings, which keeps the 5b.5 gate satisfiable by
@@ -731,7 +731,7 @@ def predict_wound_series(
                 # OWNERSHIP IS NOT THE SAME THING AS COMMITMENT, and conflating them made
                 # this rule SUBTRACTIVE.  `compose_with_v4` overwrites v4's verdict on every
                 # owned node, so widening `owned_off` to a deeper ring hands v4's nodes to a
-                # module that may decline them: measured on `wound_patient003`, recursive
+                # module that may decline them: measured on `wound_comsol003`, recursive
                 # removed 2 committed nodes and added none.  It happened to remove two false
                 # positives, which is luck, not a property.  A deeper ring may therefore only
                 # claim the nodes it actually commits -- then "strictly additive" is true of
@@ -800,7 +800,7 @@ def neighbour_reach(data, *, k_hops: int = TRIGGER_HOPS) -> tuple[np.ndarray, np
     """``(reach [n_wound, n_wall], wall_idx)`` -- wall nodes within ``k_hops`` of each wound node.
 
     Mesh-graph hops, not a length: the discrimination it has to make is 12-14 hops
-    (``wound_patient003``, externally triggered) against 61 (``001``, self-triggered), so
+    (``wound_comsol003``, externally triggered) against 61 (``001``, self-triggered), so
     nothing here is delicate. Restricted to the healthy wall because the wound's own nodes
     are already covered by the self-trigger.
     """
@@ -827,10 +827,10 @@ def wall_trigger_field(data, bio_cfg, V: dict, *, wall_idx: np.ndarray,
     """Deploy-legal trigger: the shipped gated wall ODE's own committed field, ``[T, M]``.
 
     ``gate_scale`` exists to make one negative result reproducible rather than to be tuned.
-    On ``wound_patient003`` a scale of 20 does fix the wound (onset MAE 18.0 -> 4.7) by making
+    On ``wound_comsol003`` a scale of 20 does fix the wound (onset MAE 18.0 -> 4.7) by making
     the wall gel early enough to trigger it -- and the 12-vessel no-wound cohort says the
     same scale takes wall-onset MAE from **18.1% to 43.7%** of the horizon, with 1 the best
-    value on 8 of 12 vessels. It is a ``wound_patient003``-shaped fudge that would wreck the
+    value on 8 of 12 vessels. It is a ``wound_comsol003``-shaped fudge that would wreck the
     wall model, so the default is 1 and it stays 1.
     """
     from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
@@ -847,7 +847,7 @@ def gt_trigger_field(data, bio_cfg, V: dict, *, wall_idx: np.ndarray) -> np.ndar
     """ORACLE trigger: GT wall ``Mat``. Illegal to ship -- it is a ceiling, not a model.
 
     It answers one question: how much of the residual is the *coupling* worth if the wall's
-    timing were right? On ``wound_patient003``, onset MAE 18.0 -> 6.6 at 25 hops.
+    timing were right? On ``wound_comsol003``, onset MAE 18.0 -> 6.6 at 25 hops.
     """
     from src.core_physics.clot_phi_simple import mat_si_for_gelation_from_log1p
 
@@ -874,7 +874,7 @@ def wound_region_masks(data, *, k_hops: int = WOUND_REGION_HOPS
     a deploy score restricted to it is 1.0 for any model that commits the patch, which the
     ungated law does for free.  It measures coverage, not skill.  Meanwhile the thrombus the
     wound actually grows extends *into the lumen* -- 82 of 162 GT clot nodes within 4 hops on
-    ``wound_patient001`` are off the boundary -- and those were being scored in the global
+    ``wound_comsol001`` are off the boundary -- and those were being scored in the global
     off-wall domain, pooled with clot from healthy wall elsewhere in the vessel.  Neither
     domain answered "did we get the wound's thrombus".
 
@@ -901,7 +901,7 @@ def wound_region_masks(data, *, k_hops: int = WOUND_REGION_HOPS
 # ---------------------------------------------------------------------------
 #: Fraction of a wound's own nodes at which the RAW t=0 shear gate must fire before the wound
 #: counts as sitting in a STAGNATION zone rather than in flowing blood.  Measured, not tuned:
-#: the gate fires on 0.0% of the wound on `wound_patient001`-`005` and on 77.9% on `006`, so
+#: the gate fires on 0.0% of the wound on `wound_comsol001`-`005` and on 77.9% on `006`, so
 #: any cut strictly inside (0, 0.78) separates them and there is nothing here to fit.
 GATE_ON_STAGNANT = 0.50
 
@@ -923,10 +923,10 @@ def wound_gate_on_fraction(data, bio_cfg, *, flow: str = "gt") -> float:
 
     Measured on the six-vessel wound cohort, `flow="fem"`:
 
-        wound_patient001 / 002 / 003 / 004 / 005     0.0%     flowing
-        wound_patient006                            77.9%     stagnation
+        wound_comsol001 / 002 / 003 / 004 / 005     0.0%     flowing
+        wound_comsol006                            77.9%     stagnation
 
-    `wound_patient006` is the only vessel whose wound sits in a dead zone (wall shear p50
+    `wound_comsol006` is the only vessel whose wound sits in a dead zone (wall shear p50
     3.5 /s on the nodes that clot, 0.7 /s on the nodes that never do, against 127-146 /s
     elsewhere).  There the two-regime constants under-predict wound `Mat` by 8.4x, because
     they were fitted where species supply is never limiting -- see docs/DEPLOYCLOT.md 5b.

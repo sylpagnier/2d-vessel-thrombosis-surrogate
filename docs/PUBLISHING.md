@@ -9,11 +9,12 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 | `src/` | Library, training, tools, tests |
 | `scripts/` (active) + `scripts/README.md` | Supported launchers |
 | `scripts/archive/MANIFEST.md` | Deleted retired launchers (recover via git) |
-| `docs/` (active) + `docs/archive/` | Design docs + historical notebooks |
-| `docs/assets/` | Small README / paper figures (tracked) |
+| `docs/` | Design and validation docs |
+| `docs/assets/` | Small README figures (tracked) |
+| `configs/` | Parametric sweep definitions |
 | `data/reference/` | Small baseline / architecture JSON + README |
 | `customer_geometries/README.txt` | Inbox instructions only |
-| `README.md`, `AGENTS.md`, `requirements.txt`, `pytest.ini` | Project entry |
+| `README.md`, `CONTRIBUTING.md`, `LICENSE`, `requirements.txt`, `pytest.ini` | Project entry |
 
 ## Keep local (never push)
 
@@ -26,6 +27,9 @@ This repository is meant to be **publicly pushable**: source, docs, and small re
 | `customer_geometries/*` (except README) | User uploads |
 | `*.pth`, `*.pt`, `*.ckpt` | Weights |
 | `.venv/`, `__pycache__/`, `.pytest_cache/`, `.idea/` | Environment / IDE |
+| `src/archive/`, `docs/archive/` | Retired code eras and archived notes |
+| `scripts/diag_*.py`, `scripts/diagnose_*.py` | One-off probes; the supported surface is `python -m src.tools.diagnostics` |
+| `AGENTS.md`, `.cursorrules`, `.cursorignore`, `scripts/git-hooks/` | Editor / assistant config |
 
 ## Do not re-add
 

@@ -268,7 +268,7 @@ def test_the_measured_stenosis_branch_is_known_not_to_separate():
     """PINS A KNOWN-BAD STATE so that fixing it is DETECTED (roadmap item A2).
 
     Against the repaired `width_nd` the aneurysm statistic separates by +0.506 and the
-    stenosis statistic separates by **-0.071** -- `patient012`, an unlabelled baseline, reads
+    stenosis statistic separates by **-0.071** -- `comsol012`, an unlabelled baseline, reads
     `narrowing` 0.5129 against the designated stenoses' 0.5244 / 0.5361 / 0.5835.  No cut
     recovers the labels, so `NARROWING_STENOSIS` was deliberately NOT retuned.
 
@@ -296,7 +296,7 @@ def test_the_measured_stenosis_branch_is_known_not_to_separate():
 
 
 def test_the_along_wall_smoothing_has_no_isolated_node_hole():
-    """`patient008` read `narrowing = 0.0000` from a divide-by-zero, not from anatomy.
+    """`comsol008` read `narrowing = 0.0000` from a divide-by-zero, not from anatomy.
 
     The smoothing averaged over a node's SELECTED NEIGHBOURS only, so a selected node with no
     selected neighbour smoothed to exactly 0 and set the 2nd percentile.  Its raw wall width
@@ -308,9 +308,9 @@ def test_the_along_wall_smoothing_has_no_isolated_node_hole():
     from src.clot_ml.geometry_class import width_stats
 
     p = (Path(__file__).resolve().parents[2]
-         / "data/processed/graphs_biochem_anchors/patient008.pt")
+         / "data/processed/graphs_biochem_anchors/comsol008.pt")
     if not p.exists():
-        pytest.skip("patient008 pack not present")
+        pytest.skip("comsol008 pack not present")
     s = width_stats(_t.load(p, map_location="cpu", weights_only=False))
     assert s["narrowing"] > 0.5, (
         "narrowing collapsed to %.4f -- an isolated selected node is smoothing to zero again"

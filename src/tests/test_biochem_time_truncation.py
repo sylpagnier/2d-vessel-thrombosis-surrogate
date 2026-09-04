@@ -7,7 +7,7 @@ import torch
 from torch_geometric.data import Data
 
 from src.config import BiochemConfig
-from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 
 
 def _minimal_wide_txt(path, times_s: list[float], n_rows: int = 2) -> None:
@@ -29,7 +29,7 @@ def _minimal_wide_txt(path, times_s: list[float], n_rows: int = 2) -> None:
 
 
 def test_load_comsol_trajectory_keeps_full_horizon_by_default(tmp_path):
-    ext = PatientDataExtractor(phase="biochem_anchors", raw_dir=tmp_path, label_dir=tmp_path, proc_dir=tmp_path)
+    ext = ComsolAnchorDataExtractor(phase="biochem_anchors", raw_dir=tmp_path, label_dir=tmp_path, proc_dir=tmp_path)
     fp = tmp_path / "stub.txt"
     _minimal_wide_txt(fp, times_s=[0.0, 100.0, 8000.0, 13000.0, 50000.0])
     blocks = ext.load_comsol_trajectory(fp)

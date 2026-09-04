@@ -18,24 +18,24 @@ grid (`every` 4, 12 and 25 return identical F1), so the grid is coarsened for sp
 vessels every few epochs is roughly a 10% overhead.
 
 The default vessel set spans the failure modes found on the full cohort rather than being the
-easy end: patient010 loses everything (its wall gate empties), patient005 over-fires,
-patient020 degrades gradually, patient003 can IMPROVE on predicted flow, patient011 is robust.
+easy end: comsol010 loses everything (its wall gate empties), comsol005 over-fires,
+comsol020 degrades gradually, comsol003 can IMPROVE on predicted flow, comsol011 is robust.
 """
 from __future__ import annotations
 
 import os
 
 #: Spans the measured failure modes; override with `KINEMATICS_DEPLOY_PROBE_STEMS`.
-DEFAULT_STEMS = ("patient010", "patient005", "patient020", "patient003", "patient011")
+DEFAULT_STEMS = ("comsol010", "comsol005", "comsol020", "comsol003", "comsol011")
 
 #: GT wall F1 for those vessels, so the probe reports a DROP rather than a bare number.
-_GT_WALL = {"patient010": 0.969, "patient005": 0.986, "patient020": 0.988,
-            "patient003": 0.335, "patient011": 0.737}
+_GT_WALL = {"comsol010": 0.969, "comsol005": 0.986, "comsol020": 0.988,
+            "comsol003": 0.335, "comsol011": 0.737}
 #: Ground-truth OFF-WALL F1 for the same vessels.  Reported separately because the two domains
-#: fail differently: on patient005 off-wall collapses at 0.7% velocity error while wall holds
+#: fail differently: on comsol005 off-wall collapses at 0.7% velocity error while wall holds
 #: to ~5%, so a single averaged drop hides which one moved.
-_GT_OFF = {"patient010": 0.895, "patient005": 0.415, "patient020": 0.477,
-           "patient003": float("nan"), "patient011": float("nan")}
+_GT_OFF = {"comsol010": 0.895, "comsol005": 0.415, "comsol020": 0.477,
+           "comsol003": float("nan"), "comsol011": float("nan")}
 
 
 def probe_stems() -> list[str]:

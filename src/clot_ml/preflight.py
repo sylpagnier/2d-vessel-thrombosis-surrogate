@@ -3,7 +3,7 @@
 WHY THIS EXISTS.  The clot readout seeds its physics mask from ``(gate > 0) & wall``.  When the
 supplied t=0 flow makes that gate fire on **no** wall node, the seed is empty and thirteen
 downstream physics/advection/ownership channels become identically zero rather than degraded --
-the prediction is not merely worse, it is vacuous.  On ``patient010`` this is mask 131 -> 0 nodes
+the prediction is not merely worse, it is vacuous.  On ``comsol010`` this is mask 131 -> 0 nodes
 and wall F1 0.969 -> 0.000.
 
 Measured over 33 vessels (``docs/PUBLICATION_NOTES.md`` s2), the empty-gate indicator is the

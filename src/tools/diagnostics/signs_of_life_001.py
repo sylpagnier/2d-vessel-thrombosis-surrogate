@@ -1,4 +1,4 @@
-﻿"""Fast signs-of-life probe for patient001 hop_ge2 hard-zero.
+"""Fast signs-of-life probe for comsol001 hop_ge2 hard-zero.
 
 Goal: minutes, not hours. Detect whether the growth head can move lumen
 nodes under teacher forcing vs closed-loop, on band vs global features.
@@ -55,7 +55,7 @@ from src.core_physics.species_snapshot_gnn import (  # noqa: E402
 from src.core_physics.t0_device import require_cuda_device  # noqa: E402
 from src.inference.corrector_coupling import resolve_kinematics_checkpoint  # noqa: E402
 from src.training.biochem_species_scope import pushforward_state_bulk_indices  # noqa: E402
-from src.archive.mat_growth.train_offwall_growth import (  # noqa: E402
+from src.training.train_offwall_growth import (  # noqa: E402
     _band_static_to_device,
     build_global_base_features,
     freeze_growth_backbone,
@@ -291,7 +291,7 @@ def _mini_train(model, tile, *, steps: int, lr: float, lumen_w: float, device) -
 def main(argv: list[str] | None = None) -> int:
     bootstrap()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--anchor", default="patient001")
+    ap.add_argument("--anchor", default="comsol001")
     ap.add_argument(
         "--wall-ckpt",
         default="outputs/biochem/biochem_gnn/locked/species_gnn_best.pth",

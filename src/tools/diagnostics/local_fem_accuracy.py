@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """How accurate is the local scikit-fem Carreau solver against COMSOL's t=0 field?
 
 Scores `src/core_physics/local_fem_solver.py` on the synthetic biochem anchor packs, in the
@@ -55,7 +55,7 @@ PACKS = biochem_packs_dir()
 def _cohort_stems() -> list[str]:
     skip = set(SEALED) | set(CLOT_FREE)
     out = [a for a in list(FIT) + list(DEV) if a not in skip and (PACKS / f"{a}.pt").exists()]
-    for s in ("wound_patient001", "wound_patient002", "wound_patient003"):
+    for s in ("wound_comsol001", "wound_comsol002", "wound_comsol003"):
         if (PACKS / f"{s}.pt").exists() and s not in out:
             out.append(s)
     return out
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
 
-    stems = args.stems or (_cohort_stems() if args.cohort else ["patient001", "patient020", "patient041"])
+    stems = args.stems or (_cohort_stems() if args.cohort else ["comsol001", "comsol020", "comsol041"])
     hops = [int(h) for h in args.hops.split(",") if h.strip()]
     gains = [float(g) for g in args.gains.split(",") if g.strip()]
     print(f"[i] n={len(stems)} hops={hops} gains={gains}", flush=True)

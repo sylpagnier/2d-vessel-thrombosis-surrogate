@@ -157,9 +157,9 @@ def main() -> None:
                     help="NPZ written by eval_strict_temporal.py --save-oof-series")
     ap.add_argument("--out", default="", help="output JSON payload")
     ap.add_argument("--wound", action="store_true",
-                    help="build wound_patient* tabs using the unified v0 dispatcher and wound LOVO")
+                    help="build wound_comsol* tabs using the unified v0 dispatcher and wound LOVO")
     ap.add_argument("--stems", nargs="*",
-                    default=["wound_patient001", "wound_patient002", "wound_patient003"],
+                    default=["wound_comsol001", "wound_comsol002", "wound_comsol003"],
                     help="wound stems to include with --wound")
     ap.add_argument("--every", type=int, default=2, help="wound time-grid stride")
     ap.add_argument("--flow", choices=("gt", "pred"), default="gt",

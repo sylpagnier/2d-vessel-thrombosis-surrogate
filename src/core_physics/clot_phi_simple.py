@@ -9,7 +9,7 @@ Supervision support (``CLOT_PHI_MASK_MODE``):
 - ``sdf``: legacy shell ``sdf_nd <= CLOT_PHI_SDF_MAX_ND`` (wider, less specific).
 
 Note: the **K10e forward** applies μ uplift in an off-wall SDF band; COMSOL GT can still
-mark high ``mu_eff`` on ``mask_wall`` nodes (~95% of clot seeds on patient007).
+mark high ``mu_eff`` on ``mask_wall`` nodes (~95% of clot seeds on comsol007).
 """
 
 from __future__ import annotations
@@ -582,7 +582,7 @@ def clot_phi_physics_gamma_scale() -> float:
 
 
 def clot_phi_physics_poiseuille_scale() -> float:
-    """Scale Poiseuille leg of ``max`` gamma (COMSOL ``spf.sr`` calib on patient007 ~0.85)."""
+    """Scale Poiseuille leg of ``max`` gamma (COMSOL ``spf.sr`` calib on comsol007 ~0.85)."""
     return max(_env_float("CLOT_PHI_PHYSICS_POISEUILLE_SCALE", 0.85), 1e-12)
 
 
@@ -770,7 +770,7 @@ def _resolve_gelation_legs(
     else:
         mu1 = mu1_gelation_from_mat_si(mat_si, bio_cfg, mu_ratio_max)
     # Fibrin leg: COMSOL validation (docs/COMSOL_PHYSICS_VALIDATION.md) shows mu2(FI)
-    # is identically 0 on patient007 -- FI peaks ~0.013 uM, far below the 0.6 uM
+    # is identically 0 on comsol007 -- FI peaks ~0.013 uM, far below the 0.6 uM
     # viscosity_fi_crit gelation threshold, so fibrin never gels and contributes
     # nothing to mu_eff. The clot trigger is platelet-matrix (Mat) driven. Fibrin is
     # dropped by default to remove a spurious-trigger pathway under FI decode drift;
@@ -1059,7 +1059,7 @@ def clot_phi_physics_use_fibrin() -> bool:
     """Include the fibrin gelation leg ``mu2(FI)`` in the clot trigger.
 
     Default False: COMSOL validation shows FI never reaches ``viscosity_fi_crit``
-    (0.6 uM) on patient007, so ``mu2(FI)`` is identically 0 and the clot is
+    (0.6 uM) on comsol007, so ``mu2(FI)`` is identically 0 and the clot is
     platelet-matrix (Mat) driven. Enable for fibrin-pathway ablations.
     """
     return _env_bool("CLOT_PHI_PHYSICS_USE_FIBRIN", False)

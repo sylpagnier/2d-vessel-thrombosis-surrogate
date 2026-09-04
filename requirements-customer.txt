@@ -5,7 +5,7 @@
 #
 # `mph` (COMSOL/MATLAB bridge) and `pandas` are both imported eagerly by
 # `src/data_gen/__init__.py` (package-level `from ... import AnchorGenerator,
-# PatientDataExtractor`, neither of which this tool calls), so they have to be installed for
+# ComsolAnchorDataExtractor`, neither of which this tool calls), so they have to be installed for
 # `import src...` to succeed at all -- even though the deploy path never uses either. `mph`
 # confirmed to import cleanly with no MATLAB/COMSOL installed or running (its own
 # dependencies are just `jpype1` + numpy, pure wheels; it only needs a live COMSOL session

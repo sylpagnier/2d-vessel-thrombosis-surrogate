@@ -51,7 +51,7 @@ NAN = float("nan")
 def _cohort_stems():
     skip = set(SEALED) | set(CLOT_FREE)
     out = [a for a in list(FIT) + list(DEV) if a not in skip and (PACKS / (a + ".pt")).exists()]
-    for s in ("wound_patient001", "wound_patient002", "wound_patient003"):
+    for s in ("wound_comsol001", "wound_comsol002", "wound_comsol003"):
         if (PACKS / (s + ".pt")).exists() and s not in out:
             out.append(s)
     return out
@@ -306,7 +306,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     stems = args.stems or (_cohort_stems() if args.cohort
-                           else ["patient001", "patient020", "patient041"])
+                           else ["comsol001", "comsol020", "comsol041"])
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     for a in arms:
         if a not in ARMS:

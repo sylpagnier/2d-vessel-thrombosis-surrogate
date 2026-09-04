@@ -25,12 +25,12 @@ from scripts.publication.pub_style import (
 PANEL_W = 6.2  # inches, per column
 
 FAILURE_CAPTION = {
-    "patient005": (
-        "patient005 — visually plausible but poor deploy score; "
+    "comsol005": (
+        "comsol005 — visually plausible but poor deploy score; "
         "subtle spatial errors compound into low Jaccard"
     ),
-    "patient014": (
-        "patient014 — tracks well early/mid, then diverges badly late; "
+    "comsol014": (
+        "comsol014 — tracks well early/mid, then diverges badly late; "
         "heavily penalised by the temporal window scoring"
     ),
 }

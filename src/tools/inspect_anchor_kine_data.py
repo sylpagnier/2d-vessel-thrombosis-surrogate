@@ -2,7 +2,7 @@
 
 Example:
     python -m src.tools.inspect_anchor_kine_data
-    python -m src.tools.inspect_anchor_kine_data --stem patient007
+    python -m src.tools.inspect_anchor_kine_data --stem comsol007
     python -m src.tools.inspect_anchor_kine_data --summary
 """
 
@@ -55,15 +55,15 @@ def _prior_stats(data) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--stem", type=str, default="", help="Single patient stem.")
+    p.add_argument("--stem", type=str, default="", help="Single COMSOL anchor stem.")
     p.add_argument("--summary", action="store_true", help="Table only (no per-field dump).")
     p.add_argument("--rheology", type=str, default="carreau", choices=("carreau", "newtonian"))
     args = p.parse_args()
 
     anchor_dir = Path(VesselConfig(phase="biochem_anchors").graph_output_dir)
-    stems = [args.stem.strip()] if args.stem.strip() else sorted(p.stem for p in anchor_dir.glob("patient*.pt"))
+    stems = [args.stem.strip()] if args.stem.strip() else sorted(p.stem for p in anchor_dir.glob("comsol*.pt"))
     if not stems:
-        print(f"[ERR] no patient*.pt under {anchor_dir}")
+        print(f"[ERR] no comsol*.pt under {anchor_dir}")
         return 1
 
     print(f"[i] biochem anchors: {anchor_dir}")

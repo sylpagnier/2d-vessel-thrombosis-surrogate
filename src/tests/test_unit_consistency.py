@@ -3,7 +3,7 @@
 The contract (see ``src/utils/units.py`` docstring):
 
 * synthetic / kinematics meshes are written and stored in **meters**;
-* patient / COMSOL meshes are written in **centimeters** and the extractor
+* COMSOL anchor / COMSOL meshes are written in **centimeters** and the extractor
   converts every CGS field back to **SI** before saving.
 
 These tests check both the helper that enforces this contract and that the
@@ -64,7 +64,7 @@ def test_assert_mesh_unit_raises_on_cm_to_m_mismatch():
 def test_assert_mesh_unit_raises_on_m_to_cm_mismatch():
     with pytest.raises(MeshUnitMismatchError, match="unit='m'"):
         assert_mesh_unit(
-            {"unit": "m"}, MESH_UNIT_CM, stem="vessel_0", builder="PatientDataExtractor"
+            {"unit": "m"}, MESH_UNIT_CM, stem="vessel_0", builder="ComsolAnchorDataExtractor"
         )
 
 
@@ -201,9 +201,9 @@ def test_mesh_to_graph_phase3_rejects_cm_sidecar(tmp_path):
         builder.process_file("vessel_0.msh")
 
 
-def test_patient_data_extractor_rejects_m_sidecar(tmp_path):
+def test_comsol_anchor_data_extractor_rejects_m_sidecar(tmp_path):
     """Anchor extractor must refuse a sidecar declaring unit='m' (it expects CGS cm)."""
-    from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+    from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 
     raw = tmp_path / "raw"
     label = tmp_path / "label"
@@ -214,11 +214,11 @@ def test_patient_data_extractor_rejects_m_sidecar(tmp_path):
     _write_minimal_triangle_msh(raw / "vessel_0.msh")
     _write_sidecar_json(raw / "vessel_0.json", unit="m")
 
-    extractor = PatientDataExtractor(
+    extractor = ComsolAnchorDataExtractor(
         phase="biochem", raw_dir=raw, label_dir=label, proc_dir=out
     )
-    with pytest.raises(MeshUnitMismatchError, match="PatientDataExtractor"):
-        extractor.process_patient("vessel_0")
+    with pytest.raises(MeshUnitMismatchError, match="ComsolAnchorDataExtractor"):
+        extractor.process_comsol_anchor("vessel_0")
 
 
 # --- On-disk synthetic mesh: declared unit + plausible SI d_bar ----------------
@@ -265,14 +265,14 @@ def _kdtree_mesh_pair():
 
 
 def _make_extractor(tmp_path):
-    from src.data_gen.lib.extract_biochem_comsol_data import PatientDataExtractor
+    from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
 
     raw = tmp_path / "raw"
     label = tmp_path / "label"
     out = tmp_path / "out"
     for d in (raw, label, out):
         d.mkdir()
-    return PatientDataExtractor(
+    return ComsolAnchorDataExtractor(
         phase="biochem", raw_dir=raw, label_dir=label, proc_dir=out
     ), label
 
@@ -357,7 +357,7 @@ def test_load_spatial_mask_slanted_inlet_residual_is_accepted(tmp_path, _kdtree_
     pts, tree = _kdtree_mesh_pair
     extractor, label = _make_extractor(tmp_path)
     edge_scale_m = 1e-3
-    # patient048-class residual: 0.45 * edge (048 was 90-179 um on a 354 um edge).
+    # comsol048-class residual: 0.45 * edge (048 was 90-179 um on a 354 um edge).
     offset = np.array([[0.0, 0.45 * edge_scale_m]])
     coords_m = pts + offset
     f = label / "stem_inlet.txt"

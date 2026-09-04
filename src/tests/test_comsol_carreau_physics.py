@@ -16,7 +16,7 @@ from src.core_physics.clot_phi_simple import (
 
 @pytest.fixture
 def anchor_graph():
-    paths = list(__import__("pathlib").Path("data/processed/graphs_biochem_anchors").glob("patient*.pt"))
+    paths = list(__import__("pathlib").Path("data/processed/graphs_biochem_anchors").glob("comsol*.pt"))
     if not paths:
         pytest.skip("no biochem anchor graphs")
     return torch.load(str(paths[0]), map_location="cpu", weights_only=False)
@@ -29,7 +29,7 @@ def test_carreau_on_a_real_shear_field_reproduces_gt_bulk_viscosity(anchor_graph
     ``comsol_carreau(gamma_mode="max")`` beats plain Carreau -- and it held only because
     the packs' ``G_x``/``G_y`` returned ~0 for an interior derivative, so plain Carreau
     saw zero shear and returned the zero-shear plateau viscosity everywhere.  The
-    ``max(g, wls, poi, kin)`` blend was a workaround for that.  Measured on patient007
+    ``max(g, wls, poi, kin)`` blend was a workaround for that.  Measured on comsol007
     across the two operator modes:
 
         operator   plain Carreau err   comsol_carreau(max) err
@@ -92,13 +92,13 @@ def test_comsol_sr_sidecar_reproduces_gt_mu():
     import os
     from pathlib import Path
 
-    sidecar = Path("data/processed/cfd_results_biochem_diag/patient007_sr.pt")
-    graph_path = Path("data/processed/graphs_biochem_anchors/patient007.pt")
+    sidecar = Path("data/processed/cfd_results_biochem_diag/comsol007_sr.pt")
+    graph_path = Path("data/processed/graphs_biochem_anchors/comsol007.pt")
     if not sidecar.is_file() or not graph_path.is_file():
-        pytest.skip("patient007 sr sidecar / graph not available")
+        pytest.skip("comsol007 sr sidecar / graph not available")
     os.environ["CLOT_PHI_PHYSICS_MU_BASE"] = "comsol_carreau"
     os.environ["CLOT_PHI_PHYSICS_GAMMA_MODE"] = "comsol_sr"
-    os.environ["CLOT_PHI_PHYSICS_COMSOL_SR_ANCHOR"] = "patient007"
+    os.environ["CLOT_PHI_PHYSICS_COMSOL_SR_ANCHOR"] = "comsol007"
     try:
         phys = PhysicsConfig(phase="biochem")
         data = torch.load(str(graph_path), map_location="cpu", weights_only=False)

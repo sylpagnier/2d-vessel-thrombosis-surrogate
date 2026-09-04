@@ -69,7 +69,7 @@ from src.biochem_gnn.wall_cohort_constants import WOUND_COHORT  # noqa: E402
 WOUND_STEMS = WOUND_COHORT
 #: No-wound packs the artifact must leave bit-identical. Spot-check, not the whole cohort --
 #: the property is structural (`has_wound` short-circuits), these catch a wiring mistake.
-NOWOUND_CHECK = ("patient012", "patient020", "patient044")
+NOWOUND_CHECK = ("comsol012", "comsol020", "comsol044")
 
 
 def _prepare_flow(data, stem: str, flow: str) -> None:
@@ -164,8 +164,8 @@ def _assert_wound_is_covered(bundle: dict, flow: str = "gt") -> dict:
 
         # WHICH WOUNDS THIS GATE MAY DEMAND FULL COVERAGE OF.
         #
-        # "100% of wound nodes clot" was measured on wound_patient001/002/003 and held on
-        # 004/005.  `wound_patient006` falsifies it IN THE GROUND TRUTH -- 65.4% of its patch
+        # "100% of wound nodes clot" was measured on wound_comsol001/002/003 and held on
+        # 004/005.  `wound_comsol006` falsifies it IN THE GROUND TRUTH -- 65.4% of its patch
         # clots and the rest never does -- and the reason is physical, not a horizon effect
         # (GT plateaus at 65.4% by t=3150 s of a 6136 s run).  Its wound sits in a STAGNATION
         # ZONE: wall shear p50 3.5 /s on the nodes that clot and 0.7 /s on the nodes that do
@@ -210,7 +210,7 @@ def _assert_wound_is_covered(bundle: dict, flow: str = "gt") -> dict:
         # the shipped dispatcher had stopped satisfying.  It went unnoticed because
         # `clot_gnn_v5w` was promoted on 2026-08-23, four days before the union landed, and
         # the gate was never re-run.  Measured 2026-09-02: the union adds 6 / 6 / 11 nodes on
-        # wound_patient001 / 002 / 003, identically under `gt` and `fem`, so this is a
+        # wound_comsol001 / 002 / 003, identically under `gt` and `fem`, so this is a
         # dispatcher property and not a flow-source or a retraining effect.
         #
         # The invariant that IS true, and the one worth holding, is MONOTONE: outside the
@@ -312,7 +312,7 @@ def main() -> int:
         caveats=[
             "n=3 wound vessels; treat the magnitude as indicative and the sign as solid.",
             "GT flow at t=0 only (flow='gt'); not yet measured with predicted t=0 flow.",
-            "wound_patient003 is externally triggered and remains an outlier "
+            "wound_comsol003 is externally triggered and remains an outlier "
             "(WOUND_PROGRESS 11); its coupling is built but inert on the deploy-legal path.",
             "mask_wall stays the HEALTHY wall label BY DECISION (MODEL_REVIEW 8e): "
             "mask_wound is 100% GT clot, so folding it into the wall domain would award "

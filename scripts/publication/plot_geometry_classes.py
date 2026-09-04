@@ -6,7 +6,7 @@ own median lumen width -- with the aneurysm cut drawn and the designated classes
 WHY THIS FIGURE EARNS ITS PLACE, and it is not the obvious reason.  It shows that geometry class
 is *measured* rather than asserted, which the generalization claim needs.  But it also shows,
 honestly, that **the measured stenosis cut does not separate**: the three designated stenoses sit
-at narrowing 0.52 / 0.53 / 0.58 while `patient012`, a baseline, reads 0.51 -- below all three.
+at narrowing 0.52 / 0.53 / 0.58 while `comsol012`, a baseline, reads 0.51 -- below all three.
 `geometry_class.py` keeps the cut only because it would still catch a severe unlabelled case, and
 warns that it must never be retuned (refitting a cut whose classes overlap is coin-flipping).
 Drawing that failure costs one panel and buys the reader's trust in every other number.

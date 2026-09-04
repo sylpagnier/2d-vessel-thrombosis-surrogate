@@ -6,7 +6,7 @@ not 3D pipe flow.
 
 Scope: non-anchor Biochem samples (synthetic meshes / priors-only trajectory setup).
 Anchor samples with COMSOL trajectories are produced by:
-``src.data_gen.lib.extract_biochem_comsol_data.PatientDataExtractor``.
+``src.data_gen.lib.extract_biochem_comsol_data.ComsolAnchorDataExtractor``.
 """
 
 import os
@@ -690,7 +690,7 @@ if __name__ == "__main__":
                 print("Invalid input. Enter an integer value, 'all', or leave blank for all.")
 
     print("\nBiochem synthetic graph generation (non-anchor only)")
-    print("Anchor/patient graphs are generated via extract_biochem_comsol_data.py")
+    print("Anchor/COMSOL anchor graphs are generated via extract_biochem_comsol_data.py")
     print("\nNumber of vessels:")
     print("  - Enter an integer to process only that many meshes")
     print("  - Enter 'all' (or leave blank) to process all meshes")

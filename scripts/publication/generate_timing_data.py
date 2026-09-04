@@ -20,7 +20,7 @@ the total: any other time grid can be derived from it without re-running.
 
 Usage:
     python scripts/publication/generate_timing_data.py                  # default cohort
-    python scripts/publication/generate_timing_data.py --stems patient020 patient005
+    python scripts/publication/generate_timing_data.py --stems comsol020 comsol005
     python scripts/publication/generate_timing_data.py --every 4 --repeats 3
 """
 from __future__ import annotations

@@ -37,10 +37,10 @@ def test_viz_half_is_released_into_train_and_out_of_sealed():
     assert_disjoint()
     assert set(WALL_COHORT_V2_VIZ_RELEASED) <= set(WALL_COHORT_V2_TRAIN)
     assert not (set(WALL_COHORT_V2_VIZ_RELEASED) & set(WALL_COHORT_V2_GENERALIZATION))
-    assert set(SEALED) == {"patient007", "patient013", "patient031", "patient043"}
+    assert set(SEALED) == {"comsol007", "comsol013", "comsol031", "comsol043"}
     # 042 is a DEV vessel, so releasing it makes it DEV-train rather than FIT
-    assert split_of("patient042") == "dev"
-    for a in ("patient001", "patient010", "patient014"):
+    assert split_of("comsol042") == "dev"
+    for a in ("comsol001", "comsol010", "comsol014"):
         assert split_of(a) == "fit"
 
 
@@ -52,8 +52,8 @@ def test_the_historical_sealed_constant_is_frozen():
 
 
 def test_clot_free_vessels_are_their_own_category():
-    # 9 since 2026-09-03: `patient038` joined on the corpus rebuild -- its GT `Mat` is
-    # identically zero at every frame (`outputs/mat_field_cache_fem/patient038.npz`, gtmax
+    # 9 since 2026-09-03: `comsol038` joined on the corpus rebuild -- its GT `Mat` is
+    # identically zero at every frame (`outputs/mat_field_cache_fem/comsol038.npz`, gtmax
     # 0.00), so it is a clot-free vessel and not a FIT one that happens to score well.
     assert len(CLOT_FREE) == 9
     assert CLOT_FREE == WALL_COHORT_V2_CLOT_FREE
@@ -63,7 +63,7 @@ def test_clot_free_vessels_are_their_own_category():
 
 
 def test_mean_by_split_reports_clot_free_separately():
-    scores = {"patient020": 0.9, "patient041": 0.8, "patient017": 1.0, "patient022": 0.5}
+    scores = {"comsol020": 0.9, "comsol041": 0.8, "comsol017": 1.0, "comsol022": 0.5}
     m = mean_by_split(scores)
     assert m["clot_free"]["n"] == 2
     assert m["clot_free"]["mean"] == pytest.approx(0.75)

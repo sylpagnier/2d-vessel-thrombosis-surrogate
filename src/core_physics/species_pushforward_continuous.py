@@ -73,12 +73,12 @@ DEFAULT_CONTINUOUS_CKPT = "outputs/biochem/biochem_gnn/species/best.pth"
 DEFAULT_S34_CKPT = "outputs/biochem/biochem_gnn/species/best.pth"
 
 BIOCHEM_ANCHORS_6 = (
-    "patient001",
-    "patient002",
-    "patient003",
-    "patient004",
-    "patient006",
-    "patient007",
+    "comsol001",
+    "comsol002",
+    "comsol003",
+    "comsol004",
+    "comsol006",
+    "comsol007",
 )
 CH_FI = 0  # legacy alias when scope is fi_mat
 CH_MAT = 1
@@ -176,11 +176,11 @@ def biochem_anchors_graph_dir(root: Path | None = None) -> Path:
 
 
 def discover_biochem_anchors(root: Path | None = None) -> list[str]:
-    """All ``patient*.pt`` stems under ``graphs_biochem_anchors`` (sorted)."""
+    """All ``comsol*.pt`` stems under ``graphs_biochem_anchors`` (sorted)."""
     anchor_dir = biochem_anchors_graph_dir(root)
     if not anchor_dir.is_dir():
         return list(BIOCHEM_ANCHORS_6)
-    stems = sorted(p.stem for p in anchor_dir.glob("patient*.pt") if p.is_file())
+    stems = sorted(p.stem for p in anchor_dir.glob("comsol*.pt") if p.is_file())
     return stems or list(BIOCHEM_ANCHORS_6)
 
 
@@ -193,10 +193,10 @@ def parse_biochem_train_anchors(
     if all_anchors:
         return discover_biochem_anchors(root)
     items = [a.strip() for a in raw.split(",") if a.strip()]
-    return items or ["patient007"]
+    return items or ["comsol007"]
 
 
-# Historical short-horizon regime on patient007 (~53 macro-steps, ~2.2 h physical; F1 ~0.70-0.73).
+# Historical short-horizon regime on comsol007 (~53 macro-steps, ~2.2 h physical; F1 ~0.70-0.73).
 # Not the default deploy eval horizon — use ``graph_last_time_index`` / ``deploy_eval_time_index``.
 LEGACY_CAPPED_DEPLOY_HORIZON = 53
 
@@ -2839,7 +2839,7 @@ def two_model_frontier_hops() -> float:
 
     Supports fractional hops in (0, 1): 0.5 = committed + off-wall 1-hop shell only
     (tighter than hops=1). Per-anchor overrides via SPECIES_TWO_MODEL_FRONTIER_HOPS_MAP
-    (e.g. ``patient010:0.5,default:1``).
+    (e.g. ``comsol010:0.5,default:1``).
     """
     anchor = ""
     hop_map_raw = ""

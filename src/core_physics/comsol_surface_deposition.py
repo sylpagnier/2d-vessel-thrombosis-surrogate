@@ -1,7 +1,7 @@
 """Canonical COMSOL phase-2 surface platelet-deposition law (unit-consistent).
 
 Single source of truth for the wall surface reaction rates that COMSOL exports as
-``J0_M`` / ``J0_Mat`` / ``J0_th``. Validated against the patient007 calibration
+``J0_M`` / ``J0_Mat`` / ``J0_th``. Validated against the comsol007 calibration
 exports to machine precision: with constants from ``BiochemConfig`` converted to
 **COMSOL-native CGS units**, the recovered Damkohler number equals
 ``surface_damkohler = 1e-4`` with CV ~ 1e-16 across all gate branches, and the

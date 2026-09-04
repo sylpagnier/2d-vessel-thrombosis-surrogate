@@ -180,7 +180,7 @@ LADDER_LEG_ORDER: tuple[str, ...] = (
     "WG_featfix_02",
     "WG_featfix_03",
     "WG_featfix_04",
-    # ---- Clot-rich N+ LOAO (featfix_03 stack, expand sites, hold out patient020) ----
+    # ---- Clot-rich N+ LOAO (featfix_03 stack, expand sites, hold out comsol020) ----
     "WG_clotrich_nplus",
     "WG_clotrich_nplus_v2",
     # ---- Multi-hop flow features (2026-08-05 root cause; plan s2.2) ----
@@ -239,79 +239,79 @@ LADDER_LEG_ORDER: tuple[str, ...] = (
 # Includes 2026-08-03 batch (012,040-044); excludes half-finished 039 and empty 027.
 # Inventory / sealed roles: data/reference/generalization_new_vessels.json (§1b).
 WALL_GEN_CLOT_RICH_ANCHORS: tuple[str, ...] = (
-    "patient001",
-    "patient005",
-    "patient006",
-    "patient007",
-    "patient010",
-    "patient012",
-    "patient013",
-    "patient016",
-    "patient020",
-    "patient021",
-    "patient029",
-    "patient032",
-    "patient035",
-    "patient037",
-    "patient040",
-    "patient041",
-    "patient042",
-    "patient043",
-    "patient044",
+    "comsol001",
+    "comsol005",
+    "comsol006",
+    "comsol007",
+    "comsol010",
+    "comsol012",
+    "comsol013",
+    "comsol016",
+    "comsol020",
+    "comsol021",
+    "comsol029",
+    "comsol032",
+    "comsol035",
+    "comsol037",
+    "comsol040",
+    "comsol041",
+    "comsol042",
+    "comsol043",
+    "comsol044",
 )
 
 # 2026-08-03 batch: sealed geometry challenge (never in default N+ train).
-# 043 = aneurysm holdout; 044 = stenosis holdout. Primary gate remains patient020.
+# 043 = aneurysm holdout; 044 = stenosis holdout. Primary gate remains comsol020.
 WALL_GEN_BATCH_1B_TRAIN: tuple[str, ...] = (
-    "patient012",
-    "patient040",
-    "patient041",
-    "patient042",
+    "comsol012",
+    "comsol040",
+    "comsol041",
+    "comsol042",
 )
 WALL_GEN_BATCH_1B_CHALLENGE: tuple[str, ...] = (
-    "patient043",
-    "patient044",
+    "comsol043",
+    "comsol044",
 )
-WALL_GEN_BATCH_1B_NEG_CONTROL: tuple[str, ...] = ("patient027",)
-WALL_GEN_BATCH_1B_EXCLUDE: tuple[str, ...] = ("patient039",)
+WALL_GEN_BATCH_1B_NEG_CONTROL: tuple[str, ...] = ("comsol027",)
+WALL_GEN_BATCH_1B_EXCLUDE: tuple[str, ...] = ("comsol039",)
 
 # Warm-start for clot-rich N+ (geom+flux SAGE; must not include the holdout in its train set).
 WG_FEATFIX_03_CKPT = "outputs/biochem/eda/wall_gen_featfix/WG_featfix_03/best.pth"
 
-# Best F1 on record (0.500 on patient020). Warm-start base for the multi-hop flow legs;
-# its train set excludes patient020. See docs/WALL_MODEL_PLAN.md s2.
+# Best F1 on record (0.500 on comsol020). Warm-start base for the multi-hop flow legs;
+# its train set excludes comsol020. See docs/WALL_MODEL_PLAN.md s2.
 WG_CLOTRICH_NPLUS_CKPT = (
     "outputs/biochem/eda/wall_gen_clotrich_nplus/WG_clotrich_nplus/best.pth"
 )
 
-# Small clot-rich iteration cohort (no 023/002 junk; hold out patient020 separately).
+# Small clot-rich iteration cohort (no 023/002 junk; hold out comsol020 separately).
 WALL_GEN_SMALL_TRAIN_ANCHORS: tuple[str, ...] = (
-    "patient005",
-    "patient006",
-    "patient010",
+    "comsol005",
+    "comsol006",
+    "comsol010",
 )
 # Controlled mid expand: small + 3 extra clot-rich (not full N+).
 WALL_GEN_MID_TRAIN_ANCHORS: tuple[str, ...] = (
-    "patient005",
-    "patient006",
-    "patient010",
-    "patient001",
-    "patient007",
-    "patient012",
+    "comsol005",
+    "comsol006",
+    "comsol010",
+    "comsol001",
+    "comsol007",
+    "comsol012",
 )
 WG_PREC_ITER_CKPT = "outputs/biochem/eda/wall_gen_prec_iter/WG_prec_iter/best.pth"
 
 
 def wall_gen_clot_rich_train_anchors(
     *,
-    holdout: str = "patient020",
+    holdout: str = "comsol020",
     exclude_sealed_challenge: bool = True,
 ) -> list[str]:
     """Clot-rich train list for N+ LOAO (excludes holdout; never includes 023/002).
 
     By default also drops ``WALL_GEN_BATCH_1B_CHALLENGE`` (043 aneurysm / 044 stenosis)
     so the sealed geometry challenge stays clean. Primary holdout gate remains
-    ``patient020`` (report challenge vessels separately; do not average into the gate).
+    ``comsol020`` (report challenge vessels separately; do not average into the gate).
     """
     h = str(holdout or "").strip()
     if not h:
@@ -332,33 +332,33 @@ def wall_gen_clot_rich_train_anchors(
 # Stenosis/aneurysm sub-cohort pivot (WALL_MODEL_PLAN.md s9, 2026-08-05).
 #
 # Deliberately DIFFERENT from the sealed WALL_GEN_BATCH_1B_* split above:
-#   - includes patient039 (excluded there, and from WALL_GEN_CLOT_RICH_ANCHORS entirely --
+#   - includes comsol039 (excluded there, and from WALL_GEN_CLOT_RICH_ANCHORS entirely --
 #     half-finished sim, T=92; the commit-order probe found only 29 GT nodes / 3 TP
 #     components on it, the thinnest signal of any vessel probed).
-#   - trains on patient044 (there: sealed challenge, held out together with 043).
-#   - holds out ONLY patient043 (there: both 043 and 044 are held out).
+#   - trains on comsol044 (there: sealed challenge, held out together with 043).
+#   - holds out ONLY comsol043 (there: both 043 and 044 are held out).
 # This answers a narrower question -- "can we generalize within this 6-vessel family" --
 # not a replacement for the sealed protocol, which stays intact for the eventual
 # all-vessel evaluation. Training on 044 here spends one of its two sealed challenge
-# points: patient043 is the only vessel left sealed for BOTH this sub-study and the
+# points: comsol043 is the only vessel left sealed for BOTH this sub-study and the
 # original wall-gen plan once this leg is trained.
 WALL_GEN_STENOSIS_SUBCOHORT: tuple[str, ...] = (
-    "patient039",
-    "patient040",
-    "patient041",
-    "patient042",
-    "patient043",
-    "patient044",
+    "comsol039",
+    "comsol040",
+    "comsol041",
+    "comsol042",
+    "comsol043",
+    "comsol044",
 )
 
 
-def wall_gen_stenosis_subcohort_train_anchors(*, holdout: str = "patient043") -> list[str]:
+def wall_gen_stenosis_subcohort_train_anchors(*, holdout: str = "comsol043") -> list[str]:
     """Train list for the stenosis/aneurysm sub-cohort pivot (cohort minus holdout).
 
     See ``WALL_GEN_STENOSIS_SUBCOHORT`` above for how this split differs from the sealed
     ``WALL_GEN_BATCH_1B_*`` protocol. Zero-shot (``WG_clotrich_nplus`` + flow gate pct=25,
     no cohort-specific training at all) already scores ``deploy_clot_f1=0.650`` on
-    ``patient043`` -- ``WG_stenosis_subcohort_ft`` is a light fine-tune from that floor,
+    ``comsol043`` -- ``WG_stenosis_subcohort_ft`` is a light fine-tune from that floor,
     not a from-scratch train.
     """
     h = str(holdout or "").strip()
@@ -716,10 +716,10 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
             env_overrides={},
         ),
         # Same feature/runtime stack as WG_featfix_03; data axis = clot-rich N+ LOAO.
-        # Warm-start from featfix_03 (holdout patient020 was never in that ckpt's train set).
+        # Warm-start from featfix_03 (holdout comsol020 was never in that ckpt's train set).
         "WG_clotrich_nplus": MatGrowthLegSpec(
             code="WG_clotrich_nplus",
-            label="Clot-rich N+: featfix_03 stack, expand sites, hold out patient020",
+            label="Clot-rich N+: featfix_03 stack, expand sites, hold out comsol020",
             no_init=False,
             init_ckpt=WG_FEATFIX_03_CKPT,
             init_mode="full",
@@ -733,7 +733,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
             env_overrides={},
         ),
         # Multi-hop flow: adds hop-2/hop-3 neighbourhood mean speed as a trailing block.
-        # 97% of patient020's FPs are a *distant* wrong pocket (median 56 hops), and the
+        # 97% of comsol020's FPs are a *distant* wrong pocket (median 56 hops), and the
         # label lives on wall nodes where u=v=0 by no-slip -- so 1-hop flow separates
         # TP/FP at AUC 0.41 while hop-2 separates at 0.94. Warm-start widens conv1 with
         # zero columns, so this starts as an exact functional copy of the N+ checkpoint.
@@ -817,7 +817,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
         ),
         # Stenosis/aneurysm sub-cohort recall fine-tune (WALL_MODEL_PLAN.md s9, 2026-08-05).
         # Zero-shot WG_clotrich_nplus + flow gate pct=25 already scores deploy_clot_f1=0.650
-        # on patient043 with NO training on this cohort -- purity/precision there is already
+        # on comsol043 with NO training on this cohort -- purity/precision there is already
         # near its selection ceiling (0.650 of an oracle 0.697). The diagnosed gap is
         # under-seeding (mass_ratio 0.653, mat_front_speed_ratio 0.862, FN=44 vs FP=11), not
         # spurious pockets, so this leg is the mirror image of WG_prec_iter/WG_clotrich_nplus_v2:
@@ -828,7 +828,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
         "WG_stenosis_subcohort_ft": MatGrowthLegSpec(
             code="WG_stenosis_subcohort_ft",
             label="Stenosis/aneurysm sub-cohort: underpred-tilted loss + front-growth select, "
-                  "warm from N+ (0.650 zero-shot on patient043)",
+                  "warm from N+ (0.650 zero-shot on comsol043)",
             no_init=False,
             init_ckpt=WG_CLOTRICH_NPLUS_CKPT,
             init_mode="full",
@@ -855,7 +855,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "select_clot_score_weight": 0.30,
                 "select_mat_f1_weight": 0.0,
                 # Reward front-growth completeness / penalize FN-heavy underseed -- the two
-                # diagnosed gaps (mat_front_speed_ratio=0.862, FN=44 vs FP=11 on patient043).
+                # diagnosed gaps (mat_front_speed_ratio=0.862, FN=44 vs FP=11 on comsol043).
                 "select_front_speed_lambda": 0.20,
                 "select_fn_fp_lambda": 0.20,
                 # Guardrail: never promote a checkpoint that under-seeds MORE than today's
@@ -956,11 +956,11 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
         # The growth-arrest probe (s9.10, scripts/probe_growth_arrest.py, zero-shot warm-start
         # across the s9.4 cohort) found the real defect, and it is NOT "no arrest":
         #   * The model's clot ONSET is anti-correlated with the truth, perfectly monotone (n=5):
-        #       deep mass  0 ->  GT onset t=55, model t=18  (-37, EARLY)   patient039
-        #       deep mass  8 ->  GT onset t=60, model t=20  (-40, EARLY)   patient040
-        #       deep mass  9 ->  GT onset t=60, model t=20  (-40, EARLY)   patient043 (holdout)
-        #       deep mass 68 ->  GT onset t=20, model t=80  (+60, LATE )   patient042
-        #       deep mass 74 ->  GT onset t=20, model t=60  (+40, LATE )   patient041
+        #       deep mass  0 ->  GT onset t=55, model t=18  (-37, EARLY)   comsol039
+        #       deep mass  8 ->  GT onset t=60, model t=20  (-40, EARLY)   comsol040
+        #       deep mass  9 ->  GT onset t=60, model t=20  (-40, EARLY)   comsol043 (holdout)
+        #       deep mass 68 ->  GT onset t=20, model t=80  (+60, LATE )   comsol042
+        #       deep mass 74 ->  GT onset t=20, model t=60  (+40, LATE )   comsol041
         #     i.e. vessels that clot early AND thick are exactly the ones it starts latest on.
         #     This also supplies the mechanism behind s9.5's deep-mass/coverage correlation:
         #     that was never a coverage problem, it is a phase error.
@@ -973,7 +973,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
         # GT-RELATIVE at every unroll step (n_gt clamps to 1, so while GT is still empty a
         # premature commit of N nodes yields mass_ratio=N and softplus(N-1.2) fires hard). So it
         # is a PREMATURE-FIRING suppressor, not the late-overgrowth suppressor s9.10 first
-        # called it -- and being GT-relative it stays silent on patient041/042 where the model
+        # called it -- and being GT-relative it stays silent on comsol041/042 where the model
         # is behind GT. Correct behaviour on both halves of a cohort that splits early/late.
         # That also explains v1/v2 mechanically: raising underpred_weight increases growth
         # UNIFORMLY, including where GT is still zero, and 200 autoregressive steps compound it
@@ -1031,7 +1031,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "select_front_speed_target_lambda": 0.15,
                 "select_fp_fn_imbalance_lambda": 0.15,
                 # Same bounds as v2 -- now anchored to t_final (s9.10 fix), not the sliding
-                # window mean, so this guards the exact quantity that blew up on patient043.
+                # window mean, so this guards the exact quantity that blew up on comsol043.
                 "select_mass_hard_min": 0.5,
                 "select_mass_hard_max": 1.5,
                 "select_f1_min_hard_floor": 0.30,
@@ -1843,7 +1843,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
         ),
         # v4 -- v3's brake moved the rollout ~1% on a model 400% off target (front_speed
         # 4.545 -> 4.605, t_final mass 4.02 -> 4.03). Comparing all four legs against their
-        # OBSERVED mass on patient043 finally isolates the actual driver, and it is not any
+        # OBSERVED mass on comsol043 finally isolates the actual driver, and it is not any
         # knob v1/v2/v3 were tuning (WALL_MODEL_PLAN.md s9.12):
         #
         #     leg                 underpred   fp    t_final mass

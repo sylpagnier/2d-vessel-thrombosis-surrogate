@@ -1,4 +1,4 @@
-﻿"""Diagnose patient001 lumen miss vs patient007 (GT hops + optional Arm S pred).
+"""Diagnose comsol001 lumen miss vs comsol007 (GT hops + optional Arm S pred).
 
 Usage:
   python scripts/diagnose_lumen_001_vs_007.py
@@ -159,11 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     bio = BiochemConfig(phase="biochem")
 
     print("=" * 72, flush=True)
-    print("DIAG: patient001 vs patient007 lumen (deploy-time hop hist)", flush=True)
+    print("DIAG: comsol001 vs comsol007 lumen (deploy-time hop hist)", flush=True)
     print("=" * 72, flush=True)
 
     rows = []
-    for anc in ("patient007", "patient001"):
+    for anc in ("comsol007", "comsol001"):
         print(f"[i] profiling {anc}...", flush=True)
         rows.append(
             _profile_anchor(
@@ -191,8 +191,8 @@ def main(argv: list[str] | None = None) -> int:
         if r["lumen_extent"]:
             print(f"  GT lumen extent: {r['lumen_extent']}", flush=True)
 
-    a001 = next(r for r in rows if r["anchor"] == "patient001")
-    a007 = next(r for r in rows if r["anchor"] == "patient007")
+    a001 = next(r for r in rows if r["anchor"] == "comsol001")
+    a007 = next(r for r in rows if r["anchor"] == "comsol007")
     notes = []
     if a001["gt_hop"]["hop_ge2"] > 10 and a001["pred_hop"]["hop_ge2"] <= 0:
         notes.append("001: rich GT lumen, zero pred hop_ge2 -> transfer/activation failure")

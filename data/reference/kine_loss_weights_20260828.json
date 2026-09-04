@@ -1,5 +1,5 @@
 {
-  "checkpoint": "C:\\Users\\pgssy\\thrombus_ml_model\\outputs\\kinematics\\kinematics_best.pth",
+  "checkpoint": "outputs/kinematics/kinematics_best.pth",
   "grad_norms": {
     "l_band_gate": 97.1920266989834,
     "l_data_kine": 1.113857406991849,

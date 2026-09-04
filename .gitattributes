@@ -8,7 +8,7 @@
 #   : No such file or directoryh.sh
 #
 # The blobs were always LF; it is the checkout that breaks them.  This cost a Stage-A launch on
-# the COMSOL box.  Applies to all 10 tracked .sh files, not just the Stage-A ones.
+# the COMSOL box.  Applies to every tracked .sh file, not just the Stage-A ones.
 *.sh text eol=lf
 
 # PowerShell launchers are Windows-native; leave them to the platform default.

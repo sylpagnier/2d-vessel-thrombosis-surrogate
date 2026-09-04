@@ -10,14 +10,14 @@ them, the shipped rule ``shell & off_att*Mat_owner >= crit`` scores:
     ClotGNN reg head             0.0000   0.0000   0.0000      <- zero-init residual, inert
     GT                           0.9755   0.9755   0.7897
 
-and on ``wound_patient003``'s far-field candidates GT ``Mat_owner`` separates clot from lumen
+and on ``wound_comsol003``'s far-field candidates GT ``Mat_owner`` separates clot from lumen
 at **AUC 0.9961** while the ODE's is at **chance (0.5048)**, its two medians equal to three
 significant figures.  A total flow stall -- the strongest form of the flow hypothesis, bounded
 exactly by ``gate == 1`` -- moves the ODE's wall p90 from 1.73x to 2.31x crit where the rule
 needs 6.25x.  So the field has to be learned; there is no flow model, blockage or
 recalibration that recovers it.
 
-WHAT IS PREDICTED, AND WHY IT IS NOT A MAGNITUDE REGRESSION.  ``wound_patient003``'s wall
+WHAT IS PREDICTED, AND WHY IT IS NOT A MAGNITUDE REGRESSION.  ``wound_comsol003``'s wall
 ``Mat`` p90 is **27.78x crit, the largest in the dataset** -- no non-wound vessel exceeds
 11.13x (``scripts/diag_mat_magnitude_cohort.py``).  Regressing the magnitude and thresholding
 it would therefore ask the model to extrapolate past its training support on exactly the
@@ -66,7 +66,7 @@ class MatFieldConfig:
     reg_w: float = 0.3
     #: Positives (``Mat >= crit/0.16``) are ~5-10% of solid nodes and MOST vessels have none
     #: at all -- 30 of 47 have wall p90 at or below 1.01x crit.  At ``pos_weight = 3`` the
-    #: first trained field came back with ``Mat`` p90 = 2.00x on ``wound_patient003`` against
+    #: first trained field came back with ``Mat`` p90 = 2.00x on ``wound_comsol003`` against
     #: a GT 27.78x, i.e. the residual had collapsed onto the ODE's own 1.96x and learned
     #: nothing there.  Shrinkage toward an overwhelmingly empty prior is the thing to beat.
     pos_weight: float = 12.0

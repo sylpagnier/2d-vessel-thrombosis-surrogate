@@ -1,7 +1,7 @@
 """Commitment-order signal for pocket selection (docs/WALL_MODEL_PLAN.md s2.10 / s4 Step 1b).
 
 s2.9 established that flow depth (``h2min``, src/evaluation/pocket_gate.py) cannot rank
-patient037's pockets: the model commits a 40-node TRUE and a 40-node FALSE component at
+comsol037's pockets: the model commits a 40-node TRUE and a 40-node FALSE component at
 statistically identical stagnation (0.048 vs 0.047). s2.10's hypothesis is that *timing* is
 orthogonal to depth -- ``mat_seed_prec = 1.000`` on every checkpoint examined says the first
 commitment is correct, so an earlier-committing component may outrank a later one even when
@@ -83,7 +83,7 @@ def flow_tie_pairs(
     """``[len(pos), len(neg)]`` mask of (TP, FP) pairs whose ``h2min`` flow is a tie.
 
     A tie is ``|a - b| <= rel_tol * mean(a, b)``. These are exactly the pairs s2.9 says the
-    flow gate cannot order (patient037's 0.048 vs 0.047 is a 2.1% gap), so they are the
+    flow gate cannot order (comsol037's 0.048 vs 0.047 is a 2.1% gap), so they are the
     pairs a second signal has to earn its keep on.
     """
     a = np.asarray(pos_flow, dtype=np.float64).reshape(-1, 1)

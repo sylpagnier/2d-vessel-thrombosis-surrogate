@@ -15,9 +15,9 @@ def test_cv_fold_checkpoint_records_the_exact_exclusion(tmp_path):
     model = ClotGNN(3, 7, dim=4, layers=1, drop=0.0)
     predict = SimpleNamespace(model=model, norm=(np.zeros(3), np.ones(3)))
     _save_fold_member(
-        tmp_path, tag="c0shape", fold=2, held=["patient040", "patient041"],
-        train=["patient001", "patient005"],
-        pool=["patient001", "patient005", "patient040", "patient041"],
+        tmp_path, tag="c0shape", fold=2, held=["comsol040", "comsol041"],
+        train=["comsol001", "comsol005"],
+        pool=["comsol001", "comsol005", "comsol040", "comsol041"],
         cols=["a", "b", "phys_mask"], cfg={"shape_w": 2.0, "rounds": 3},
         seed=0, predict=predict,
     )
@@ -25,7 +25,7 @@ def test_cv_fold_checkpoint_records_the_exact_exclusion(tmp_path):
     root = tmp_path / "c0shape" / "fold_02"
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["purpose"].startswith("outer-fold checkpoint")
-    assert manifest["held_out"] == ["patient040", "patient041"]
+    assert manifest["held_out"] == ["comsol040", "comsol041"]
     assert not set(manifest["held_out"]) & set(manifest["train_anchors"])
     assert manifest["members"][0]["cfg"]["shape_w"] == 2.0
     saved = torch.load(root / "member_s0.pth", map_location="cpu", weights_only=False)

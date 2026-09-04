@@ -50,8 +50,8 @@ def test_two_model_frontier_hops():
 
 
 def test_parse_frontier_hops_map():
-    m = parse_two_model_frontier_hops_map("patient010:0.5,default:1")
-    assert m["patient010"] == 0.5
+    m = parse_two_model_frontier_hops_map("comsol010:0.5,default:1")
+    assert m["comsol010"] == 0.5
     assert m["default"] == 1.0
 
 

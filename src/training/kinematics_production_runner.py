@@ -1,4 +1,4 @@
-"""Stage-A production orchestration (foundation, polish, clinical, promote)."""
+"""Stage-A production orchestration (foundation, polish, comsol, promote)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import torch
 from src.training.kinematics_production_config import (
     BEST_CKPT,
     CKPT_LATEST,
-    CLINICAL_OUTPUT_DIR,
+    COMSOL_OUTPUT_DIR,
     FoundationConfig,
     LadderConfig,
     PRODUCTION_OUTPUT_DIR,
@@ -25,7 +25,7 @@ from src.training.kinematics_production_config import (
     STATE_LATEST,
     SyntheticPolishConfig,
     bind_env,
-    has_clinical_anchor_packs,
+    has_comsol_anchor_packs,
 )
 from src.utils.paths import get_project_root
 
@@ -261,31 +261,31 @@ def run_synthetic_polish(
     return 0
 
 
-def run_clinical_finetune(
+def run_comsol_finetune(
     cfg,
     *,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    from src.training.kinematics_production_config import ClinicalFinetuneConfig
+    from src.training.kinematics_production_config import ComsolFinetuneConfig
 
-    if not isinstance(cfg, ClinicalFinetuneConfig):
+    if not isinstance(cfg, ComsolFinetuneConfig):
         raise TypeError(type(cfg))
     cfg.bind_process_env()
     resume = Path(cfg.resume)
     if not resume.is_absolute():
         resume = get_project_root() / resume
     if not resume.is_file():
-        raise FileNotFoundError(f"[kin-clinical-ft] resume checkpoint missing: {resume}")
+        raise FileNotFoundError(f"[kin-comsol-ft] resume checkpoint missing: {resume}")
 
     _log(
-        f"[kin-clinical-ft] resume={resume} holdout={cfg.holdout} epochs={cfg.finetune_epochs} "
+        f"[kin-comsol-ft] resume={resume} holdout={cfg.holdout} epochs={cfg.finetune_epochs} "
         f"lr={cfg.finetune_lr} synth_cap={cfg.synthetic_cap} out={cfg.output_dir}",
         progress=progress,
     )
 
     argv = [
         sys.executable,
-        "scripts/finetune_kine_patient_anchors.py",
+        "scripts/finetune_kine_comsol_anchors.py",
         "--epochs",
         str(cfg.finetune_epochs),
         "--lr",
@@ -299,9 +299,9 @@ def run_clinical_finetune(
     ]
     rc = int(subprocess.call(argv))
     if rc != 0:
-        raise RuntimeError(f"[kin-clinical-ft] training failed (exit {rc}).")
+        raise RuntimeError(f"[kin-comsol-ft] training failed (exit {rc}).")
     _log(
-        "[kin-clinical-ft] done. Run promotion gates before copying to global kinematics_best.pth",
+        "[kin-comsol-ft] done. Run promotion gates before copying to global kinematics_best.pth",
         progress=progress,
     )
     return 0
@@ -310,7 +310,7 @@ def run_clinical_finetune(
 def promote_checkpoint(
     checkpoint: Path | str,
     *,
-    holdout: str = "patient007",
+    holdout: str = "comsol007",
     progress: Callable[[str], None] | None = None,
 ) -> int:
     ckpt = Path(checkpoint)
@@ -339,7 +339,7 @@ def run_ladder(
     *,
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    _log("[ladder] Stage-A: foundation -> synthetic polish -> clinical anchors -> promote", progress=progress)
+    _log("[ladder] Stage-A: foundation -> synthetic polish -> comsol anchors -> promote", progress=progress)
     root = get_project_root()
     ckpt = (
         Path(cfg.resume_after_foundation)
@@ -368,40 +368,40 @@ def run_ladder(
         run_synthetic_polish(polish, progress=progress)
         ckpt = root / PRODUCTION_OUTPUT_DIR / BEST_CKPT
 
-    if cfg.skip_clinical_anchors:
-        _log("[ladder] phase 3 clinical anchors skipped (-SkipClinicalAnchors).", progress=progress)
-    elif not has_clinical_anchor_packs():
+    if cfg.skip_comsol_anchors:
+        _log("[ladder] phase 3 comsol anchors skipped (-SkipComsolAnchors).", progress=progress)
+    elif not has_comsol_anchor_packs():
         msg = (
-            "[ladder] phase 3 skipped: no patient*.pt under "
+            "[ladder] phase 3 skipped: no comsol*.pt under "
             "data/processed/graphs_kinematics_anchors/carreau/"
         )
-        if cfg.require_clinical:
+        if cfg.require_comsol:
             raise RuntimeError(msg)
         _log(f"[ladder] WARN {msg}", progress=progress)
-        _log("[ladder] Add patient kine graphs and re-run with skip_foundation + skip_synthetic_polish", progress=progress)
+        _log("[ladder] Add COMSOL anchor kine graphs and re-run with skip_foundation + skip_synthetic_polish", progress=progress)
     else:
         _log(
-            f"[ladder] === phase 3/3: clinical geometry finetune "
-            f"(holdout={cfg.clinical.holdout}, epochs={cfg.clinical.finetune_epochs}) ===",
+            f"[ladder] === phase 3/3: comsol geometry finetune "
+            f"(holdout={cfg.comsol.holdout}, epochs={cfg.comsol.finetune_epochs}) ===",
             progress=progress,
         )
-        clinical = cfg.clinical
-        clinical.resume = ckpt
-        run_clinical_finetune(clinical, progress=progress)
-        clinical_best = root / CLINICAL_OUTPUT_DIR / BEST_CKPT
+        comsol = cfg.comsol
+        comsol.resume = ckpt
+        run_comsol_finetune(comsol, progress=progress)
+        comsol_best = root / COMSOL_OUTPUT_DIR / BEST_CKPT
         if not cfg.skip_promote:
-            _log("[ladder] === promotion gates (patient + synthetic + synthetic L2) ===", progress=progress)
-            promote_checkpoint(clinical_best, holdout=cfg.clinical.holdout, progress=progress)
+            _log("[ladder] === promotion gates (COMSOL anchor + synthetic + synthetic L2) ===", progress=progress)
+            promote_checkpoint(comsol_best, holdout=cfg.comsol.holdout, progress=progress)
         else:
-            _log(f"[ladder] clinical best (not promoted): {clinical_best}", progress=progress)
+            _log(f"[ladder] comsol best (not promoted): {comsol_best}", progress=progress)
             _log(
-                f"  python scripts/check_kinematics_promotion_gates.py --checkpoint {clinical_best}",
+                f"  python scripts/check_kinematics_promotion_gates.py --checkpoint {comsol_best}",
                 progress=progress,
             )
         return 0
 
     if not cfg.skip_promote:
-        _log("[ladder] no clinical phase; promoting synthetic best -> outputs/kinematics/kinematics_best.pth", progress=progress)
+        _log("[ladder] no comsol phase; promoting synthetic best -> outputs/kinematics/kinematics_best.pth", progress=progress)
         dest = root / PROMOTED_BEST_PATH
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ckpt, dest)
@@ -420,7 +420,7 @@ def run_production(
     if cfg.foundation_only:
         _log("[kin-prod] foundation_only: skipping phases 2-3.", progress=progress)
         return 0
-    _log("[kin-prod] chaining phases 2-3 (synthetic polish + clinical geometry finetune)...", progress=progress)
+    _log("[kin-prod] chaining phases 2-3 (synthetic polish + comsol geometry finetune)...", progress=progress)
     ladder = cfg.ladder
     ladder.skip_foundation = True
     ladder.resume_after_foundation = get_project_root() / PRODUCTION_OUTPUT_DIR / BEST_CKPT
@@ -431,7 +431,7 @@ __all__ = [
     "checkpoint_next_epoch",
     "clear_foundation_checkpoints",
     "promote_checkpoint",
-    "run_clinical_finetune",
+    "run_comsol_finetune",
     "run_foundation",
     "run_ladder",
     "run_production",

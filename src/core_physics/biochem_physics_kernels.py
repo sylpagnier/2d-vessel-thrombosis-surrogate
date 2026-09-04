@@ -606,7 +606,7 @@ class BiochemPhysicsKernels:
         # With sgt < 0 the soft step then evaluates sigmoid(sgt/T) ~ 0 everywhere and the
         # entire separation branch -- 21% of COMSOL's deposition mechanism, and the
         # branch that carries the FAST vessels -- has never contributed. Measured on
-        # patient007: the repo's `dshear_ds` percentiles are exactly [0, 0, -0].
+        # comsol007: the repo's `dshear_ds` percentiles are exactly [0, 0, -0].
         # `BIOCHEM_SEPARATION_GATE=stream` restores the old behaviour.
         # See docs/PHASE3_RESULTS.md 1.
         if (os.environ.get("BIOCHEM_SEPARATION_GATE") or "dx").strip().lower() == "stream":

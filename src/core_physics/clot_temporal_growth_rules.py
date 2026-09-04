@@ -1682,7 +1682,7 @@ def aggregate_temporal_rule_sweep(results: list[dict[str, Any]]) -> list[dict[st
                 "tfinal_mean_f1": tfinal_f1,
                 "tfinal_mean_pred_frac": sum(r["tfinal_band_pred_frac"] for r in rows) / len(rows),
                 "p007_tfinal_f1": next(
-                    (r["tfinal_band_f1"] for r in rows if r["anchor"] == "patient007"), float("nan")
+                    (r["tfinal_band_f1"] for r in rows if r["anchor"] == "comsol007"), float("nan")
                 ),
                 "balance_score": (mean_f1 + 0.35 * early_f1 + 0.65 * tfinal_f1) / 2.0
                 if early_f1 == early_f1
@@ -1709,45 +1709,45 @@ def aggregate_architecture_sweep(results: list[dict[str, Any]]) -> list[dict[str
         tfinal_f1 = sum(r["tfinal_band_f1"] for r in rows) / len(rows)
         pred_frac = sum(r["tfinal_band_pred_frac"] for r in rows) / len(rows)
         p007_timeline_shape = next(
-            (r.get("mean_clot_shape", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("mean_clot_shape", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_tfinal_shape = next(
-            (r.get("tfinal_clot_shape", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("tfinal_clot_shape", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_timeline_bal = next(
-            (r.get("mean_clot_shape_bal", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("mean_clot_shape_bal", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_band = next(
-            (r["tfinal_band_f1"] for r in rows if r["anchor"] == "patient007"),
+            (r["tfinal_band_f1"] for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_pred = next(
-            (r["tfinal_band_pred_frac"] for r in rows if r["anchor"] == "patient007"),
+            (r["tfinal_band_pred_frac"] for r in rows if r["anchor"] == "comsol007"),
             pred_frac,
         )
         p007_shape_eff = next(
-            (r.get("tfinal_clot_shape_eff", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("tfinal_clot_shape_eff", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_shape_bal = next(
-            (r.get("tfinal_clot_shape_bal", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("tfinal_clot_shape_bal", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_early_pred = next(
-            (r.get("early_mean_pred_frac", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("early_mean_pred_frac", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         tfinal_shape_eff = sum(r.get("tfinal_clot_shape_eff", float("nan")) for r in rows) / len(rows)
         tfinal_shape_bal = sum(r.get("tfinal_clot_shape_bal", float("nan")) for r in rows) / len(rows)
         p007_gt = next(
-            (r.get("tfinal_gt_pos_frac", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("tfinal_gt_pos_frac", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         p007_early_gt = next(
-            (r.get("early_mean_gt_pos_frac", float("nan")) for r in rows if r["anchor"] == "patient007"),
+            (r.get("early_mean_gt_pos_frac", float("nan")) for r in rows if r["anchor"] == "comsol007"),
             float("nan"),
         )
         deploy = compute_deploy_score(

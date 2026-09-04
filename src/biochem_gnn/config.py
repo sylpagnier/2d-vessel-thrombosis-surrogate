@@ -32,7 +32,7 @@ PHASE_CKPT = "biochem_gnn"
 PHASE_MANIFEST = "biochem_gnn_baseline"
 PHASE_LOAO_INDEX = "biochem_gnn_loao"
 
-VAL_ANCHOR_DEFAULT = "patient007"
+VAL_ANCHOR_DEFAULT = "comsol007"
 # 0 = per-graph last macro-step (full COMSOL timeline). See LEGACY_CAPPED_DEPLOY_HORIZON.
 DEPLOY_HORIZON_DEFAULT = 0
 LEGACY_CAPPED_DEPLOY_HORIZON = 53

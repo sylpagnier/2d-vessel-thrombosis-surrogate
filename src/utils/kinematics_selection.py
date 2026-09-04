@@ -174,7 +174,7 @@ def wall_gate_health(pred_uv, data, *, hops_pred: int = 3, hops_gt: int = 3, bio
     The deploy collapse does not run through gate Jaccard.  `clot_ml`'s `physics_mask` seeds
     from ``(gate > 0) & wall``; when the surrogate's wall shear never drops below ``lss`` that
     seed is EMPTY, the mask empties, and thirteen physics/advection channels go identically
-    zero -- measured on 7 of 30 deploy packs, and worth -0.97 wall F1 on patient010.  So the
+    zero -- measured on 7 of 30 deploy packs, and worth -0.97 wall F1 on comsol010.  So the
     quantity to watch during training is not agreement, it is whether the gate fires at all.
 
     Returns ``fire_gt`` / ``fire_pred`` (share of wall nodes firing), ``empty`` (the pred gate

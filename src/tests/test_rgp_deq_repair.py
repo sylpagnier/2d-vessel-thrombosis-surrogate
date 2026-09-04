@@ -95,7 +95,7 @@ def test_rank_aware_pinv_never_claims_rank_the_stencil_lacks():
 
     Note what this does NOT assert.  On these meshes `pinv(M + 1e-6*I, rcond=1e-5)` produces
     the *same* per-node rank as honest truncation at every scale tested (1.0 down to 1e-3), and
-    on `patient020` the two operators agree to within 3% in norm.  So the ridge is not the
+    on `comsol020` the two operators agree to within 3% in norm.  So the ridge is not the
     active defect here -- the rank deficiency itself is, and the repair that matters is the
     neighbour fill in `wls_derivatives`.  Truncation is kept because it is unconditionally
     correct, not because it was measured to fix something.
@@ -238,7 +238,7 @@ def test_trainer_never_mints_a_best_checkpoint_it_did_not_promote():
 def test_finetune_holds_out_every_sealed_vessel():
     from src.core_physics.wall_cohort_splits import SEALED
 
-    src = (REPO / "scripts" / "finetune_kine_patient_anchors.py").read_text(encoding="utf-8")
+    src = (REPO / "scripts" / "finetune_kine_comsol_anchors.py").read_text(encoding="utf-8")
     assert "_default_holdout_stems" in src
     assert "wall_cohort_splits" in src, "holdout is hard-coded rather than derived (B8)"
     assert len(set(SEALED)) >= 4
@@ -284,7 +284,7 @@ def test_assert_promotable_rejects_a_latest_checkpoint(tmp_path):
 
 # --- D2 / D3: the new objective terms -------------------------------------------------------
 
-_PACK = REPO / "data" / "processed" / "graphs_kinematics_anchors" / "carreau" / "patient020.pt"
+_PACK = REPO / "data" / "processed" / "graphs_kinematics_anchors" / "carreau" / "comsol020.pt"
 
 
 @pytest.mark.skipif(not _PACK.is_file(), reason="needs a local kinematics anchor pack")
@@ -362,12 +362,12 @@ def test_geometry_sync_covers_the_mesh_channels_and_nothing_else():
 
     n = 6
     train = Data(x=torch.zeros(n, 18), edge_index=torch.tensor([[0, 1], [1, 0]]))
-    train.graph_stem = "patient001"
+    train.graph_stem = "comsol001"
     ref = Data(x=torch.arange(n * 18, dtype=torch.float32).reshape(n, 18))
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        torch.save(ref, Path(td) / "patient001.pt")
+        torch.save(ref, Path(td) / "comsol001.pt")
         assert sync_geometry_from_deploy_pack(train, deploy_dir=td) is True
     for c in range(18):
         if c in GEOMETRY_SYNC_CHANNELS:
@@ -385,9 +385,9 @@ def test_geometry_sync_refuses_a_node_count_mismatch():
     import tempfile
 
     train = Data(x=torch.zeros(6, 18), edge_index=torch.tensor([[0, 1], [1, 0]]))
-    train.graph_stem = "patient001"
+    train.graph_stem = "comsol001"
     with tempfile.TemporaryDirectory() as td:
-        torch.save(Data(x=torch.ones(9, 18)), Path(td) / "patient001.pt")
+        torch.save(Data(x=torch.ones(9, 18)), Path(td) / "comsol001.pt")
         assert sync_geometry_from_deploy_pack(train, deploy_dir=td) is False
     assert float(train.x.abs().max()) == 0.0
 
@@ -478,7 +478,7 @@ def test_midside_detection_survives_a_curved_boundary():
 # --- A1: the training corpus must carry the deployment mesh order ---------------------------
 
 def test_p2_elevation_reproduces_the_comsol_edge_convention():
-    """COMSOL emits corner-midside half-edges ONLY -- measured 100.00% on patient020, with
+    """COMSOL emits corner-midside half-edges ONLY -- measured 100.00% on comsol020, with
     0.00% corner-corner and 0.00% midside-midside.  Elevation that keeps the original P1 edges
     would produce a different degree distribution and re-open the gap it exists to close."""
     from src.data_gen.lib.p1_corner_graph import identify_midside_nodes
@@ -548,7 +548,7 @@ def test_p2_elevation_midside_boundary_labels_require_both_parents():
 def test_coord_mode_centering_is_exactly_translation_invariant():
     """§8 A2.  Translating a vessel changes nothing physical, so the coordinates the network
     sees must not move.  Measured on the shipped checkpoint, a full-span translation moved the
-    prediction by 0.55 (patient020) under 'absolute' and 0.0019 under 'centered'."""
+    prediction by 0.55 (comsol020) under 'absolute' and 0.0019 under 'centered'."""
     import os
 
     from src.architecture.ginodeq import KINEMATICS_COORD_MODE_ENV, _canonical_coords
@@ -578,7 +578,7 @@ def test_coord_mode_centering_is_exactly_translation_invariant():
 
 
 def test_siren_coordinates_go_through_the_same_canonicaliser():
-    """Centring the encoder alone left patient041 WORSE (0.284 -> 0.715): the SIREN decoder is
+    """Centring the encoder alone left comsol041 WORSE (0.284 -> 0.715): the SIREN decoder is
     a coordinate network and was still being handed the absolute frame."""
     src = (REPO / "src" / "architecture" / "ginodeq.py").read_text(encoding="utf-8")
     i_siren = src.find("pos_nd = data.x[:, NodeFeat.XY]")
@@ -644,8 +644,8 @@ def test_selection_score_ranks_dsrx_correlation_above_rel_l2():
 
 def test_selection_metrics_catch_an_under_scaled_field():
     """Correlation is scale-blind; the gate term is what catches amplitude.  Measured on
-    patient020: a 0.4x field keeps dsrx_corr at 0.996 but gate Jaccard falls 0.948 -> 0.114."""
-    pack = REPO / "data" / "processed" / "graphs_kinematics_anchors" / "carreau" / "patient020.pt"
+    comsol020: a 0.4x field keeps dsrx_corr at 0.996 but gate Jaccard falls 0.948 -> 0.114."""
+    pack = REPO / "data" / "processed" / "graphs_kinematics_anchors" / "carreau" / "comsol020.pt"
     if not pack.is_file():
         pytest.skip("needs a local kinematics anchor pack")
     from src.utils.kinematics_selection import wall_shear_selection_metrics
@@ -666,7 +666,7 @@ def test_promotion_gates_fail_closed_on_an_uncomputable_metric():
 
     from src.training.train_kinematics_predictor import _kinematics_promotion_gates_pass
 
-    base = dict(patient_rel=0.1, patient_n=3, synthetic_rel=0.1, synthetic_n=5,
+    base = dict(comsol_rel=0.1, comsol_n=3, synthetic_rel=0.1, synthetic_n=5,
                 synthetic_l2_rel=0.1, synthetic_l2_n=5)
     prev = os.environ.get("KINEMATICS_MIN_DSRX_CORR")
     try:
@@ -748,7 +748,7 @@ def test_no_single_loss_term_owns_the_objective():
     normalised = share("1")
     # The substantive property: the SUPERVISED term must actually reach the optimiser.  How
     # many other terms clear 1% is graph-dependent (measured 5 of 11 on an elevated synthetic
-    # graph, 3 of 8 on patient020), so asserting a count here would be fitting the test to one
+    # graph, 3 of 8 on comsol020), so asserting a count here would be fitting the test to one
     # mesh -- assert the invariant instead.
     assert normalised["l_data_kine"] > 0.01, (
         f"data term is still inert at {100 * normalised['l_data_kine']:.3f}% of the objective"
@@ -809,8 +809,8 @@ def test_gate_loss_is_differentiable():
 
 
 def test_sealed_holdout_default_does_not_depend_on_the_launcher():
-    """B21.  The holdout default lived in `finetune_kine_patient_anchors.py`, so invoking
-    `train_kinematics_predictor` directly fell back to the single stem "patient007" and trained
+    """B21.  The holdout default lived in `finetune_kine_comsol_anchors.py`, so invoking
+    `train_kinematics_predictor` directly fell back to the single stem "comsol007" and trained
     on the other three FINAL_HALF vessels.  The default must live at the point of use."""
     import os
 
@@ -819,24 +819,24 @@ def test_sealed_holdout_default_does_not_depend_on_the_launcher():
     src = (REPO / "src" / "utils" / "kinematics_geometry.py").read_text(encoding="utf-8")
     assert "wall_cohort_splits" in src, "the split default is not derived from the canonical sets"
 
-    prev = os.environ.pop("KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS", None)
+    prev = os.environ.pop("KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS", None)
     try:
-        from src.utils.kinematics_geometry import split_clinical_anchor_train_val
+        from src.utils.kinematics_geometry import split_comsol_anchor_train_val
 
         class _G:
-            def __init__(self, stem, clinical=True):
+            def __init__(self, stem, comsol=True):
                 self.graph_stem = stem
-                self.is_clinical_anchor = clinical
+                self.is_comsol_anchor = comsol
 
-        stems = sorted(set(SEALED) | set(DEV) | {"patient002", "patient005"})
-        out = split_clinical_anchor_train_val([_G(s) for s in stems])
+        stems = sorted(set(SEALED) | set(DEV) | {"comsol002", "comsol005"})
+        out = split_comsol_anchor_train_val([_G(s) for s in stems])
         train = {g.graph_stem for g in out["train"]}
         assert not (set(SEALED) & train), f"SEALED vessels in TRAIN: {sorted(set(SEALED) & train)}"
         assert not (set(DEV) & train), f"DEV vessels in TRAIN: {sorted(set(DEV) & train)}"
-        assert "patient002" in train, "the split held out everything; test would be vacuous"
+        assert "comsol002" in train, "the split held out everything; test would be vacuous"
     finally:
         if prev is not None:
-            os.environ["KINEMATICS_VAL_HOLDOUT_PATIENT_STEMS"] = prev
+            os.environ["KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS"] = prev
 
 
 # --- s12: loss weights by measured gradient share --------------------------------------------

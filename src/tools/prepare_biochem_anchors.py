@@ -1,4 +1,4 @@
-"""Prepare an anchor mesh folder for ``PatientDataExtractor``.
+"""Prepare an anchor mesh folder for ``ComsolAnchorDataExtractor``.
 
 Idempotent CLI that operates on a directory of ``.msh`` / ``.nas`` anchor
 meshes (default: ``data/raw/biochem_anchors``) and performs two jobs:
@@ -13,8 +13,8 @@ meshes (default: ``data/raw/biochem_anchors``) and performs two jobs:
 2. **Stem-prefix underscore collapse** (optional, ``--strip-prefix-underscore``).
    Rename ``<alpha>_<digits>.<ext>`` to ``<alpha><digits>.<ext>`` for every
    mesh and its matching sidecar. This is the convention used by COMSOL
-   text exports (``patient001.txt``), so collapsing the underscore lets
-   ``PatientDataExtractor`` find the matching exports without renaming the
+   text exports (``comsol001.txt``), so collapsing the underscore lets
+   ``ComsolAnchorDataExtractor`` find the matching exports without renaming the
    12+ ``.txt`` files.
 
 Both operations support ``--dry-run`` and print a clear summary. The tool is
@@ -65,7 +65,7 @@ def stems_in_dir(root: Path) -> list[str]:
 
 
 def collapse_prefix_underscore(stem: str) -> str | None:
-    """Return the collapsed stem (``patient_001`` -> ``patient001``) or ``None`` if unchanged."""
+    """Return the collapsed stem (``comsol_001`` -> ``comsol001``) or ``None`` if unchanged."""
     m = _PREFIX_UNDERSCORE_RE.match(stem)
     if not m:
         return None
@@ -270,7 +270,7 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--strip-prefix-underscore",
         action="store_true",
         help="Rename ``<alpha>_<digits>.<ext>`` to ``<alpha><digits>.<ext>`` "
-        "(matches COMSOL export stems like ``patient001.txt``).",
+        "(matches COMSOL export stems like ``comsol001.txt``).",
     )
     p.add_argument(
         "--no-sidecars",

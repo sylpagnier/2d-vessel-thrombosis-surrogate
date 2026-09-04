@@ -19,8 +19,8 @@ real fixed-flux inlet BC:
           `clot-shear-map-is-non-monotone` becomes visible: deeper occlusion does not mean
           lower wall shear.
 
-    python scripts/viz_occlusion_flow_sweep.py --stem patient001
-    python scripts/viz_occlusion_flow_sweep.py --stem patient012 --fracs 0.2 0.4 0.6 0.8
+    python scripts/viz_occlusion_flow_sweep.py --stem comsol001
+    python scripts/viz_occlusion_flow_sweep.py --stem comsol012 --fracs 0.2 0.4 0.6 0.8
 """
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def _clot_mask(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stem", default="patient001")
+    ap.add_argument("--stem", default="comsol001")
     ap.add_argument("--fracs", nargs="*", type=float, default=[0.2, 0.4, 0.6, 0.8])
     ap.add_argument("--clot-mu", type=float, default=0.68)
     ap.add_argument("--arc-nodes", type=int, default=40)

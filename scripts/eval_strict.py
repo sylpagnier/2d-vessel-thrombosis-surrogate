@@ -70,7 +70,7 @@ class BoundScorer:
     they do.  Reporting must stay ``nan`` on an empty domain or every off-wall number in the
     project changes meaning.  **Selection has no such constraint**, and throwing the cell away
     there is a measured mistake: six clot-carrying vessels have no off-wall GT, so a cut that
-    sprays 414 false positives on `patient014` costs the tuner exactly nothing.  See
+    sprays 414 false positives on `comsol014` costs the tuner exactly nothing.  See
     ``empty_gt_select``.
     """
 
@@ -170,8 +170,8 @@ FAMILIES = {"plain": (tune_plain, readout_plain), "resid": (tune_resid, readout_
 # The reason is scale, not principle.  `1/(1 + n_pred/8)` is ~1.0 whenever little is
 # committed, while a recall-bearing off-wall cell sits near 0.6 -- so mixing them in one mean
 # makes "commit nothing" the cheapest way to raise the average.  The tuner duly moves the
-# add-threshold to 0.89 and under-commits everywhere: `patient029` 0.2906 -> 0.0000,
-# `patient012` 0.8140 -> 0.3880, `patient044` 0.8610 -> 0.5850.
+# add-threshold to 0.89 and under-commits everywhere: `comsol029` 0.2906 -> 0.0000,
+# `comsol012` 0.8140 -> 0.3880, `comsol044` 0.8610 -> 0.5850.
 #
 # This is the same scale-mixing that keeps the clot-free vessels out of the reported mean
 # (MODEL_REVIEW 8c) -- the error here was letting it into the OBJECTIVE instead.  A weighted

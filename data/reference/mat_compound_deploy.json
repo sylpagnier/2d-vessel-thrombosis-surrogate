@@ -26,7 +26,7 @@
     "sum_ge2_gt": 185.0,
     "ge2_recall": 0.7351351351351352,
     "focus": {
-      "patient001": {
+      "comsol001": {
         "f1": 0.8475247524752475,
         "score": 0.9535490605427974,
         "relaxed_prec": 1.0,
@@ -36,7 +36,7 @@
         "ge2_gt": 68.0,
         "ge2_recall": 0.8970588235294118
       },
-      "patient002": {
+      "comsol002": {
         "f1": 0.9076923076923077,
         "score": 0.9405628581058308,
         "relaxed_prec": 0.9855072463768116,
@@ -46,7 +46,7 @@
         "ge2_gt": 0.0,
         "ge2_recall": null
       },
-      "patient007": {
+      "comsol007": {
         "f1": 0.7680250783699061,
         "score": 0.930815258040389,
         "relaxed_prec": 1.0,
@@ -56,7 +56,7 @@
         "ge2_gt": 97.0,
         "ge2_recall": 0.35051546391752575
       },
-      "patient008": {
+      "comsol008": {
         "f1": 0.3931623931623932,
         "score": 0.44055882054919443,
         "relaxed_prec": 0.4838709677419355,
@@ -66,7 +66,7 @@
         "ge2_gt": 0.0,
         "ge2_recall": null
       },
-      "patient010": {
+      "comsol010": {
         "f1": 0.6666666666666666,
         "score": 0.8437609357270867,
         "relaxed_prec": 0.9619047619047619,
@@ -78,7 +78,7 @@
       }
     },
     "idle_detail": {
-      "patient002": {
+      "comsol002": {
         "ok": true,
         "reason": "clean",
         "f1": 0.9076923076923077,
@@ -90,7 +90,7 @@
         "ge2_gt": 0.0,
         "ge2_recall": null
       },
-      "patient004": {
+      "comsol004": {
         "ok": true,
         "reason": "clean",
         "f1": 0.7149321266968326,
@@ -102,7 +102,7 @@
         "ge2_gt": 0.0,
         "ge2_recall": null
       },
-      "patient008": {
+      "comsol008": {
         "ok": true,
         "reason": "clean",
         "f1": 0.3931623931623932,
@@ -135,16 +135,16 @@
       "idle_min_relaxed_prec": 0.85
     },
     "anchors": [
-      "patient001",
-      "patient002",
-      "patient003",
-      "patient004",
-      "patient005",
-      "patient006",
-      "patient007",
-      "patient008",
-      "patient010",
-      "patient011"
+      "comsol001",
+      "comsol002",
+      "comsol003",
+      "comsol004",
+      "comsol005",
+      "comsol006",
+      "comsol007",
+      "comsol008",
+      "comsol010",
+      "comsol011"
     ]
   },
   "prior_wall_canonical": "WC_v7_clot_phi_mse (2026-07-19)",

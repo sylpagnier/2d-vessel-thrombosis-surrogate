@@ -17,15 +17,15 @@ from src.utils.paths import get_project_root
 
 ROOT = get_project_root()
 
-PACK = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "patient001.pt"
-MESH = ROOT / "data" / "raw" / "biochem_anchors" / "patient001.nas"
+PACK = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt"
+MESH = ROOT / "data" / "raw" / "biochem_anchors" / "comsol001.nas"
 
 
 def _pack():
     if not PACK.is_file() or not MESH.is_file():
-        pytest.skip("patient001 pack or mesh not found")
+        pytest.skip("comsol001 pack or mesh not found")
     data = torch.load(PACK, map_location="cpu", weights_only=False)
-    data.graph_stem = "patient001"
+    data.graph_stem = "comsol001"
     return data
 
 
@@ -109,3 +109,53 @@ def test_fem_prior_does_not_mutate_the_callers_pack():
     before = data.x.clone()
     apply_prior_source(data, "fem")
     assert torch.equal(data.x, before)
+
+
+def test_rezero_makes_a_fresh_model_predict_the_prior_exactly():
+    """The whole point of the flag: no departure from the prior that was not earned.
+
+    Without it the decoder is a random map on a LayerNorm shell and emits an O(1) field whatever
+    the prior needs -- which is the right order against the analytic prior (error O(0.4)) and a
+    ~20x overshoot against the FEM one (error O(0.01)).
+    """
+    from src.architecture.ginodeq import RGP_DEQ
+    from src.config import PhysicsConfig
+    from src.data_gen.lib.legal_priors import COL_U_PRIOR, COL_V_PRIOR, apply_prior_source
+
+    data = _pack()
+    g = apply_prior_source(data, "analytic")
+    ph = PhysicsConfig(phase="kinematics", rheology="carreau")
+    kw = dict(in_channels=15, out_channels=5, latent_dim=32, use_width_priors=True,
+              use_siren_decoder=True, use_hard_bcs=True, bc_envelope=True, bc_lambda=40.0,
+              phys_cfg=ph)
+
+    on = RGP_DEQ(**kw, residual_rezero=True).eval()
+    with torch.no_grad():
+        out = on(g, solver="anderson")
+    pred = (out[0] if isinstance(out, tuple) else out)[:, :2].detach()
+    prior = g.x[:, [COL_U_PRIOR, COL_V_PRIOR]]
+    assert torch.equal(pred, prior), "rezero model must start exactly at the prior"
+
+    off = RGP_DEQ(**kw).eval()
+    with torch.no_grad():
+        out = off(g, solver="anderson")
+    pred_off = (out[0] if isinstance(out, tuple) else out)[:, :2].detach()
+    assert not torch.equal(pred_off, prior), "without rezero the head should start active"
+
+
+def test_rezero_round_trips_through_the_checkpoint_config():
+    """A model rebuilt without the flag is a different function from the one that trained."""
+    from src.architecture.ginodeq import RGP_DEQ
+    from src.architecture.kinematics_model_config import (
+        build_rgp_deq_from_ctor, resolve_rgp_deq_ctor_kwargs, snapshot_rgp_deq_model_config,
+    )
+    from src.config import PhysicsConfig
+
+    ph = PhysicsConfig(phase="kinematics", rheology="carreau")
+    m = RGP_DEQ(in_channels=15, out_channels=5, latent_dim=32, residual_rezero=True, phys_cfg=ph)
+    snap = snapshot_rgp_deq_model_config(m)
+    assert snap["residual_rezero"] is True
+    rebuilt = build_rgp_deq_from_ctor(
+        ph, resolve_rgp_deq_ctor_kwargs({"model_config": snap}, m.state_dict())
+    )
+    assert rebuilt.residual_scale is not None

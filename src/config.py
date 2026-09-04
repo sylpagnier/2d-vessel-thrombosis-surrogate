@@ -125,8 +125,6 @@ def _map_phase_to_phase(value: str) -> str:
         "phase_3",
         "biochem_anchors",
         "biochem_anchor",
-        "biochem_patients",
-        "biochem_patient",
     ):
         return "biochem"
     if v in (
@@ -168,8 +166,6 @@ class VesselConfig:
         elif raw_phase in (
             "biochem_anchors",
             "biochem_anchor",
-            "biochem_patients",
-            "biochem_patient",
         ):
             self.mesh_input_dir = dr / "raw/biochem_anchors"
             self.output_dir = dr / "processed/cfd_results_biochem"
@@ -320,7 +316,7 @@ class VesselConfig:
     severe_curve_weights: Dict[str, float] = field(
         default_factory=lambda: {"straight": 0.55, "arc": 0.35, "s_curve": 0.10, "hook": 0.00}
     )
-    # L2 random-sampling boosts, 2026-08-29 both set to 1.0.  Every biochem deploy patient is
+    # L2 random-sampling boosts, 2026-08-29 both set to 1.0.  Every biochem deploy COMSOL anchor is
     # level 2, so L2 IS the deployment class -- boosting it past deployment is the misalignment
     # these were meant to fix.  Kept as knobs rather than deleted.
     stenosis_pro_thrombotic_mult: float = 1.0
@@ -328,7 +324,7 @@ class VesselConfig:
     #: Curve-type weights for level 2, the deployment class.  L2 used to be hardcoded to
     #: ``{straight 0.00, arc 0.20, s_curve 0.40, hook 0.40}`` -- "favour sharp turns and hooks" --
     #: which put its median centreline excursion at 3.8 diameters against deployment's 2.7.  L1's
-    #: own weights measured 2.51 on the same statistic, so the deploy patients are level 2 by
+    #: own weights measured 2.51 on the same statistic, so the deploy COMSOL anchors are level 2 by
     #: label and L1-shaped in fact; these are L1's, with the straight share kept.
     pro_thrombotic_curve_weights: Dict[str, float] = field(
         default_factory=lambda: {"straight": 0.15, "arc": 0.45, "s_curve": 0.20, "hook": 0.20}

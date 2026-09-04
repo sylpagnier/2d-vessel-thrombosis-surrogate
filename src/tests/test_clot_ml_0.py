@@ -35,7 +35,7 @@ def test_config_defaults_match_the_documented_stack():
     # DEFAULT CHANGED 2026-09-03, `all_lumen` -> `wound_region`.  Measured leave-one-vessel-out
     # over the six-vessel wound cohort on deploy flow (`scripts/eval_replace_scope.py`): the two
     # scopes are identical to four decimals on wall, wound region and wound lumen, and the far
-    # field reads 0.0817 against 0.2448 -- `wound_patient004/005/006` go from exactly 0.0000 to
+    # field reads 0.0817 against 0.2448 -- `wound_comsol004/005/006` go from exactly 0.0000 to
     # 0.356 / 0.179 / 0.164.  All six folds pick `wound_region`.  Artifacts promoted before that
     # date pin their own scope in their manifest; `clot_ml_v0_chem_legacy`, the one that never
     # recorded one, was pinned to `all_lumen` explicitly so this default could move.
@@ -312,7 +312,7 @@ def test_an_explicit_artifact_id_is_honoured_verbatim():
 # (wrong-kind pointer, derived roles raising rather than guessing).
 
 def test_v0_is_the_base_gnn_on_a_nowound_pack():
-    nowound = GRAPH_DIR / "patient012.pt"
+    nowound = GRAPH_DIR / "comsol012.pt"
     # Resolve the POINTER, not a hardcoded artifact name.  This gate used to look for
     # `clot_ml_0`/`clot_ml_v0`, so once the shipped artifact was renamed (DeployClot_0,
     # then DeployClot_1) the test SKIPPED -- while `load_v0_bundle()` below happily loaded
@@ -330,7 +330,7 @@ def test_v0_is_the_base_gnn_on_a_nowound_pack():
     if not man_path.exists():
         man_path = LOCKED / "clot_ml_v0" / "manifest.json"
     if not nowound.exists() or not man_path.exists():
-        pytest.skip("no unified_v0 artifact or patient012 in this checkout")
+        pytest.skip("no unified_v0 artifact or comsol012 in this checkout")
     man = json.loads(man_path.read_text())
     if man.get("kind") != "unified_v0" or "v0" not in man:
         pytest.skip("clot_ml_0 is a stale stub; run scripts/promote_clot_ml_0.py")

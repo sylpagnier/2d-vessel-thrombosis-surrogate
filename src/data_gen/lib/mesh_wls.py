@@ -113,7 +113,7 @@ def boundary_normals_from_graph(
         targets = np.asarray(orient_targets, dtype=np.float64).reshape(n, 2)
 
     # Some solid nodes are ISOLATED in the solid subgraph -- degree 0, no solid neighbour to
-    # fit a tangent from (12 of 539 on `patient008`, mid-domain, not at inlet/outlet).  They
+    # fit a tangent from (12 of 539 on `comsol008`, mid-domain, not at inlet/outlet).  They
     # are still on the boundary curve, so fall back to their nearest solid nodes by position:
     # same total-least-squares fit, just a geometric neighbourhood instead of a topological
     # one.  Still mesh-free.
@@ -251,7 +251,7 @@ def rank_aware_pinv_sym(M: torch.Tensor, rcond: float = WLS_RCOND) -> torch.Tens
     exactly zero otherwise.
 
     **Be precise about what this buys.**  Measured, it buys correctness, not accuracy: on
-    ``patient020`` the two operators agree to within 3% in norm, and on the synthetic P2 mesh
+    ``comsol020`` the two operators agree to within 3% in norm, and on the synthetic P2 mesh
     in ``test_rgp_deq_repair`` they produce identical per-node ranks at every scale from 1.0 to
     1e-3.  The ridge was **not** the active defect on these meshes.  The active defect is the
     rank deficiency itself -- ~74.6% of biochem nodes are P2 mid-side vertices whose 5-term
@@ -282,11 +282,11 @@ def rebuild_wls_operators_from_graph(data):
 
     ```
     pack          stored     rebuilt (either inversion)
-    patient001    1.000e+06        5.6e+03
-    patient012    6.658e+05        2.1e+04
-    patient020    7.001e+05        2.8e+04
-    patient041    7.243e+05        1.7e+04
-    patient044    6.256e+05        2.9e+04
+    comsol001    1.000e+06        5.6e+03
+    comsol012    6.658e+05        2.1e+04
+    comsol020    7.001e+05        2.8e+04
+    comsol041    7.243e+05        1.7e+04
+    comsol044    6.256e+05        2.9e+04
     ```
 
     ``1.000e+06`` is exactly ``1/epsilon`` for the old ``M + 1e-6*I``: the signature of a node
@@ -295,10 +295,10 @@ def rebuild_wls_operators_from_graph(data):
 
     ```
     pack          width_d2 stored   width_d2 rebuilt      (training p95: 73.8)
-    patient020         4.784e+04              21.8
-    patient012         1.046e+05             183.8
-    patient041         1.019e+05             273.1
-    patient044         1.773e+05             258.2
+    comsol020         4.784e+04              21.8
+    comsol012         1.046e+05             183.8
+    comsol041         1.019e+05             273.1
+    comsol044         1.773e+05             258.2
     ```
 
     So ``kinematics_inference.clamped_width_priors`` -- which forces these into the training

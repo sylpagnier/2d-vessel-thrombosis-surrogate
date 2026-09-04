@@ -1,12 +1,12 @@
 """Free cross-vessel validation: can component-level flow rank true clot pockets?
 
-Finding this validates (docs/WALL_MODEL_PLAN.md s2, rewritten 2026-08-05): on patient020
+Finding this validates (docs/WALL_MODEL_PLAN.md s2, rewritten 2026-08-05): on comsol020
 the wall model's failure is POCKET SELECTION, not growth or perception. Its predicted
 connected components are pure (53/53, 16/16, 13/13 GT), but it commits to 33 spurious
 pockets alongside 6 real ones. Keeping only the true ones would give F1 0.887 vs the
 0.500 baseline, and a single threshold on component-min hop-2 speed reaches 0.876.
 
-That threshold was fitted ON patient020, the holdout -- a 1-parameter fit on the test
+That threshold was fitted ON comsol020, the holdout -- a 1-parameter fit on the test
 set, so it proves nothing by itself. This script tests the *physical* claim behind it
 across every vessel, with no model and no rollout:
 
@@ -107,7 +107,7 @@ def main() -> int:
     agg: dict[str, list[float]] = {"h2min": [], "h2mean": [], "srmin": [], "size": []}
 
     print(f"{'vessel':>14} {'nT':>3} {'nF':>4} {'h2min':>7} {'h2mean':>7} {'srmin':>7} {'size':>7}")
-    for p in sorted(ANCHOR_DIR.glob("patient*.pt")):
+    for p in sorted(ANCHOR_DIR.glob("comsol*.pt")):
         name = p.stem
         d = torch.load(p, map_location="cpu", weights_only=False)
         if not hasattr(d, "mask_wall") or d.mask_wall is None:
@@ -186,7 +186,7 @@ def main() -> int:
         f"Component-level `{best}` separates true from false pockets by "
         f"{strength[best]:.3f} on average across {len(agg[best])} vessels. "
         + ("Pocket ranking is real and generalises." if strength[best] > 0.4
-           else "Weak/inconsistent -- the patient020 result may not generalise.")
+           else "Weak/inconsistent -- the comsol020 result may not generalise.")
     )
     print(f"\n=> {verdict}")
 

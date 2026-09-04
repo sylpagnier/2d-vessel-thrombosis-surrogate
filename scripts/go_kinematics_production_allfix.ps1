@@ -1,4 +1,4 @@
-# Production Stage-A kinematics (default: foundation -> polish -> clinical -> promote).
+# Production Stage-A kinematics (default: foundation -> polish -> comsol -> promote).
 #   powershell ... -File .\scripts\go_kinematics_production_allfix.ps1
 #   powershell ... -File .\scripts\go_kinematics_production_allfix.ps1 -FoundationOnly -Fresh
 
@@ -6,10 +6,10 @@ param(
   [switch]$Fresh,
   [switch]$FoundationOnly,
   [switch]$SkipSyntheticPolish,
-  [switch]$SkipClinicalAnchors,
+  [switch]$SkipComsolAnchors,
   [switch]$SkipPromote,
-  [switch]$RequireClinical,
-  [string]$Holdout = "patient007",
+  [switch]$RequireComsol,
+  [string]$Holdout = "comsol007",
   [switch]$NoContinuityFocus,
   [int]$Epochs = 100,
   [int]$AdamEpochs = 85,
@@ -25,9 +25,9 @@ $pyArgs = @("scripts/run_kinematics_production.py")
 if ($Fresh) { $pyArgs += "--fresh" }
 if ($FoundationOnly) { $pyArgs += "--foundation-only" }
 if ($SkipSyntheticPolish) { $pyArgs += "--skip-synthetic-polish" }
-if ($SkipClinicalAnchors) { $pyArgs += "--skip-clinical-anchors" }
+if ($SkipComsolAnchors) { $pyArgs += "--skip-comsol-anchors" }
 if ($SkipPromote) { $pyArgs += "--skip-promote" }
-if ($RequireClinical) { $pyArgs += "--require-clinical" }
+if ($RequireComsol) { $pyArgs += "--require-comsol" }
 if ($NoContinuityFocus) { $pyArgs += "--no-continuity-focus" }
 if ($Quiet) { $pyArgs += "--quiet" }
 $pyArgs += @(

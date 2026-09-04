@@ -47,13 +47,13 @@ def _cfgs():
 @pytest.mark.slow
 def test_gt_sample_reproduces_the_shipped_v5_cache_bit_for_bit():
     """The locked artifact's normaliser is only valid against these exact columns."""
-    src = V5_CACHE / "patient020.npz"
+    src = V5_CACHE / "comsol020.npz"
     if not src.exists():
         pytest.skip("clot_ml_cache_v5 not built in this checkout")
     from src.clot_ml.locked import build_sample
 
     bio, phys = _cfgs()
-    S = build_sample(_pack("patient020"), bio, phys, flow="gt", variant="v4")
+    S = build_sample(_pack("comsol020"), bio, phys, flow="gt", variant="v4")
     z = np.load(src, allow_pickle=True)
     cached_cols = [str(c) for c in z["cols"]]
     live_cols = [str(c) for c in S["cols"]]
@@ -88,7 +88,7 @@ def test_pred_flow_reaches_the_v4_indicator_channels():
     """The bug: these five were identical under both flow sources."""
     from src.clot_ml.locked import build_sample
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     if getattr(data, "u0_pred", None) is None:
         pytest.skip("pack carries no u0_pred")
     bio, phys = _cfgs()
@@ -106,7 +106,7 @@ def test_indicator_physics_defaults_to_gt():
     """Existing callers that pass no `flow` must be unaffected."""
     from src.clot_ml.features_v4 import indicator_physics
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     bio, _ = _cfgs()
     wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
     a = indicator_physics(data, bio, wall)
@@ -118,7 +118,7 @@ def test_indicator_physics_defaults_to_gt():
 def test_t0_fields_carry_the_velocity_they_differentiated():
     from src.core_physics.physics_wall_model import t0_flow_fields
 
-    data = _pack("patient020")
+    data = _pack("comsol020")
     bio, _ = _cfgs()
     f_gt = t0_flow_fields(data, bio, flow_source="gt")
     assert f_gt.u is not None and f_gt.v is not None
@@ -133,7 +133,7 @@ def test_wound_features_refuses_a_hand_built_t0fields():
     from src.clot_ml.wound import wound_features
     from src.core_physics.physics_wall_model import T0Fields
 
-    data = _pack("wound_patient001")
+    data = _pack("wound_comsol001")
     bio, _ = _cfgs()
     n = int(data.num_nodes)
     z = np.zeros(n)
@@ -147,7 +147,7 @@ def test_wound_features_uses_the_resolved_velocity():
     from src.clot_ml.wound import WOUND_FEATURES, wound_features
     from src.core_physics.physics_wall_model import t0_flow_fields
 
-    data = _pack("wound_patient001")
+    data = _pack("wound_comsol001")
     bio, _ = _cfgs()
     f0 = t0_flow_fields(data, bio, flow_source="gt")
     base = wound_features(data, f0, bio)

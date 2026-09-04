@@ -104,7 +104,7 @@ function Invoke-GoCustomerPredict {
     $repo = Initialize-HemoRepo -ScriptRoot $PSScriptRoot
     $inbox = Ensure-RepoSubdir -RepoRoot $repo -RelativePath "customer_geometries"
     Write-GoBanner -Title "Local FEM Solver Predict" -InfoLines @(
-        "Deploy: clot_ml_0 (RGP-DEQ t=0 + C0-tail GNN)",
+        "Deploy: clot_ml_0 (local FEM t=0 + C0-tail GNN)",
         "Geometries folder: $inbox",
         "Use Open folder or Browse (starts in that folder)"
     )
@@ -119,7 +119,7 @@ function Invoke-GoCustomerPredictWeb {
     )
     $null = Initialize-HemoRepo -ScriptRoot $PSScriptRoot
     Write-GoBanner -Title "Local FEM Solver web predict: http://${BindHost}:${Port}" -InfoLines @(
-        "Deploy: clot_ml_0 (RGP-DEQ t=0 + C0-tail GNN)",
+        "Deploy: clot_ml_0 (local FEM t=0 + C0-tail GNN)",
         "Open the URL above in a browser; press Ctrl+C to stop."
     )
     Invoke-GoPythonModule -Module "src.tools.customer_predict_web" `

@@ -29,7 +29,7 @@ Answers four questions, each at the level the modelling actually needs:
   Q4 IS REGIME DEPLOYABLE-PREDICTABLE -- can t=0 features route a vessel without GT
 
     python scripts/eda_clot_physics.py
-    python scripts/eda_clot_physics.py --anchors patient039,patient040,patient043
+    python scripts/eda_clot_physics.py --anchors comsol039,comsol040,comsol043
 """
 
 from __future__ import annotations

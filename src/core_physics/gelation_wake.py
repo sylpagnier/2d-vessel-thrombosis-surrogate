@@ -1,7 +1,7 @@
 """The closed loop, in two stages: ``Mat >= crit  ->  sr collapses  ->  low-shear gate opens``.
 
 WHY THIS EXISTS.  The shipped wall model freezes the deposition gate at ``t=0``, so a node
-whose shear only falls *because of the clot* can never ignite.  On ``wound_patient003`` that
+whose shear only falls *because of the clot* can never ignite.  On ``wound_comsol003`` that
 is 15 healthy-wall nodes sitting at ``sr = 117 /s`` against ``lss = 25`` -- gate 0, no source
 term at all -- which own 29 of the 67 wound-region lumen clot nodes the model misses
 (docs/WOUND_PROGRESS.md 14).  They ignite under **no** species arm and under **no**
@@ -13,15 +13,15 @@ occlusion and it produced -3.5% shear against the required -87%, wrong sign on o
 an 87% collapse is the channel closing, which is not a sum of local residuals.
 
 WHAT REPLACES IT.  One measured kernel.  The first form tried keyed the collapse on hops to
-the NEAREST gelled node, and it saturates: ``wound_patient003``'s blind owners read GT
+the NEAREST gelled node, and it saturates: ``wound_comsol003``'s blind owners read GT
 ``sr/sr0 = 0.387`` while two hops from clot, where a nearest-node kernel says 0.706.  They
 are *surrounded* by clot rather than beside one node.  So the load is a **superposition**,
 
     w_i  =  sum over gelled wall nodes j of  exp(-h_ij / WAKE_LAMBDA_HOPS)
 
 and GT ``sr(t)/sr(0)`` on not-yet-gelled wall is a monotone function of it, the same curve on
-wound and no-wound vessels alike (pooled over eleven: ``wound_patient001/002/003`` and
-``patient012/016/020/028/032/035/041/044``):
+wound and no-wound vessels alike (pooled over eleven: ``wound_comsol001/002/003`` and
+``comsol012/016/020/028/032/035/041/044``):
 
     w:    0     0.25    0.5     1      2      4      6
     amp: 1.00   0.976   0.955  0.929  0.786  0.552  (clamped)
