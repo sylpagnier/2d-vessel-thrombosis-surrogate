@@ -216,45 +216,6 @@ def shear_rate_metrics(pred_shear: torch.Tensor, gt_shear: torch.Tensor, mask_wa
     return metrics
 
 
-def validate_and_plot(model, val_data, epoch, device, phase="kinematics"):
-    model.eval()
-    with torch.no_grad():
-        data_on_device = Batch.from_data_list([val_data]).to(device)
-        pred = model(data_on_device, solver="anderson", anderson_beta=0.8)
-        coords = data_on_device.x[:, :2].detach().cpu().numpy()
-
-    plt.figure(figsize=(10, 4))
-
-    # --- Setup Phase-Specific Plotting Rules ---
-    if phase == "kinematics":
-        val_pred = pred[:, 0].detach().cpu().numpy()  # u-velocity
-        cmap, label = 'jet', r"Predicted ND-Velocity (u)"
-        title = f"Kinematics Validation - Epoch {epoch}"
-        use_log_norm = False
-    else:
-        val_pred = pred[:, PredChannels.MU_EFF_ND].detach().cpu().numpy()  # viscosity
-        cmap, label = 'viridis', r"Predicted ND-Viscosity ($\mu$)"
-        title = f"Kinematics Validation (Carreau) - Epoch {epoch}"
-        # Viscosity MUST be plotted in log-scale to visualize the boundary layer
-        use_log_norm = True
-
-        # --- Plotting ---
-    if use_log_norm:
-        # Prevent log(0) issues and set bounds matching your mu_0 and mu_inf
-        val_pred_safe = np.clip(val_pred, a_min=1e-4, a_max=None)
-        sc = plt.scatter(coords[:, 0], coords[:, 1], c=val_pred_safe, cmap=cmap, s=5, norm=LogNorm())
-    else:
-        sc = plt.scatter(coords[:, 0], coords[:, 1], c=val_pred, cmap=cmap, s=5)
-
-    plt.colorbar(sc, label=label)
-    plt.title(title)
-    plt.axis('equal')
-
-    save_dir = reports_training_dir(phase, "figures")
-    plt.savefig(save_dir / f"val_epoch_{epoch}.png")
-    plt.close()
-
-
 def quantify_performance(
     model,
     val_loader,

@@ -69,11 +69,6 @@ def reports_evaluation_dir(*parts: str) -> Path:
     return reports_subdir("evaluation", *parts)
 
 
-def reports_inspection_dir(*parts: str) -> Path:
-    """Inspection-tool artifacts under ``outputs/reports/inspection``."""
-    return reports_subdir("inspection", *parts)
-
-
 def kinematics_dir() -> Path:
     """Kinematics checkpoints and validation artifacts under ``outputs/kinematics``.
 

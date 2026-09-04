@@ -243,8 +243,3 @@ def resolve_bulk_carreau_mu_si(
     return carreau_mu_si_from_uv(data, y[:, 0], y[:, 1], phys_cfg).reshape(-1)
 
 
-def snapshot_clot_growth_config() -> dict[str, object]:
-    return {
-        "ceiling_hops": clot_ceiling_hops(),
-        "growth_seed": growth_seed_mode(),
-    }

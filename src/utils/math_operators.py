@@ -181,9 +181,3 @@ def _fill_rank_deficient_rows(deriv, M_inv_eff, row, col, num_nodes):
     return out
 
 
-def sparse_gradient(field, G_x, G_y):
-    """Compute sparse gradient components for a scalar nodal field."""
-    col = field.unsqueeze(1) if field.dim() == 1 else field
-    gx = torch.sparse.mm(G_x, col).squeeze(1)
-    gy = torch.sparse.mm(G_y, col).squeeze(1)
-    return gx, gy

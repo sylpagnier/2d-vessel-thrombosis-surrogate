@@ -67,33 +67,3 @@ def edge_index_from_mesh(mesh) -> torch.Tensor:
     return edge_pairs_to_bidirectional_index(mesh_undirected_edge_pairs(mesh))
 
 
-def mesh_num_nodes(mesh) -> int:
-    return int(len(mesh.points))
-
-
-def edge_index_from_mesh_path(mesh_path: str | Path) -> torch.Tensor:
-    """Load ``.nas`` / ``.msh`` and return bidirectional ``edge_index``."""
-    import meshio
-
-    mesh = meshio.read(str(mesh_path))
-    return edge_index_from_mesh(mesh)
-
-
-def edge_index_from_mesh_path_checked(
-    mesh_path: str | Path,
-    *,
-    num_nodes: int,
-    stem: str = "",
-) -> torch.Tensor:
-    """Like ``edge_index_from_mesh_path`` but verifies mesh node count matches the graph."""
-    import meshio
-
-    mesh = meshio.read(str(mesh_path))
-    n_mesh = mesh_num_nodes(mesh)
-    if int(num_nodes) != n_mesh:
-        tag = stem or Path(mesh_path).stem
-        raise ValueError(
-            f"{tag}: mesh nodes ({n_mesh}) != graph nodes ({int(num_nodes)}) "
-            f"for {Path(mesh_path).name}; need COMSOL triangle6 export matching the anchor graph"
-        )
-    return edge_index_from_mesh(mesh)

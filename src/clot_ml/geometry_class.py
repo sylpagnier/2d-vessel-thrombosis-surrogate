@@ -193,12 +193,3 @@ def is_priority(cls: str) -> bool:
     return cls in PRIORITY
 
 
-def classify_cohort(anchors, load) -> dict:
-    out = {}
-    for a in anchors:
-        d = load(a)
-        if d is None:
-            continue
-        s = width_stats(d)
-        out[a] = dict(cls=classify(s, a), **s)
-    return out

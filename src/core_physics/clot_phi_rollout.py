@@ -23,10 +23,6 @@ def clot_phi_rollout_enabled() -> bool:
     return _env_bool("CLOT_PHI_ROLLOUT", False)
 
 
-def clot_phi_rollout_detach_carry() -> bool:
-    return _env_bool("CLOT_PHI_ROLLOUT_DETACH", True)
-
-
 def clot_phi_carry_phi_enabled() -> bool:
     return _env_bool("CLOT_PHI_CARRY_PHI", True)
 
@@ -136,42 +132,6 @@ def clot_phi_kine_teacher_forcing() -> float:
         return max(0.0, min(float(os.environ.get("CLOT_PHI_KINE_TF", "0") or "0"), 1.0))
     except ValueError:
         return 0.0
-
-
-def clot_phi_rollout_extra_feature_dim() -> int:
-    if not clot_phi_rollout_enabled():
-        return 0
-    n = 0
-    if clot_phi_carry_phi_enabled():
-        n += 1
-    if clot_phi_carry_log_mu_enabled():
-        n += 1
-    return n
-
-
-def sync_rollout_env_from_checkpoint(cfg: dict) -> None:
-    """Match rollout/carry env to ``cfg['in_dim']`` when legacy ckpts omit rollout keys."""
-    if not cfg or "rollout" in cfg:
-        return
-    ckpt_in = int(cfg.get("in_dim", 0) or 0)
-    if ckpt_in <= 0:
-        return
-    from src.core_physics.clot_phi_simple import clot_phi_feature_dim
-
-    os.environ["CLOT_PHI_ROLLOUT"] = "0"
-    os.environ["CLOT_PHI_CARRY_PHI"] = "0"
-    os.environ["CLOT_PHI_CARRY_LOG_MU"] = "0"
-    base = clot_phi_feature_dim()
-    extra = ckpt_in - base
-    if extra <= 0:
-        return
-    os.environ["CLOT_PHI_ROLLOUT"] = "1"
-    if extra >= 1:
-        os.environ["CLOT_PHI_CARRY_PHI"] = "1"
-    if extra >= 2:
-        os.environ["CLOT_PHI_CARRY_LOG_MU"] = "1"
-    os.environ.setdefault("CLOT_PHI_VEL_SOURCE", str(cfg.get("rollout_vel_source") or "gt"))
-    os.environ.setdefault("CLOT_PHI_ROLLOUT_DETACH", "1")
 
 
 def append_rollout_carry_features(
@@ -314,9 +274,3 @@ def resolve_uv_for_rollout_step(
     return u, v, u_gt, v_gt
 
 
-def snapshot_carry_gt_warmup_config() -> dict[str, int]:
-    return {
-        "carry_gt_warmup_epochs": clot_phi_carry_gt_warmup_epochs(),
-        "carry_gt_warmup_steps": clot_phi_carry_gt_warmup_steps(),
-        "carry_gt_fade_epochs": clot_phi_carry_gt_fade_epochs(),
-    }

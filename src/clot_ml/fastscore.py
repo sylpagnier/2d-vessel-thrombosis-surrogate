@@ -17,16 +17,6 @@ IOU_W = F05_W = 0.5
 EMPTY_GT_FP_TOL = 8.0
 
 
-def _dilator(ei: np.ndarray, n: int, hops: int) -> sp.csr_matrix:
-    A = sp.coo_matrix((np.ones(ei.shape[1], np.int8), (ei[0], ei[1])), shape=(n, n)).tocsr()
-    A = ((A + A.T) > 0).astype(np.int8)
-    D = (A + sp.eye(n, format="csr", dtype=np.int8)).astype(np.int8)
-    out = D
-    for _ in range(hops - 1):
-        out = ((out @ D) > 0).astype(np.int8)
-    return out
-
-
 from src.clot_ml.severity_metric import DEFAULT, LEGACY, SeverityScorer
 
 

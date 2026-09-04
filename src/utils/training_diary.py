@@ -50,53 +50,6 @@ _BIOCHEM_RUN_LOG_ENV_KEYS: tuple[str, ...] = (
 )
 
 
-def write_t1_experiment_artifact(
-    kinematics_cfg: Any,
-    *,
-    best_rel_l2: float,
-    best_val_composite_loss: float,
-    best_loss: float,
-    early_stopped: bool,
-    n_graphs: int,
-    n_train: int,
-    n_val: int,
-    graph_dir: str,
-    extra: Optional[Dict[str, Any]] = None,
-) -> Path:
-    """Write ``reports/experiments/kinematics_<name>_<ts>.json`` for post-run comparison."""
-    rep = reports_training_dir("kinematics", "experiments")
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    name = str(getattr(kinematics_cfg, "experiment_name", "default"))
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:80]
-    path = rep / f"kinematics_{safe_name}_{ts}.json"
-    ser = kinematics_cfg.to_serializable() if callable(getattr(kinematics_cfg, "to_serializable", None)) else {}
-    payload: Dict[str, Any] = {
-        "phase": "kinematics",
-        "ts_utc": ts,
-        "kinematics_train_config": ser,
-        "metrics": {
-            "best_rel_l2": best_rel_l2,
-            "best_val_composite_loss": best_val_composite_loss,
-            "best_loss": best_loss,
-            "early_stopped": early_stopped,
-        },
-        "data": {
-            "n_graphs": n_graphs,
-            "n_train": n_train,
-            "n_val": n_val,
-            "graph_dir": graph_dir,
-        },
-        "env_kinematics": {k: v for k, v in sorted(os.environ.items()) if k.startswith("KINEMATICS_")},
-    }
-    if extra:
-        payload["extra"] = extra
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-    print(f"[diary] Experiment artifact: {path}")
-    print("[diary] History reminder: append this run's key metrics to your Phase1 training history log.")
-    return path
-
-
 def _json_safe(v: Any) -> Any:
     if v is None:
         return None
@@ -111,15 +64,6 @@ def _json_safe(v: Any) -> Any:
     if isinstance(v, (str, int, bool)):
         return v
     return str(v)
-
-
-def env_snapshot(*prefixes: str) -> Dict[str, str]:
-    """Return ``os.environ`` entries whose keys start with any of ``prefixes``."""
-    out: Dict[str, str] = {}
-    for k, v in os.environ.items():
-        if any(k.startswith(p) for p in prefixes):
-            out[k] = v
-    return dict(sorted(out.items()))
 
 
 def biochem_env_digest() -> Dict[str, str]:

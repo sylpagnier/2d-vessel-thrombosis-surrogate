@@ -109,18 +109,6 @@ class AnchorExtractStatus:
         return self.has_biochem_graph
 
 
-def _domain_export_stems(label_dir: Path) -> list[str]:
-    if not label_dir.is_dir():
-        return []
-    stems: list[str] = []
-    for p in sorted(label_dir.glob("*.txt")):
-        stem = p.stem
-        if any(stem.endswith(suf) for suf in _BOUNDARY_SUFFIXES):
-            continue
-        stems.append(stem)
-    return stems
-
-
 def _collect_stems(raw_dir: Path, label_dir: Path) -> list[str]:
     return collect_biochem_extract_stems(raw_dir, label_dir)
 

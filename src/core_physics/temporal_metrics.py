@@ -16,18 +16,6 @@ import numpy as np
 import torch
 
 
-def gt_onset_index(data, phys_cfg, wall: np.ndarray) -> np.ndarray:
-    """Per-node index of the first timestep at which the GT growth label goes hot."""
-    from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
-
-    nt = int(data.y.shape[0])
-    hot = np.zeros((nt, len(wall)), dtype=bool)
-    for i in range(nt):
-        hot[i] = gt_clot_phi_at_time(data, i, phys_cfg, device=torch.device("cpu")).numpy() > 0.5
-    any_hot = hot.any(axis=0)
-    return np.where(any_hot, hot.argmax(axis=0), -1)
-
-
 def spearman(a: np.ndarray, b: np.ndarray) -> float:
     if len(a) < 3 or np.ptp(a) == 0 or np.ptp(b) == 0:
         return float("nan")

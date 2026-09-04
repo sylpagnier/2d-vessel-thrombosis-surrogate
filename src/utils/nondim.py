@@ -3,20 +3,6 @@ from __future__ import annotations
 import torch
 
 
-def to_t_nd(t: torch.Tensor, t_ref: float | torch.Tensor) -> torch.Tensor:
-    """Convert physical time [s] to non-dimensional time.
-
-    Kept intentionally tiny so every call site uses the same convention.
-    """
-    if not torch.is_tensor(t):
-        raise TypeError("t must be a torch.Tensor")
-    if torch.is_tensor(t_ref):
-        t_ref_v = t_ref.to(device=t.device, dtype=t.dtype)
-    else:
-        t_ref_v = torch.tensor(float(t_ref), device=t.device, dtype=t.dtype)
-    return t / torch.clamp(t_ref_v, min=1e-12)
-
-
 def convective_time(d_bar: torch.Tensor, u_ref: torch.Tensor) -> torch.Tensor:
     """Convective reference time: t_conv = d_bar / u_ref."""
     return torch.clamp(d_bar, min=1e-12) / torch.clamp(u_ref, min=1e-12)

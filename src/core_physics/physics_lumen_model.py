@@ -328,90 +328,6 @@ def solid_boundary_shells(
     return shells, owner.astype(np.int64)
 
 
-def lumen_thickness_layer(
-    wall_clot: np.ndarray,
-    wall: np.ndarray,
-    pos: np.ndarray,
-    edge_index: np.ndarray,
-    spd: np.ndarray,
-    *,
-    thickness_edges: float = 1.8,
-    speed_thresh: float = np.inf,
-) -> np.ndarray:
-    """Off-wall clot as a wall-normal thickness behind committed wall tissue.
-
-    Three scalars in total for the arm: ``thickness_edges`` (in units of the mesh's median
-    edge length, so it transfers across meshes), ``speed_thresh`` on the t=0 normalised
-    speed, and the wall arm's own seed.
-    """
-    dist, owner = wall_normal_projection(pos, wall)
-    h = median_edge_length(pos, edge_index)
-    return ((~wall) & (dist < thickness_edges * h) & wall_clot[owner] & (spd < speed_thresh))
-
-
-def radius_neighbors(pos: np.ndarray, radius: float):
-    """Physical-radius neighbour lists (CSR-style) -- NOT graph hops.
-
-    The packs' ``edge_index`` leaves 64% of nodes unreachable from the wall, so hop counts
-    cannot express lumen geometry. Euclidean radius can, and off-wall clot is organised by
-    physical offset (a shell 1.7-1.8 median edge lengths out from committed wall).
-    """
-    from scipy.spatial import cKDTree
-
-    tree = cKDTree(pos)
-    return tree.sparse_distance_matrix(tree, radius, output_type="coo_matrix")
-
-
-def autocatalytic_lumen(
-    wall_clot: np.ndarray,
-    wall: np.ndarray,
-    pos: np.ndarray,
-    edge_index: np.ndarray,
-    *,
-    r_nuc: float = 1.8,
-    expose_thresh: float = 0.4,
-    n_steps: int = 6,
-    spd: np.ndarray | None = None,
-    speed_thresh: float = np.inf,
-) -> np.ndarray:
-    """Autocatalytic lumen growth with nucleation limited to a PHYSICAL radius.
-
-    Mirrors the local structure of the COMSOL law rather than the neighbour-aggregating
-    GraphSAGE the project retired (PHASE3_HANDOFF 1.1): a node ignites on its own local
-    state, and the only thing its neighbours supply is exposure to existing clot.
-
-    Per step, an uncommitted off-wall node commits when the committed FRACTION of the
-    nodes inside its radius-``r_nuc`` ball reaches ``expose_thresh``.  That fraction is the
-    brake: a node on an open-lumen frontier sees a small fraction and never ignites, while
-    a node in a pocket that is already mostly clot does.  Without it the ball-based rule
-    runs away and fills the lumen, exactly as the Da sweep does on the wall
-    (docs/PHASE3_RESULTS.md 3).
-
-    Scalars: ``r_nuc`` (in median edge lengths, so it transfers across meshes),
-    ``expose_thresh``, ``n_steps``.
-    """
-    h = median_edge_length(pos, edge_index)
-    M = radius_neighbors(pos, r_nuc * h).tocsr()
-    M.data[:] = 1.0
-    M.setdiag(0.0)
-    M.eliminate_zeros()
-    ball = np.asarray(M.sum(axis=1)).reshape(-1)          # neighbours per node
-    ball = np.maximum(ball, 1.0)
-
-    eligible = ~wall
-    if spd is not None:
-        eligible = eligible & (spd < speed_thresh)
-
-    cur = wall_clot.copy()
-    for _ in range(max(int(n_steps), 0)):
-        exposure = np.asarray(M @ cur.astype(np.float64)).reshape(-1) / ball
-        nxt = eligible & ~cur & (exposure >= expose_thresh)
-        if not nxt.any():
-            break
-        cur = cur | nxt
-    return cur & ~wall
-
-
 # ---------------------------------------------------------------------------
 # MAT-MAGNITUDE LUMEN ARM (docs/PHASE7_FINDINGS.md)
 # ---------------------------------------------------------------------------
@@ -810,26 +726,6 @@ def fill_grown_wall_mat(
         out[upd] = cand[upd]
         need = need & ~upd
     return out
-
-
-def predict_compound(
-    data,
-    wall_clot: np.ndarray,
-    sr: np.ndarray,
-    *,
-    lumen_hops: int = 3,
-    speed_thresh: float = 0.5,
-    sr_max: float = np.inf,
-    flow: str = "gt",
-) -> np.ndarray:
-    """Full-mesh clot mask: the wall arm's prediction plus its lumen propagation."""
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    n = len(wall)
-    A = adjacency(data.edge_index.detach().cpu().numpy(), n)
-    spd = speed_nd_pred(data) if flow == "pred" else speed_nd(data)
-    off = grow_into_lumen(wall_clot, wall, A, spd, sr, lumen_hops=lumen_hops,
-                          speed_thresh=speed_thresh, sr_max=sr_max)
-    return wall_clot | off
 
 
 def convect_mat_from_wall(

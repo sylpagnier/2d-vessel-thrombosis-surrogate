@@ -519,71 +519,6 @@ def first_crossing(traj: np.ndarray, thresh: float) -> np.ndarray:
     return idx
 
 
-def integrate_mat(
-    data,
-    bio_cfg,
-    fields: T0Fields,
-    *,
-    da_scale: float = 1.0,
-    wall_only: bool = True,
-) -> np.ndarray:
-    """Integrate the COMSOL surface ODEs with the t=0 gates held fixed.
-
-    ``dMas/dt = Da*gate*Sat*(k_rs*rp + k_as*ap)*step2t``
-    ``dMat/dt = Da*gate*(Sat*(k_rs*rp + k_as*ap) + (Mas/Minf)*k_aa*ap)*step2t``
-    ``Sat = 1 - Mas/Minf``   (verified against the exported ``Sat(M)`` column, rel 1.8e-12)
-
-    Returns ``Mat`` at the final time in COMSOL model units (compare to
-    ``viscosity_mat_crit`` = 2e7).
-    """
-    k_rs = float(bio_cfg.k_rs) * M_TO_CM
-    k_as = float(bio_cfg.k_as) * M_TO_CM
-    k_aa = float(bio_cfg.k_aa) * M_TO_CM
-    minf = float(bio_cfg.Minf) * PER_M2_TO_PER_CM2
-    da = float(bio_cfg.surface_damkohler) * float(da_scale)
-
-    rp, ap = wall_platelet_constants(data, bio_cfg)
-    t = data.t.reshape(-1).detach().cpu().numpy().astype(np.float64)
-    gate = fields.gate.copy()
-    if wall_only:
-        gate = gate * data.mask_wall.reshape(-1).bool().cpu().numpy()
-
-    n = gate.shape[0]
-    mas = np.zeros(n)
-    mat = np.zeros(n)
-    gate_s = float(bio_cfg.surface_time_gate_s)
-    slope = float(bio_cfg.surface_time_gate_slope)
-    for i in range(len(t) - 1):
-        h = t[i + 1] - t[i]
-        step2t = 1.0 / (1.0 + np.exp(-np.clip((t[i] - gate_s) * slope, -50, 50)))
-        sat = np.clip(1.0 - mas / minf, 0.0, 1.0)
-        dep = sat * (k_rs * rp + k_as * ap)
-        auto = (mas / minf) * k_aa * ap
-        mas = mas + h * da * gate * dep * step2t
-        mat = mat + h * da * gate * (dep + auto) * step2t
-    return mat
-
-
-def _wall_adjacency(data):
-    import scipy.sparse as sp
-
-    ei = data.edge_index.detach().cpu().numpy()
-    n = int(data.num_nodes)
-    A = sp.coo_matrix((np.ones(ei.shape[1]), (ei[0], ei[1])), shape=(n, n)).tocsr()
-    return ((A + A.T) > 0).astype(np.int8)
-
-
-def predicted_seed_mask(data, bio_cfg, fields, *, relax=2.0, grow_hops=6, adj=None):
-    """The shipped t=0 prediction: both gates, then shear-admitted graph growth."""
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    A = _wall_adjacency(data) if adj is None else adj
-    cur = (fields.gate > 0) & wall
-    adm = (fields.sr < float(bio_cfg.lss) * float(relax)) & wall
-    for _ in range(int(grow_hops)):
-        cur = cur | (((A @ cur.astype(np.int8)) > 0) & adm)
-    return cur, adm, A
-
-
 # ---------------------------------------------------------------------------
 # The gelation shear collapse: one measured constant, and its measured limits
 # ---------------------------------------------------------------------------
@@ -699,28 +634,6 @@ def oracle_blockage(data, bio_cfg, fields, *, hops: int = 3, ratio: float | None
 
     blockage.state = state
     return blockage
-
-
-def predict_phi(
-    data,
-    bio_cfg,
-    mode: str = "phi",
-    *,
-    hops: int = 3,
-    da_scale: float = 1.0,
-    time_index: int = 0,
-    flow_source: str = "gt",
-) -> tuple[torch.Tensor, T0Fields, np.ndarray | None]:
-    """Binary wall-clot prediction ``phi_pred`` [N] plus the intermediates."""
-    del flow_source  # reserved for callers that pass deploy-flow kwargs uniformly
-    fields = t0_flow_fields(data, bio_cfg, hops=hops, time_index=time_index)
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    if mode == "gate":
-        pred = (fields.gate > 0) & wall
-        return torch.tensor(pred.astype(np.float32)), fields, None
-    mat = integrate_mat(data, bio_cfg, fields, da_scale=da_scale)
-    pred = (mat >= float(bio_cfg.viscosity_mat_crit)) & wall
-    return torch.tensor(pred.astype(np.float32)), fields, mat
 
 
 #: Where the never-igniting wall nodes sit, relative to the median igniter onset, as a

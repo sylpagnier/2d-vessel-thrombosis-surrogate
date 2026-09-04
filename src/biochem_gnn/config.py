@@ -210,28 +210,11 @@ def reference_manifest_path() -> Path:
     return resolve_existing(REFERENCE_JSON, LEGACY_CLOT_REF, LEGACY_REFERENCE)
 
 
-def staging_manifest_path() -> Path:
-    return resolve_existing(STAGING_REFERENCE, STAGING_MANIFEST, LEGACY_CLOT_STAGING, LEGACY_STAGING_MANIFEST)
-
-
-def staging_loao_eval_path() -> Path:
-    return resolve_existing(STAGING_LOAO_EVAL, LEGACY_STAGING_EVAL)
-
-
-def staging_ckpt_pick_path() -> Path:
-    return resolve_existing(STAGING_CKPT_PICK, LEGACY_STAGING_PICK)
-
-
 def normalize_train_phase(phase: str) -> str:
     p = (phase or "").strip().lower()
     if p in (PHASE_TRAIN, "clot_deploy_gnn", "deploy_gnn", "clot_deploy"):
         return PHASE_CKPT
     return p
-
-
-def checkpoint_phase_tag(train_phase: str) -> str:
-    _ = train_phase
-    return PHASE_CKPT
 
 
 def is_biochem_gnn_checkpoint_phase(phase: str) -> bool:

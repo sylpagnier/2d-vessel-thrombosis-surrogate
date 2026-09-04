@@ -60,10 +60,6 @@ def typed_env() -> frozenset[str]:
     return frozenset(_load()["typed_runtime_bound"])
 
 
-def is_known(name: str) -> bool:
-    return str(name) in known_env()
-
-
 def untyped_env() -> frozenset[str]:
     """Knobs still read ad-hoc. This set should only ever shrink."""
     return known_env() - typed_env()

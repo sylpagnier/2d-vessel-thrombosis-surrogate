@@ -146,26 +146,6 @@ def fd_inlet_flux_ref_from_re_nd(
     return u_ref * w
 
 
-def fd_inlet_flux_ref_from_poiseuille_nd(
-    *,
-    u_ref_nd: float,
-    width_nd: float,
-) -> float:
-    """
-    Same FD flow when ``u_ref`` is cross-sectional mean velocity: ``Q = U_av * width``.
-
-    Equivalent to ``poiseuille_2d_planar_volume_flux_nd(u_max, width)`` with ``u_max = 1.5 * u_ref``.
-    """
-    u_ref = max(float(u_ref_nd), 0.0)
-    w = max(float(width_nd), 1e-8)
-    u_max = 1.5 * u_ref
-    q = poiseuille_2d_planar_volume_flux_nd(
-        torch.tensor(u_max, dtype=torch.float32),
-        torch.tensor(w, dtype=torch.float32),
-    )
-    return float(q.item())
-
-
 def compute_inlet_outlet_flux_debug(
     *,
     velocity: torch.Tensor,
@@ -259,28 +239,6 @@ def compute_inlet_outlet_flux_debug(
         out["flow_collapse"] = 1.0 - ((sp_in + sp_out) / (2.0 * flow_ref + eps))
 
     return out
-
-
-def flux_debug_to_training_metrics(flux: Dict[str, float]) -> Dict[str, float]:
-    """Map ``compute_inlet_outlet_flux_debug`` keys to ``DBG_*`` biochem training metrics."""
-    nan = float("nan")
-    return {
-        "DBG_Q_pred_inlet": flux.get("Q_pred_inlet_nd", nan),
-        "DBG_Q_pred_outlet": flux.get("Q_pred_outlet_nd", nan),
-        "DBG_Q_ref_bc": flux.get("Q_ref_bc_nd", nan),
-        "DBG_Q_ref_re": flux.get("Q_ref_re_nd", nan),
-        "DBG_Q_inlet_rel_err": flux.get("Q_inlet_rel_err", nan),
-        "DBG_Q_flow_ratio": flux.get("Q_flow_ratio", nan),
-        "DBG_flow_trivial_score": flux.get("flow_trivial_score", nan),
-        "DBG_Q_inlet_outlet_imbalance": flux.get("Q_inlet_outlet_imbalance", nan),
-        "DBG_inlet_width_nd": flux.get("inlet_width_nd", nan),
-        "DBG_Q_ref_bc_re_mismatch": flux.get("Q_ref_bc_re_mismatch", nan),
-        # Legacy names: mean speed on boundary (not volume flux).
-        "DBG_flux_inlet": flux.get("speed_inlet_mean", nan),
-        "DBG_flux_outlet": flux.get("speed_outlet_mean", nan),
-        "DBG_flux_imbalance": flux.get("Q_inlet_outlet_imbalance", nan),
-        "DBG_flow_collapse": flux.get("flow_collapse", nan),
-    }
 
 
 def flux_debug_from_graph_data(

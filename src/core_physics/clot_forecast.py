@@ -48,78 +48,8 @@ def clot_forecast_one_step_enabled() -> bool:
     return _env_bool("CLOT_FORECAST_ONE_STEP", True)
 
 
-def clot_forecast_mu_carry_enabled() -> bool:
-    return _env_bool("CLOT_FORECAST_MU_CARRY", False)
-
-
-def clot_forecast_mu_carry_detach() -> bool:
-    return _env_bool("CLOT_FORECAST_MU_CARRY_DETACH", True)
-
-
-def clot_forecast_deploy_loss_enabled() -> bool:
-    return _env_bool("CLOT_FORECAST_DEPLOY_LOSS", True)
-
-
 def clot_forecast_mask_mode() -> str:
     return (os.environ.get("CLOT_FORECAST_MASK_MODE") or "ceiling").strip().lower()
-
-
-def clot_forecast_pair_stride() -> int:
-    return max(1, _env_int("CLOT_FORECAST_PAIR_STRIDE", 1))
-
-
-def clot_forecast_pair_schedule() -> str:
-    return (os.environ.get("CLOT_FORECAST_PAIR_SCHEDULE") or "rolling").strip().lower()
-
-
-def clot_forecast_input_mu_enabled() -> bool:
-    """Optional log(mu) input channel for one-step forecast features (legacy)."""
-    return _env_bool("CLOT_FORECAST_INPUT_MU", False)
-
-
-def clot_forecast_extra_feature_dim() -> int:
-    """Extra feature count appended when one-step forecast input-mu is enabled."""
-    if not clot_forecast_one_step_enabled():
-        return 0
-    return 1 if clot_forecast_input_mu_enabled() else 0
-
-
-def snapshot_clot_forecast_config() -> dict[str, object]:
-    return {
-        "one_step": clot_forecast_one_step_enabled(),
-        "mu_carry": clot_forecast_mu_carry_enabled(),
-        "mu_carry_detach": clot_forecast_mu_carry_detach(),
-        "deploy_loss": clot_forecast_deploy_loss_enabled(),
-        "mask_mode": clot_forecast_mask_mode(),
-        "pair_stride": clot_forecast_pair_stride(),
-        "pair_schedule": clot_forecast_pair_schedule(),
-        "input_mu": clot_forecast_input_mu_enabled(),
-        "extra_feature_dim": clot_forecast_extra_feature_dim(),
-    }
-
-
-def resolve_forecast_deploy_mask_from_model(step: ClotForecastPairStep, phi_pred: torch.Tensor) -> torch.Tensor:
-    """Deploy-eligible mask for loss/eval; defaults to the forecast region."""
-    del phi_pred
-    return step.loss_mask.reshape(-1).bool()
-
-
-def build_deploy_eligible_phi_gt(step: ClotForecastPairStep) -> torch.Tensor:
-    """GT phi restricted to deploy-eligible region."""
-    m = step.loss_mask.reshape(-1).bool()
-    out = torch.zeros_like(step.phi_gt.reshape(-1))
-    out[m] = step.phi_gt.reshape(-1)[m]
-    return out
-
-
-def resolve_rollout_prev_mu_si(step: ClotForecastPairStep, prev_mu_si: torch.Tensor | None) -> torch.Tensor:
-    """Resolve previous mu carry input for temporal rollouts."""
-    if prev_mu_si is None or not clot_forecast_mu_carry_enabled():
-        return step.mu_c_si.reshape(-1)
-    mu = prev_mu_si.reshape(-1)
-    if clot_forecast_mu_carry_detach():
-        mu = mu.detach()
-    return mu
 
 
 def iter_forecast_pairs(
@@ -141,16 +71,6 @@ def iter_forecast_pairs(
         t_in = max(0, t_out - dt)
         pairs.append((t_in, t_out))
     return pairs
-
-
-def _mu_clot_threshold_si(phys_cfg: PhysicsConfig) -> float:
-    for key in ("mu_clot_threshold_si", "mu_clot_threshold"):
-        if hasattr(phys_cfg, key):
-            try:
-                return float(getattr(phys_cfg, key))
-            except Exception:
-                pass
-    return 0.055
 
 
 def build_clot_forecast_pair_step(

@@ -55,57 +55,6 @@ def sample_time_indices(T: int, k: int = N_TIME_SAMPLES) -> np.ndarray:
     return idx
 
 
-def build_ap_field_entry(data, bio_cfg, *, flow: str = "gt",
-                         n_times: int = N_TIME_SAMPLES) -> dict:
-    """Extract one vessel's AP training entry (t=0 upwind base + GT AP_log1p_nd target)."""
-    from src.clot_ml.locked import build_sample
-    from src.core_physics.physics_wall_model import PER_M3_TO_PER_CM3, deposition_gate, t0_flow_fields
-    from src.core_physics.wall_ap_renewal import WallApRenewal, make_species_from_renewal
-
-    # Base node features
-    S = build_sample(data, bio_cfg, flow=flow, variant="v4")
-    T = int(data.y.shape[0])
-    ti = sample_time_indices(T, n_times)
-
-    wall = np.asarray(S["wall"], dtype=bool)
-    solid = np.asarray(S.get("solid", wall), dtype=bool)
-
-    # 1. Base upwind-renewal AP field [T, N] (deploy-legal)
-    f = t0_flow_fields(data, bio_cfg, hops=3, flow_source=flow)
-    gate = deposition_gate(data, f, wall=wall, wound_source=True)
-    renewal = WallApRenewal(renewal_scale=1.0)
-    _, ap_traj_cgs = make_species_from_renewal(data, bio_cfg, f, renewal=renewal)
-    
-    # 2. Convert base CGS AP field to ND scale
-    scales = bio_cfg.get_species_scales(device="cpu")
-    ap_scale_cgs = float(scales[1]) * PER_M3_TO_PER_CM3
-    # log1p(ap_cgs / ap_scale_cgs) matches the GT AP_log1p_nd transform exactly
-    ode_nd = np.log1p(np.maximum(ap_traj_cgs, 0.0) / ap_scale_cgs) * AP_TARGET_SCALE
-    
-    # 3. Ground truth target
-    ap_idx = data.y_channel_names.split(",").index("AP_log1p_nd")
-    gt_nd = data.y[:, :, ap_idx].detach().cpu().numpy() * AP_TARGET_SCALE
-
-    pos = np.asarray(S["pos"], dtype=np.float64)
-    ei = np.asarray(S["edge_index"])
-
-    return dict(
-        X=np.asarray(S["X"], dtype=np.float32),
-        edge_index=ei.astype(np.int64),
-        pos=pos.astype(np.float32),
-        u=np.asarray(S["u"], dtype=np.float32),
-        v=np.asarray(S["v"], dtype=np.float32),
-        wall=wall,
-        solid=solid,
-        gate=gate.astype(np.float32),
-        t_idx=ti.astype(np.int64),
-        T=np.int64(T),
-        # per-time fields; [K, N]
-        ode_t=ode_nd[ti].astype(np.float32),
-        gt_t=gt_nd[ti].astype(np.float32),
-    )
-
-
 def extra_channels(entry: dict, k: int, dev) -> torch.Tensor:
     """``[N, 3]`` time-varying input for ``ClotGNN.extra`` at time sample ``k``."""
     ode = np.asarray(entry["ode_t"][k], dtype=np.float32)

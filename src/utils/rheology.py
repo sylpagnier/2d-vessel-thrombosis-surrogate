@@ -23,17 +23,6 @@ def carreau_yasuda_viscosity(
     return mu_inf_nd + (mu_0_nd - mu_inf_nd) * (shear_term ** power)
 
 
-def dual_viscosity_multiplier(
-    mat: torch.Tensor,
-    fi: torch.Tensor,
-    mu_ratio_max: float,
-    mu1_sigmoid_fn,
-    mu2_sigmoid_fn,
-):
-    """Shared multiplier for clot-enhanced viscosity terms."""
-    return 1.0 + mu1_sigmoid_fn(mat) + mu2_sigmoid_fn(fi)
-
-
 def clot_trigger_sigmoid(
     field_si: torch.Tensor,
     crit: float,

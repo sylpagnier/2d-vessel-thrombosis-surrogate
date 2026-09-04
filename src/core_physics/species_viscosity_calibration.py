@@ -320,19 +320,6 @@ def predict_mu_at_time_with_beta(
     return mu_pred, step.mu_gt_si.reshape(-1)
 
 
-def mu_calibration_loss(
-    mu_pred: torch.Tensor,
-    mu_gt: torch.Tensor,
-    *,
-    log_space: bool = True,
-) -> torch.Tensor:
-    p = mu_pred.reshape(-1).clamp(min=1e-8)
-    t = mu_gt.reshape(-1).clamp(min=1e-8)
-    if log_space:
-        return F.mse_loss(torch.log(p), torch.log(t))
-    return F.mse_loss(p, t)
-
-
 @dataclass(frozen=True)
 class ViscosityCalibrationBundle:
     beta: float
@@ -341,48 +328,6 @@ class ViscosityCalibrationBundle:
     beta_min: float = 0.1
     beta_max: float = 2.0
     phase: str = "s35_viscosity_calibration"
-
-
-def save_viscosity_calibration(
-    path: Path | str,
-    calibrator: MatViscosityCalibrator,
-    *,
-    gnn_ckpt: str,
-    time_index: int = 53,
-    meta: dict | None = None,
-) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    beta_val = float(calibrator.beta.detach().cpu().item())
-    beta_min = float(calibrator._beta_lo.detach().cpu().item())
-    beta_max = float(calibrator._beta_hi.detach().cpu().item())
-    payload = {
-        "beta": beta_val,
-        "beta_min": beta_min,
-        "beta_max": beta_max,
-        "gnn_ckpt": str(gnn_ckpt),
-        "time_index": int(time_index),
-        "phase": "s35_viscosity_calibration",
-        "model_state": {"logit_beta": calibrator.logit_beta.detach().cpu()},
-        "meta": dict(meta or {}),
-    }
-    torch.save(payload, p)
-    side = p.with_suffix(".json")
-    side.write_text(
-        json.dumps(
-            {
-                "beta": beta_val,
-                "beta_min": beta_min,
-                "beta_max": beta_max,
-                "gnn_ckpt": str(gnn_ckpt),
-                "time_index": int(time_index),
-                "phase": "s35_viscosity_calibration",
-                **dict(meta or {}),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
 
 def resolve_deploy_gelation_beta(

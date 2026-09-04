@@ -141,13 +141,3 @@ def build_features(z, bio, *, C: float, q: float = 1.0) -> tuple[np.ndarray, np.
     return np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0), S
 
 
-def onset_target(z) -> tuple[np.ndarray, np.ndarray]:
-    """``(y, valid)`` where ``y`` is GT onset as a fraction of the horizon.
-
-    Vessels run to different horizons and commit at wildly different absolute times, so the
-    target is normalised per vessel; the metric is a per-vessel rank correlation anyway.
-    """
-    on = z["gt_onset"]
-    nt = len(z["t"])
-    valid = on >= 0
-    return np.where(valid, on / max(nt - 1, 1), 0.0).astype(np.float64), valid

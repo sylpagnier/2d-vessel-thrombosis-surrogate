@@ -176,21 +176,6 @@ def catalytic_rate_multiplier(hood: torch.Tensor, *, beta: float | None = None) 
     return 1.0 + b * h
 
 
-def gt_new_commit_mask(
-    data,
-    time_index: int,
-    phys_cfg: PhysicsConfig,
-    device: torch.device,
-) -> torch.Tensor:
-    """GT nodes that newly cross clot threshold at ``time_index``."""
-    t = max(int(time_index), 0)
-    cur = gt_growth_commit_mask_at_time(data, t, phys_cfg, device)
-    if t <= 0:
-        return cur
-    prev = gt_growth_commit_mask_at_time(data, t - 1, phys_cfg, device)
-    return cur & ~prev
-
-
 def project_phi_with_nucleation(
     phi_raw: torch.Tensor,
     phi_prev: torch.Tensor | None,

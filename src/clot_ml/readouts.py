@@ -198,35 +198,6 @@ SEPARABLE = {"thresh": (0, 1), "expected": (0, 1),
              "thresh_shell": (0, 1), "expected_shell": (0, 1)}
 
 
-def tune_separable(name, bench, scores, anchors):
-    """Tune the wall parameter on the wall score and the off parameter on the off score."""
-    fn, grids = REGISTRY[name]
-    iw, io_ = SEPARABLE[name]
-    base = [g[0] for g in grids]
-
-    def best(i, domain_of, invert):
-        bv, bp = -1e9, grids[i][0]
-        for val in grids[i]:
-            p = list(base)
-            p[i] = val
-            vals = []
-            for a in anchors:
-                S = bench.cache[a]
-                d = (~S["wall"]) if invert else S["wall"]
-                v = bench.vs[a].score(fn(S, scores[a], tuple(p)), d)
-                if v == v:
-                    vals.append(v)
-            if vals and np.mean(vals) > bv:
-                bv, bp = float(np.mean(vals)), val
-        return bp, bv
-
-    pw, vw = best(iw, None, False)
-    base[iw] = pw
-    po, vo = best(io_, None, True)
-    base[io_] = po
-    return tuple(base), vw + vo
-
-
 def apply(name, S, score, p):
     return REGISTRY[name][0](S, score, p)
 

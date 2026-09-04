@@ -117,26 +117,6 @@ def predict_wall_clot(data, bio_cfg, *, flow: str = "pred", lumen: bool = False,
     return cur | off, f
 
 
-def wall_mat_field(data, bio_cfg, f, *, da_scale=None, ap_closure=True,
-                   washout: float = 0.0) -> np.ndarray:
-    """The rollout's final wall ``Mat`` [N], in COMSOL model units.  Zero learned params.
-
-    ``washout`` -- the removal term's dimensionless coefficient; ``0.0`` is the
-    accumulate-only trajectory.  See ``integrate_mat_trajectory``'s ``washout`` docstring for
-    why the accumulate-only form cannot order GT ``Mat`` even with oracle inputs.
-    """
-    from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
-    from src.core_physics.physics_wall_model import integrate_mat_trajectory
-
-    wall = data.mask_wall.reshape(-1).bool().cpu().numpy()
-    hook = make_rollout_hook(SHIPPED, bio_cfg, f.sr) if ap_closure else None
-    traj, _ = integrate_mat_trajectory(
-        data, bio_cfg, f.gate * wall,
-        da_scale=SHIPPED_DA_SCALE if da_scale is None else float(da_scale),
-        ap_closure=hook, washout=float(washout), washout_sr=f.sr)
-    return traj[-1]
-
-
 def predict_wall_onset(data, bio_cfg, *, flow: str = "pred", ap_closure=True,
                        washout: float = 0.0):
     """The clot mask AND the time each node commits.  Zero learned parameters.

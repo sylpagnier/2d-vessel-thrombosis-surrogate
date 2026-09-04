@@ -169,11 +169,6 @@ def parse_biochem_extract_stem(stem: str) -> BiochemExtractRef | None:
     return None
 
 
-def is_canonical_nowound_comsol_stem(stem: str) -> bool:
-    """True for ``comsol007`` (not ``wound_comsol007`` / mirrors / other suffixes)."""
-    return bool(_COMSOL_STEM_RE.match(str(stem).strip()))
-
-
 def comsol_stem_from_phase2_mph(path: Path) -> str | None:
     """Map ``phase2_nowound_008.mph`` -> ``comsol008``; ``phase2_wound_008.mph`` -> ``wound_comsol008``."""
     m = _PHASE2_MPH_RE.match(Path(path).name)

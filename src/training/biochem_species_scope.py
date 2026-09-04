@@ -32,14 +32,6 @@ SCREEN_ADDON_CHANNEL_INDICES: tuple[int, ...] = tuple(
 )
 
 
-def bulk_channel_name(ch: int) -> str:
-    return BULK_CHANNEL_NAMES.get(int(ch), f"ch{int(ch)}")
-
-
-def format_channel_list(channels: Sequence[int]) -> str:
-    return ",".join(str(int(c)) for c in channels)
-
-
 def canonical_pushforward_channel_order(channels: Sequence[int]) -> list[int]:
     """FI then Mat then extras (stable); matches ``fi_mat_thrombin`` = ``[8,11,5]`` not ``[5,8,11]``."""
     seen: set[int] = set()
@@ -90,24 +82,6 @@ def pushforward_channels_from_env() -> list[int] | None:
     return parse_channel_list(raw)
 
 
-def fi_mat_plus_channels(extra: Sequence[int]) -> list[int]:
-    return canonical_pushforward_channel_order([*FI_MAT_BASE_CHANNELS, *(int(c) for c in extra)])
-
-
-def scope_label_for_channels(channels: Sequence[int]) -> str:
-    ch = sorted({int(c) for c in channels})
-    base = sorted(FI_MAT_BASE_CHANNELS)
-    if ch == base:
-        return "fi_mat"
-    if ch == [MAT_CHANNEL]:
-        return "mat"
-    extras = [c for c in ch if c not in base]
-    if len(extras) == 1 and extras[0] == THROMBIN_CHANNEL:
-        return "fi_mat_thrombin"
-    extra_names = "+".join(bulk_channel_name(c) for c in extras)
-    return f"fi_mat+{extra_names}"
-
-
 def _normalize_scope(raw: str) -> str:
     aliases = {
         "fi+mat": "fi_mat",
@@ -119,11 +93,6 @@ def _normalize_scope(raw: str) -> str:
         "bulk": "bulk9",
     }
     return aliases.get(raw, raw)
-
-
-def data_bio_species_scope() -> str:
-    raw = (os.environ.get("BIOCHEM_DATA_BIO_SPECIES_SCOPE") or "all").strip().lower()
-    return _normalize_scope(raw)
 
 
 def pushforward_species_scope() -> str:
@@ -181,66 +150,3 @@ def _scope_channel_indices(scope: str, *, n_channels: int = 12) -> list[int]:
     )
 
 
-def data_bio_species_channel_indices(*, n_channels: int = 12) -> list[int]:
-    """Active bulk species channels for ``L_Data_Bio`` (subset of ``4:16`` slice)."""
-    return _scope_channel_indices(data_bio_species_scope(), n_channels=n_channels)
-
-
-def pushforward_state_dim(*, n_channels: int = 12) -> int:
-    return len(pushforward_state_bulk_indices(n_channels=n_channels))
-
-
-def pushforward_local_index(which: str) -> int:
-    """Local state index for a named bulk channel (fi|mat|thrombin)."""
-    bulk = pushforward_state_bulk_indices()
-    key = which.strip().lower()
-    ch_map = {
-        "fi": FI_CHANNEL,
-        "mat": MAT_CHANNEL,
-        "thrombin": THROMBIN_CHANNEL,
-        "th": THROMBIN_CHANNEL,
-        "pt": PROTHROMBIN_CHANNEL,
-        "fg": FIBRINOGEN_CHANNEL,
-    }
-    if key not in ch_map:
-        raise KeyError(f"unknown pushforward channel name {which!r}")
-    bulk_ch = ch_map[key]
-    return bulk.index(bulk_ch)
-
-
-def slice_bio_species_channels(
-    tensor: torch.Tensor,
-    *,
-    n_channels: int = 12,
-) -> torch.Tensor:
-    """Select supervised species channels; ``tensor`` shape ``[..., 12]``."""
-    idx = data_bio_species_channel_indices(n_channels=n_channels)
-    return tensor[..., idx]
-
-
-def scatter_log_state_to_species_block(
-    species: torch.Tensor,
-    log_state: torch.Tensor,
-    node_idx: torch.Tensor,
-    *,
-    bulk_channels: Sequence[int] | None = None,
-) -> torch.Tensor:
-    """Write pushforward log-state onto a 12-ch species block."""
-    bulk = list(bulk_channels or pushforward_state_bulk_indices())
-    out = species.clone()
-    idx = node_idx.reshape(-1)
-    st = log_state.reshape(-1, len(bulk)).to(device=out.device, dtype=out.dtype)
-    for local_i, bulk_ch in enumerate(bulk):
-        out[idx, int(bulk_ch)] = st[:, local_i]
-    return out.clamp(min=0.0)
-
-
-def data_bio_species_scope_label() -> str:
-    return data_bio_species_scope()
-
-
-def pushforward_species_scope_label() -> str:
-    explicit = pushforward_channels_from_env()
-    if explicit is not None:
-        return scope_label_for_channels(explicit)
-    return pushforward_species_scope()

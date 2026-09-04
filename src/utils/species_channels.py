@@ -177,43 +177,9 @@ def block_index(name: str) -> int:
     return get(name).block_index
 
 
-def block_index_to_y_index(i: int) -> int:
-    """Map a species-block index (0..11) to a full-y column (4..15)."""
-    i = int(i)
-    if not 0 <= i < SPECIES_BLOCK_WIDTH:
-        raise IndexError(f"block index {i} out of range [0, {SPECIES_BLOCK_WIDTH}).")
-    return SPECIES_BLOCK_START + i
-
-
-def y_index_to_block_index(i: int) -> int:
-    """Map a full-y column (4..15) to a species-block index (0..11)."""
-    i = int(i)
-    if not SPECIES_BLOCK_START <= i < Y_WIDTH:
-        raise IndexError(
-            f"y index {i} is not a species column; species occupy "
-            f"[{SPECIES_BLOCK_START}, {Y_WIDTH})."
-        )
-    return i - SPECIES_BLOCK_START
-
-
 def name_at_block_index(i: int) -> str:
     """Species short name at species-block index ``i`` (0..11)."""
     return _SPECIES[int(i)].name  # block_index == positional index by construction
-
-
-def name_at_y_index(i: int) -> str:
-    """Species short name at full-y column ``i`` (4..15)."""
-    return name_at_block_index(y_index_to_block_index(i))
-
-
-def block_indices(names: Sequence[str]) -> List[int]:
-    """Species-block indices for an ordered list of names."""
-    return [block_index(n) for n in names]
-
-
-def y_indices(names: Sequence[str]) -> List[int]:
-    """Full-y columns for an ordered list of names."""
-    return [y_index(n) for n in names]
 
 
 def describe() -> str:

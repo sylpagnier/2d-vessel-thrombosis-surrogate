@@ -106,15 +106,3 @@ def mean_by_split(scores: dict[str, float]) -> dict[str, dict]:
     return out
 
 
-def format_split_means(scores: dict[str, float], *, width: int = 44) -> str:
-    m = mean_by_split(scores)
-    parts = []
-    for k in ("fit", "dev"):
-        row = m[k]
-        if row["n"] == 0 or row["mean"] is None:
-            parts.append("%s n=0" % k.upper())
-        else:
-            parts.append("%s n=%d %.4f" % (k.upper(), row["n"], row["mean"]))
-    if m["sealed"]["n"]:
-        parts.append("SEALED n=%d (do not select)" % m["sealed"]["n"])
-    return "  ".join(parts)

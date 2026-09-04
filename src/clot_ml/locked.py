@@ -164,25 +164,6 @@ def predict_clot_series(ens: dict, data, times, *, flow: str = "gt",
                 series=mask_series(onset, mask, times))
 
 
-@torch.no_grad()
-def predict_mat(ens: dict, sample: dict) -> np.ndarray:
-    """Mean predicted ``log1p(Mat/crit)`` over the ensemble's REGRESSION head.
-
-    That head exists in every locked member (physics-based, zero-init residual on the
-    backbone's own ``Mat``) but has never been the readout -- the deploy score uses the
-    classifier.  It is the natural place to read the magnitude field from.
-    """
-    from src.clot_ml.gnn import build_graph, rollout  # noqa: PLC0415
-
-    out = None
-    for m in ens["members"]:
-        g = build_graph(sample, ens["mu"], ens["sd"], ens["device"], need_fb=m["rounds"] > 1)
-        _, reg = rollout(m["net"], g, m["rounds"])
-        r = reg.cpu().numpy()
-        out = r if out is None else out + r
-    return out / max(len(ens["members"]), 1)
-
-
 # ---------------------------------------------------------------------------
 # v3: time-conditioned model (docs/PHASE9_ML.md 13.9)
 # ---------------------------------------------------------------------------
@@ -565,7 +546,6 @@ def predict_temporal_v4_wound(bundle: dict, data, times, *, flow: str = "gt",
     comp["mask"] = mask
     comp["onset"] = onset
     return comp
-
 
 
 def load_default(device=None) -> tuple[dict, str]:

@@ -61,18 +61,6 @@ def splits(cache: dict) -> tuple[list[str], list[str]]:
     return fit, dev
 
 
-def standardiser(cache: dict, anchors: list[str]):
-    X = np.concatenate([cache[a]["X"] for a in anchors], axis=0)
-    mu = X.mean(axis=0)
-    sd = X.std(axis=0)
-    sd[sd < 1e-6] = 1.0
-    return mu.astype(np.float32), sd.astype(np.float32)
-
-
-def mask_from_score(score: np.ndarray, thresh: float) -> np.ndarray:
-    return score >= thresh
-
-
 # ---------------------------------------------------------------------------
 # THE EVALUATION DOMAINS -- decided 2026-08-22 (roadmap item A3)
 # ---------------------------------------------------------------------------

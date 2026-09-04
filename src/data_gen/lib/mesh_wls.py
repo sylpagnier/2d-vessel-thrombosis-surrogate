@@ -274,47 +274,6 @@ def rank_aware_pinv_sym(M: torch.Tensor, rcond: float = WLS_RCOND) -> torch.Tens
     return out.to(device=dev, dtype=M.dtype)
 
 
-def rebuild_wls_operators_from_graph(data):
-    """Recompute ``V``, ``W``, ``M_inv`` from a pack's OWN ``edge_index`` and node positions.
-
-    RGP_DEQ_REPAIR_PLAN.md B13.  The operators stored on the biochem packs do not correspond
-    to the edge lists stored alongside them.  Measured maxima of ``|M_inv|``:
-
-    ```
-    pack          stored     rebuilt (either inversion)
-    comsol001    1.000e+06        5.6e+03
-    comsol012    6.658e+05        2.1e+04
-    comsol020    7.001e+05        2.8e+04
-    comsol041    7.243e+05        1.7e+04
-    comsol044    6.256e+05        2.9e+04
-    ```
-
-    ``1.000e+06`` is exactly ``1/epsilon`` for the old ``M + 1e-6*I``: the signature of a node
-    whose ``M`` was *empty*, i.e. built from an edge list that did not include it.  Rebuilding
-    from the pack's own graph drops the operator by 20-60x, and with it the derived channels:
-
-    ```
-    pack          width_d2 stored   width_d2 rebuilt      (training p95: 73.8)
-    comsol020         4.784e+04              21.8
-    comsol012         1.046e+05             183.8
-    comsol041         1.019e+05             273.1
-    comsol044         1.773e+05             258.2
-    ```
-
-    So ``kinematics_inference.clamped_width_priors`` -- which forces these into the training
-    range at every call site -- is a workaround for a **stale operator**, not for the collinear
-    stencils its docstring blames.  A rebuild puts them there on their own.
-
-    **Not wired in by default.**  This changes every flow-derived quantity downstream, and the
-    plan's own rule is that flow changes are judged on wall ``dsrx`` correlation, gate union
-    Jaccard and oracle-F1 -- not on the operator norm.  Make it the default only after that
-    measurement, not because the numbers above look better.
-    """
-    pos = data.x[:, :2]
-    V, W, M_inv = precompute_wls_operators(data.edge_index, int(data.num_nodes), pos)
-    return V, W, M_inv
-
-
 def gmsh_line_boundary_masks(mesh, num_nodes: int, tags: Dict[str, int]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Build inlet / outlet / wall / wound boolean masks from Gmsh line physical tags."""
     mask_inlet = torch.zeros(num_nodes, dtype=torch.bool)

@@ -232,26 +232,6 @@ def assert_graph_schema(data, expected_y_schema: Optional[Iterable[str]] = None)
         raise ValueError("y_valid_mask shape must match y shape.")
 
 
-def migrate_tensor_last_dim(
-    t: torch.Tensor,
-    *,
-    target_width: int,
-    fill_value: float = 0.0,
-) -> torch.Tensor:
-    """Pad/trim the last dim to a target width (behavior-preserving when widths already match)."""
-    if int(t.shape[-1]) == int(target_width):
-        return t
-    if int(t.shape[-1]) > int(target_width):
-        return t[..., :target_width].contiguous()
-    pad = torch.full(
-        (*t.shape[:-1], int(target_width) - int(t.shape[-1])),
-        float(fill_value),
-        device=t.device,
-        dtype=t.dtype,
-    )
-    return torch.cat([t, pad], dim=-1).contiguous()
-
-
 def biochem_encoder_x(data) -> torch.Tensor:
     """Biochem-model node features (15ch ``BIO_X_SCHEMA``), never the kinematics ``data.x`` layout."""
     if hasattr(data, "x_biochem") and data.x_biochem is not None:
@@ -333,22 +313,4 @@ def assert_anchor_dual_x_aligned(data, *, atol: float = 1e-5) -> None:
             f"expected data.x_biochem_schema={BIO_X_SCHEMA!r}, got {getattr(data, 'x_biochem_schema', None)!r}"
         )
 
-
-def migrate_graph_schema(
-    data,
-    *,
-    x_schema: str,
-    y_schema: str,
-    fill_value: float = 0.0,
-):
-    """Opt-in migration: pad/trim x/y to match schemas, then attach metadata."""
-    if x_schema not in X_SCHEMAS:
-        raise ValueError(f"Unknown x schema: {x_schema}")
-    if y_schema not in Y_SCHEMAS:
-        raise ValueError(f"Unknown y schema: {y_schema}")
-    x_def = X_SCHEMAS[x_schema]
-    y_def = Y_SCHEMAS[y_schema]
-    data.x = migrate_tensor_last_dim(data.x, target_width=x_def.width, fill_value=fill_value)
-    data.y = migrate_tensor_last_dim(data.y, target_width=y_def.width, fill_value=fill_value)
-    return attach_channel_metadata(data, x_schema=x_schema, y_schema=y_schema, mask_wall=getattr(data, "mask_wall", None))
 

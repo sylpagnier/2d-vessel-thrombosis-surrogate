@@ -478,27 +478,6 @@ def supervision_region_mask(
     return region
 
 
-def wall_supervision_mask(data, device: torch.device) -> torch.Tensor:
-    """Backward-compatible alias: neighbor mode without clot seeds uses wall + 1-hop only."""
-    if clot_phi_mask_mode() == "sdf":
-        return sdf_supervision_mask(data, device)
-    n = int(data.num_nodes)
-    wall = _wall_mask_from_data(data, device, n)
-    return neighbor_supervision_mask(data, device, wall)
-
-
-def wall_adjacent_mask(data, device: torch.device) -> torch.Tensor:
-    """Gaussian off-wall band (viz / optional ablation); training uses ``wall_supervision_mask``."""
-    n = int(data.num_nodes)
-    sdf = sdf_nd_from_data(data, device, n)
-    wall = None
-    if hasattr(data, "mask_wall") and data.mask_wall is not None:
-        wall = data.mask_wall.view(-1).to(device=device)
-    peak = _env_float("CLOT_PHI_D_PEAK_ND", 0.008)
-    sigma = _env_float("CLOT_PHI_SIGMA_ND", 0.008)
-    return adjacent_band_mask(sdf, wall, peak_nd=peak, sigma_nd=sigma).to(device=device)
-
-
 def carreau_mu_si_from_uv(
     data,
     u_nd: torch.Tensor,
@@ -838,19 +817,9 @@ def clot_phi_oracle_mu_enabled() -> bool:
     return _env_bool("CLOT_PHI_ORACLE_MU", False)
 
 
-def clot_phi_physics_oracle_enabled() -> bool:
-    """Analytical clot: Carreau(GT u,v) x (1 + mu1(Mat) + mu2(FI)), no learned weights."""
-    return _env_bool("CLOT_PHI_PHYSICS_ORACLE", False)
-
-
 def clot_phi_species_features_enabled() -> bool:
     """Append log1p(FI), log1p(Mat) from GT ``y`` to node features."""
     return _env_bool("CLOT_PHI_SPECIES_FEATURES", False)
-
-
-def clot_phi_joint_bio_enabled() -> bool:
-    """Train a small species head with ``L_Data_Bio`` (MSE on ``y[:,4:16]``) alongside clot head."""
-    return _env_bool("CLOT_PHI_JOINT_BIO", False)
 
 
 def clot_phi_physics_mu_ratio_max(bio_cfg: BiochemConfig) -> float:
@@ -932,24 +901,6 @@ def gt_mu_anchor_cap_si(data, phys_cfg: PhysicsConfig, device: torch.device) -> 
     y0 = data.y[0].to(device)
     mu0 = phys_cfg.viscosity_nd_to_si(y0[:, STATE_CHANNEL_MU_EFF_ND])
     return cap_mu_eff_si(mu0)
-
-
-def snapshot_clot_physics_trigger_config() -> dict[str, object]:
-    return {
-        "mu_base": clot_phi_physics_mu_base_mode(),
-        "mu_ratio_max": os.environ.get("CLOT_PHI_PHYSICS_MU_RATIO_MAX", ""),
-        "hard_step": clot_phi_physics_hard_step(),
-        "gelation_gate": clot_phi_physics_gelation_gate_enabled(),
-        "wall_mat_only": clot_phi_physics_wall_mat_only(),
-        "use_fibrin": clot_phi_physics_use_fibrin(),
-        "gelation_onset_frac": clot_phi_physics_gelation_onset_frac(),
-        "subtract_t0_mu": True,
-        "gt_subtract_t0_mu": True,
-        "mu2_cap": os.environ.get("CLOT_PHI_PHYSICS_MU2_CAP", ""),
-        "thresh_si": os.environ.get("CLOT_PHI_THRESH_SI", ""),
-        "mu_blood_si": os.environ.get("CLOT_PHI_PHYSICS_MU_BLOOD_SI", ""),
-        "gamma_mode": clot_phi_physics_gamma_mode(),
-    }
 
 
 def mat_si_for_gelation_from_log1p(
@@ -1169,15 +1120,6 @@ def clot_phi_fixed_mu_from_phi_enabled() -> bool:
     return _env_bool("CLOT_PHI_FIXED_MU_FROM_PHI", False)
 
 
-def clot_phi_model_kind() -> str:
-    raw = (os.environ.get("CLOT_PHI_MODEL") or "mlp").strip().lower()
-    if raw in ("linear", "logistic", "lr"):
-        return "linear"
-    if raw in ("mpnn", "gnn", "conv"):
-        return "mpnn"
-    return "mlp"
-
-
 def clot_phi_dropout() -> float:
     """Dropout on MLP trunk only (0 disables)."""
     return max(0.0, min(_env_float("CLOT_PHI_DROPOUT", 0.0), 0.5))
@@ -1186,31 +1128,6 @@ def clot_phi_dropout() -> float:
 def clot_phi_mlp_depth() -> int:
     """Hidden SiLU blocks in the MLP trunk (1 = single hidden layer)."""
     return max(1, min(int(_env_float("CLOT_PHI_MLP_DEPTH", 1.0)), 3))
-
-
-def clot_phi_feature_dim() -> int:
-    from src.core_physics.clot_forecast import clot_forecast_extra_feature_dim
-    from src.core_physics.clot_phi_rollout import clot_phi_rollout_extra_feature_dim
-
-    extra_sp = 2 if clot_phi_species_features_enabled() else 0
-    if clot_phi_minimal_features_enabled():
-        base = 3 + extra_sp
-    else:
-        base = 7 if clot_phi_oracle_mu_enabled() else 6
-        if clot_phi_use_prior_features():
-            base += clot_phi_prior_feature_count()
-    return base + clot_phi_rollout_extra_feature_dim() + clot_forecast_extra_feature_dim()
-
-
-def rule_phi_from_mu_cap(
-    mu_cap_si: torch.Tensor,
-    region: torch.Tensor,
-    phys_cfg: PhysicsConfig,
-    *,
-    mu_anchor_si: torch.Tensor,
-) -> torch.Tensor:
-    """Sanity floor: phi=1 where growth relu(mu - anchor) >= threshold inside the shell."""
-    return phi_gt_binary(mu_cap_si, region, phys_cfg, mu_anchor_si=mu_anchor_si)
 
 
 def clot_prior_rule_p_quantile() -> float:
@@ -1621,65 +1538,6 @@ def _anchor_flow_props(data, device: torch.device) -> dict[str, torch.Tensor]:
     return {"u_ref": u_ref, "d_bar": d_bar}
 
 
-def predict_phi_prior_rule_baseline(
-    data,
-    device: torch.device,
-    bio_cfg: BiochemConfig,
-    *,
-    t_in: int = 0,
-    ceiling_hops: int | None = None,
-    rule: ClotPriorRuleConfig | None = None,
-) -> tuple[torch.Tensor, dict[str, float | int]]:
-    """Deploy rule: phi=1 where (prior >= p85 inside ceiling) OR t0 dgamma strip (default)."""
-    return predict_phi_prior_rule(
-        data,
-        device,
-        bio_cfg,
-        rule=rule or default_prior_rule_config(),
-        t_in=t_in,
-        ceiling_hops=ceiling_hops,
-    )
-
-
-def predict_prior_rule_deploy(
-    data,
-    t_out: int,
-    *,
-    phys_cfg: PhysicsConfig,
-    bio_cfg: BiochemConfig,
-    device: torch.device,
-    t_in: int = 0,
-    rule: ClotPriorRuleConfig | None = None,
-) -> tuple[object, torch.Tensor, torch.Tensor, dict[str, float | int]]:
-    """Static-final deploy: t_in flow -> phi rule -> fixed-mu blend -> support projection."""
-    from src.core_physics.clot_forecast import build_clot_forecast_pair_step
-
-    step = build_clot_forecast_pair_step(
-        data,
-        int(t_in),
-        int(t_out),
-        phys_cfg,
-        bio_cfg,
-        device,
-    )
-    phi, meta = predict_phi_prior_rule_baseline(
-        data, device, bio_cfg, t_in=int(t_in), rule=rule
-    )
-    mu = log_blend_mu_eff_si(step.mu_c_si, phi)
-    mu = project_deploy_mu_with_support(
-        data=data,
-        step=step,
-        mu_pred=mu,
-        phys_cfg=phys_cfg,
-        bio_cfg=bio_cfg,
-        device=device,
-        forecast_one_step=True,
-        time_index=int(t_out),
-        bulk_time_index=int(t_out),
-    )
-    return step, phi, mu, meta
-
-
 def mu_growth_clot_binary_mask(
     mu_si: torch.Tensor,
     mu_anchor_si: torch.Tensor,
@@ -1688,21 +1546,6 @@ def mu_growth_clot_binary_mask(
     """Growth-only clot mask: ``relu(mu - anchor) >= thresh``."""
     growth = (mu_si.reshape(-1) - mu_anchor_si.reshape(-1)).clamp(min=0.0)
     return growth >= float(thresh_si)
-
-
-def phi_gt_binary(
-    mu_cap_si: torch.Tensor,
-    region: torch.Tensor | None,
-    phys_cfg: PhysicsConfig,
-    *,
-    mu_anchor_si: torch.Tensor,
-) -> torch.Tensor:
-    """Binary GT clot: growth ``relu(mu - anchor) >= thresh``. Region masks band when set."""
-    thr = clot_phi_thresh_si(phys_cfg)
-    phi = mu_growth_clot_binary_mask(mu_cap_si, mu_anchor_si, thr).to(dtype=torch.float32)
-    if region is None:
-        return phi
-    return phi * region.reshape(-1).to(dtype=torch.float32)
 
 
 def phi_gt_soft(
@@ -1774,48 +1617,6 @@ def mu_eff_from_carried_phi(
     if phi_prev is None:
         return mc
     return log_blend_mu_eff_si(mu_c_si, phi_prev).reshape(-1).to(device=device)
-
-
-def snapshot_phi_only_rollout_config() -> dict[str, object]:
-    return {
-        "fixed_mu_from_phi": clot_phi_fixed_mu_from_phi_enabled(),
-        "mu_solid_si": clot_phi_mu_solid_si(),
-    }
-
-
-def clot_phi_mesh_aux_lambda() -> float:
-    """Auxiliary BCE on full eligible lumen at forecast target time (helps clot_shape)."""
-    return max(float(os.environ.get("CLOT_PHI_MESH_AUX_LAMBDA", "0") or "0"), 0.0)
-
-
-def clot_phi_mesh_bulk_lambda() -> float:
-    """Penalize phi>0 on bulk nodes (mu_gt below clot threshold) at target time."""
-    return max(float(os.environ.get("CLOT_PHI_MESH_BULK_LAMBDA", "0") or "0"), 0.0)
-
-
-def clot_phi_shape_use_t_out_mu() -> bool:
-    """One-step clot_shape: blend phi with Carreau mu_c @ t_out (not t_in)."""
-    return _env_bool("CLOT_PHI_SHAPE_USE_T_OUT", True)
-
-
-def lumen_eligible_mask(
-    data,
-    device: torch.device,
-    *,
-    n_nodes: int | None = None,
-) -> torch.Tensor:
-    """Eligible lumen nodes for mesh-wide aux loss / shape (wall + near-wall band)."""
-    n = int(n_nodes or data.num_nodes)
-    wall = _wall_mask_from_data(data, device, n)
-    return _lumen_supervision_eligible(data, device, wall, n).bool()
-
-
-def snapshot_mesh_aux_config() -> dict[str, float | bool]:
-    return {
-        "mesh_aux_lambda": clot_phi_mesh_aux_lambda(),
-        "mesh_bulk_lambda": clot_phi_mesh_bulk_lambda(),
-        "shape_use_t_out_mu": clot_phi_shape_use_t_out_mu(),
-    }
 
 
 def clot_phi_hard_support_projection_enabled() -> bool:
@@ -1895,18 +1696,6 @@ def apply_clot_support_projection(
     if bool(band.any().item()):
         out[band] = mu[band]
     return out.reshape_as(mu)
-
-
-def project_mu_from_phi_with_support(
-    mu_c_si: torch.Tensor,
-    phi: torch.Tensor,
-    support_band: torch.Tensor,
-    *,
-    mu_solid_si: float | None = None,
-) -> torch.Tensor:
-    """log-blend phi -> mu, then hard-project onto support band."""
-    mu_blend = log_blend_mu_eff_si(mu_c_si, phi, mu_solid_si=mu_solid_si)
-    return apply_clot_support_projection(mu_c_si, mu_blend, support_band)
 
 
 def resolve_clot_support_band_for_step(
@@ -1995,16 +1784,6 @@ def project_deploy_mu_with_support(
     else:
         mu_bulk = step.mu_c_si
     return apply_clot_support_projection(mu_bulk, mu_pred, band)
-
-
-def snapshot_clot_support_config() -> dict[str, object]:
-    from src.core_physics.clot_growth_masks import snapshot_clot_growth_config
-
-    return {
-        "hard_support_projection": clot_phi_hard_support_projection_enabled(),
-        "support_band": clot_support_band_mode(),
-        **snapshot_clot_growth_config(),
-    }
 
 
 def node_features_from_gt(
@@ -2223,16 +2002,6 @@ class ClotPhiHybrid(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(self.forward_logits(x))
-
-
-def build_clot_phi_model(in_dim: int, hidden: int) -> nn.Module:
-    """Factory: ``CLOT_PHI_HYBRID`` + ``CLOT_PHI_MODEL=linear|mlp|mpnn``."""
-    kind = clot_phi_model_kind()
-    if clot_phi_hybrid_enabled():
-        if kind == "mpnn":
-            return ClotPhiMPNNHybrid(in_dim=in_dim, hidden=hidden)
-        return ClotPhiHybrid(in_dim=in_dim, hidden=hidden, linear=(kind == "linear"))
-    return ClotPhiMLP(in_dim=in_dim, hidden=hidden)
 
 
 def clot_phi_model_uses_mpnn(model: nn.Module) -> bool:

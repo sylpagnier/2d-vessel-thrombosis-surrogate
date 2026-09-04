@@ -435,10 +435,6 @@ def get_active_runtime() -> BiochemRuntimeConfig | None:
     return _ACTIVE_RUNTIME.get()
 
 
-def resolve_runtime(explicit: BiochemRuntimeConfig | None = None) -> BiochemRuntimeConfig | None:
-    return explicit if explicit is not None else get_active_runtime()
-
-
 @contextmanager
 def use_biochem_runtime(config: BiochemRuntimeConfig | None) -> Iterator[BiochemRuntimeConfig | None]:
     token = _ACTIVE_RUNTIME.set(config)

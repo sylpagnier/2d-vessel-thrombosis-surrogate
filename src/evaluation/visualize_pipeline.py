@@ -385,11 +385,6 @@ def run_steady_kinematics_viz(
     plt.show()
 
 
-def _nearest_time_indices(times_si: torch.Tensor, query_times: List[float]) -> List[int]:
-    t = times_si.reshape(-1).to(dtype=torch.float32)
-    return [int(torch.argmin(torch.abs(t - float(q))).item()) for q in query_times]
-
-
 def _run_phase_comparison_graphsage_redirect(
     *, source: str, anchor_stem: Optional[str], time_index: int = -1
 ) -> None:

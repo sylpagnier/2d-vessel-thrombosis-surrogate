@@ -60,25 +60,3 @@ class Bench:
         return best_t
 
 
-def run_lovo(fit_fn, bench: Bench, grid, *, verbose=False):
-    """``fit_fn(train_anchors) -> predict(anchor) -> per-node score``."""
-    rows, ths = {}, {}
-    for held in bench.fit:
-        tr = [a for a in bench.fit if a != held]
-        predict = fit_fn(tr)
-        sc = {a: predict(a) for a in tr + [held]}
-        t = bench.pick_threshold(sc, tr, grid)
-        rows[held] = bench.row(held, sc[held] >= t)
-        ths[held] = t
-        if verbose:
-            r = rows[held]
-            print("      [lovo] %-12s t=%.3f wall %.4f off %s"
-                  % (held, t, r["wall"],
-                     ("%.4f" % r["off"]) if r["off"] == r["off"] else "n/a"), flush=True)
-    predict = fit_fn(bench.fit)
-    sc = {a: predict(a) for a in bench.fit + bench.dev}
-    t_all = bench.pick_threshold(sc, bench.fit, grid)
-    for a in bench.dev:
-        rows[a] = bench.row(a, sc[a] >= t_all)
-        ths[a] = t_all
-    return bench.summarise(rows), rows, ths

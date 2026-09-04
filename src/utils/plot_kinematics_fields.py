@@ -165,42 +165,6 @@ def plot_wall_outline(
     return None
 
 
-def plot_kinematics_uvp(
-    fig,
-    axes,
-    pos: np.ndarray,
-    pred: np.ndarray,
-    *,
-    channel_indices: dict | None = None,
-    si_scale: tuple[float, float] | None = None,
-    show_si: bool = False,
-) -> None:
-    """Four-panel u, v, p, speed plot on axes[0..3]."""
-    ch = channel_indices or {
-        "u": PredChannels.U,
-        "v": PredChannels.V,
-        "p": PredChannels.P,
-    }
-    u = pred[:, ch["u"]]
-    v = pred[:, ch["v"]]
-    p = pred[:, ch["p"]]
-    speed = np.hypot(u, v)
-
-    u_ref, p_ref = (None, None)
-    if show_si and si_scale is not None:
-        u_ref, p_ref = si_scale
-
-    panels = [
-        (u, "u", "RdBu_r", _si_or_nd_label("u", si_scale=u_ref, unit="m/s")),
-        (v, "v", "RdBu_r", _si_or_nd_label("v", si_scale=u_ref, unit="m/s")),
-        (p, "p", "coolwarm", _si_or_nd_label("p", si_scale=p_ref, unit="Pa")),
-        (speed, "|U|", "jet", _si_or_nd_label("|U|", si_scale=u_ref, unit="m/s")),
-    ]
-
-    for ax, (values, _key, cmap, title) in zip(axes, panels):
-        plot_field(fig, ax, pos, values, title, cmap)
-
-
 def plot_kinematics_speed_pressure(
     fig,
     axes,
