@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from src.utils.paths import get_project_root
+from src.utils.paths import anchor_packs_dir, get_project_root
 from src.data_gen.lib.extract_biochem_comsol_data import validate_graph_physical_integrity
 
 # Locate biochem graph directory
-GRAPH_DIR = get_project_root() / "data" / "processed" / "graphs_biochem_anchors"
+GRAPH_DIR = anchor_packs_dir()
 PT_FILES = sorted(list(GRAPH_DIR.glob("comsol*.pt")))
 
 def discover_test_cases():

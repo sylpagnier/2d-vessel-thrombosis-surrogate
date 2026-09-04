@@ -25,10 +25,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from src.utils.paths import get_project_root
+
 import numpy as np
 
-_REPO = Path(__file__).resolve().parents[2]
-
+_REPO = get_project_root()
 #: The modules whose contents define a cached feature vector.
 FEATURE_SOURCES: tuple[str, ...] = (
     "src/clot_ml/features.py",

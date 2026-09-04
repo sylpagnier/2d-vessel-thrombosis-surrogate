@@ -23,8 +23,10 @@ import numpy as np
 import pytest
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
+PACKS = anchor_packs_dir()
 V5_CACHE = REPO / "outputs/clot_ml_cache_v5"
 
 #: the five v4 channels that were GT-locked, and are the point of the fix

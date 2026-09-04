@@ -30,13 +30,14 @@ comsol007 values (C=68) in the handoff came from the SEALED vessel's raw export 
 not usable (6.1).
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.sparse as sp
 
-M_TO_CM = 100.0
+
 PER_M2_TO_PER_CM2 = 1.0e-4
 SR_FLOOR = 1.0e-3          # 1/s -- below this "renewal by shear" is not a mechanism
 

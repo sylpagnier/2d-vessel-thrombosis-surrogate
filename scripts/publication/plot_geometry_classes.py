@@ -14,6 +14,7 @@ Drawing that failure costs one panel and buys the reader's trust in every other 
 Reads packs directly; no upstream data-generation step.
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -24,14 +25,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from scripts.publication.config import CONFIG, DATA_DIR, FIG_DIR  # noqa: E402
 from scripts.publication.utils import setup_matplotlib_style  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 CLASS_STYLE = {
     "aneurysm": ("#c44e52", "o"),
     "stenosis": ("#4c72b0", "s"),

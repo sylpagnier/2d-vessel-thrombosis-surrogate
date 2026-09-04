@@ -18,15 +18,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.utils.paths import anchor_packs_dir, get_project_root
+
 import numpy as np
 import pytest
 import torch
 
 from src.clot_ml.data import eval_domains, off_domain, wall_domain, wound_of
 
-PACKS = Path(__file__).resolve().parents[2] / "data/processed/graphs_biochem_anchors"
-
-
+PACKS = anchor_packs_dir()
 def _sample(n=10, wall_idx=(0, 1), wound_idx=()):
     wall = np.zeros(n, dtype=bool)
     wall[list(wall_idx)] = True

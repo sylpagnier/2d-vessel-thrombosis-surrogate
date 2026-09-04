@@ -22,6 +22,7 @@ Usage:
     python scripts/publication/generate_kfold_table.py --at final    # final-time only
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -33,7 +34,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -42,7 +45,7 @@ from scripts.publication.oof_data import (  # noqa: E402
     build_vessel_figure_data, ensure_oof_series, load_oof_archive, metrics_rows_for_vessel,
 )
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 
 
 def _geometry_class(stem: str) -> str:

@@ -14,6 +14,7 @@ silent lie, which is the standing rule for the guard files:
 """
 
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 import numpy as np
 import pytest
@@ -28,7 +29,7 @@ from src.core_physics.ap_closure import (
 )
 from src.core_physics.physics_wall_model import first_crossing, integrate_mat_trajectory
 
-M_TO_CM = 100.0
+
 PER_M2_TO_PER_CM2 = 1.0e-4
 
 

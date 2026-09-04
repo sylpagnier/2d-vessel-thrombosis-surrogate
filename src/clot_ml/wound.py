@@ -37,6 +37,7 @@ species, no GT ``Mat``. The gate feedback in §3.3 is driven by the rollout's **
 so the loop closes on the model's state rather than on the answer.
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 import dataclasses
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ import torch.nn as nn
 from src.clot_ml.features import adjacency, hop_distance, khop_stats
 from src.data_gen.lib.mesh_wls import solid_boundary_nodes
 
-M_TO_CM = 100.0
+
 PER_M2_TO_PER_CM2 = 1.0e-4
 
 #: Base constants for the two-regime gate. ``G_pre0 = 2`` is not tuned -- it is

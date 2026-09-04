@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 # Allow running as ``python src/tools/inspect_kinematics_data.py`` (IDE / full path): put repo root on sys.path.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if (_REPO_ROOT / "src").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

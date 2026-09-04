@@ -32,6 +32,7 @@ artifact.
     python scripts/promote_clot_gnn_v4_wound.py --repoint
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir, clot_ml_locked_dir
 
 import argparse
 import json
@@ -43,7 +44,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -60,10 +63,10 @@ from src.config import BiochemConfig  # noqa: E402
 #: could not be given its wound complement without editing this file.
 BASE = "clot_gnn_v4"
 NAME = "clot_gnn_v4w"
-LOCKED = REPO / "outputs/clot_ml/locked"
+LOCKED = clot_ml_locked_dir()
 POINTER = REPO / "data/reference/clot_gnn_locked.json"
 RATE = REPO / "outputs/clot_ml/wound_rate"
-GRAPHS = REPO / "data/processed/graphs_biochem_anchors"
+GRAPHS = anchor_packs_dir()
 from src.biochem_gnn.wall_cohort_constants import WOUND_COHORT  # noqa: E402
 
 WOUND_STEMS = WOUND_COHORT

@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-ANCHOR_DIR = ROOT / "data" / "processed" / "graphs_biochem_anchors"
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+ROOT = get_project_root()
+ANCHOR_DIR = anchor_packs_dir()
 
 
 def test_no_mirror_packs_on_disk():

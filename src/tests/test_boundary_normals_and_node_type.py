@@ -12,15 +12,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.utils.paths import anchor_packs_dir, get_project_root
+
 import numpy as np
 import pytest
 import torch
 
 from src.data_gen.lib.mesh_wls import boundary_normals_from_graph, node_type_one_hot
 
-PACKS = Path(__file__).resolve().parents[2] / "data/processed/graphs_biochem_anchors"
-
-
+PACKS = anchor_packs_dir()
 def _channel(nx=21, ny=5, length=2.0):
     """Straight channel, walls at y=0 and y=1; inward normals are +y and -y."""
     xs = np.linspace(0.0, length, nx)

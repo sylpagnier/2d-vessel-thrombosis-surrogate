@@ -23,6 +23,7 @@ via the ``*_M_TO_CM`` / ``*_uM`` helpers below.
 """
 
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 from dataclasses import dataclass
 
@@ -31,7 +32,7 @@ import torch
 from src.config import BiochemConfig
 
 # SI -> CGS conversion factors (multiply SI value by these to get CGS).
-M_TO_CM = 100.0                 # length  m   -> cm
+
 PER_M3_TO_PER_CM3 = 1.0e-6      # density m^-3 -> cm^-3 (bulk platelets)
 PER_M2_TO_PER_CM2 = 1.0e-4      # density m^-2 -> cm^-2 (surface platelets)
 MOLM3_TO_UM = 1.0e3             # mol/m^3 -> micromolar (1 mol/m^3 = 1e3 uM)

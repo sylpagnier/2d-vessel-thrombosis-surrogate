@@ -26,6 +26,8 @@ Usage:
     python scripts/publication/generate_flow_diagnostics.py --stems comsol010 comsol005
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -35,16 +37,16 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.config import BiochemConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, SEALED  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
-M_TO_CM = 100.0
-
+PACKS = anchor_packs_dir()
 
 def _cohort_stems() -> list[str]:
     skip = set(SEALED) | set(CLOT_FREE)

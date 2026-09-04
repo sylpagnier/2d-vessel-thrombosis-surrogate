@@ -36,7 +36,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, clot_ml_locked_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -52,7 +54,7 @@ from src.clot_ml.severity_metric import DEFAULT, SeverityScorer  # noqa: E402
 from src.clot_ml.softmetric import dilation_operator, to_torch_sparse  # noqa: E402
 from src.config import BiochemConfig  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 HEAD_SEEDS = 4
 LAG_SEEDS = 3
 N_TIMES = 11
@@ -309,7 +311,7 @@ def main() -> int:
           % (mean_w, mean_o, time.time() - t0), flush=True)
 
     # --- save ----------------------------------------------------------------------
-    out = REPO / "outputs/clot_ml/locked" / args.name
+    out = clot_ml_locked_dir() / args.name
     out.mkdir(parents=True, exist_ok=True)
     # `head` and `lag_model.models` are plain lists of sklearn estimators -- pickle ONLY
     # those, not the `_LagEnsemble` wrapper.  A pickled reference to `eval_strict_temporal`

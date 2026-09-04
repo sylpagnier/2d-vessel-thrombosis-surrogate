@@ -2,7 +2,9 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from src.utils.paths import get_project_root
+
+REPO_ROOT = get_project_root()
 DATA_DIR = REPO_ROOT / "outputs" / "publication" / "data"
 FIG_DIR = REPO_ROOT / "outputs" / "publication" / "figures"
 RESEARCH_SWEEP_DATA_DIR = DATA_DIR / "research_sweeps"

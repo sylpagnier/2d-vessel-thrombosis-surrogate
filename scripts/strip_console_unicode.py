@@ -4,8 +4,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import get_project_root
 
+REPO = get_project_root()
 REPLACEMENTS: list[tuple[str, str]] = [
     ("🆕", "[NEW] "),
     ("⚡", ""),

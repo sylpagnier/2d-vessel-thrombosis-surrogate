@@ -5,7 +5,7 @@ import torch
 
 from src.config import PhysicsConfig
 from src.core_physics.local_fem_solver import solve_local_t0_flow
-from src.utils.paths import get_project_root
+from src.utils.paths import anchor_meshes_dir, anchor_packs_dir, get_project_root
 
 ROOT = get_project_root()
 
@@ -21,8 +21,8 @@ def _research_case():
 
 
 def test_local_fem_solver():
-    pt_path = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt"
-    nas_path = ROOT / "data" / "raw" / "biochem_anchors" / "comsol001.nas"
+    pt_path = anchor_packs_dir() / "comsol001.pt"
+    nas_path = anchor_meshes_dir() / "comsol001.nas"
 
     if not pt_path.is_file() or not nas_path.is_file():
         pytest.skip("Data not found")

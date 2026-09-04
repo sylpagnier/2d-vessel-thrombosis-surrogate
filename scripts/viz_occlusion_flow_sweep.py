@@ -23,6 +23,7 @@ real fixed-flux inlet BC:
     python scripts/viz_occlusion_flow_sweep.py --stem comsol012 --fracs 0.2 0.4 0.6 0.8
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -32,7 +33,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -43,7 +46,7 @@ from src.core_physics.mls_gradient import (  # noqa: E402
     build_mls_gradient, node_positions, shear_rate_2d)
 from src.data_gen.lib.mesh_wls import solid_boundary_nodes  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 FIGDIR = REPO / "outputs/reports/figures/kinematics"
 
 

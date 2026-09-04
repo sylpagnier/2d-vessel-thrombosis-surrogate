@@ -19,6 +19,7 @@ property that lets one artifact supersede both classes.  The GNN's temporal ODE 
 replaced: the chemistry integration is a second, off-wall-only field.
 """
 from __future__ import annotations
+from src.utils.paths import clot_ml_locked_dir, get_project_root
 
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -26,8 +27,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
-LOCKED = REPO / "outputs" / "clot_ml" / "locked"
+REPO = get_project_root()
+LOCKED = clot_ml_locked_dir()
 #: Artifact identity lives in ONE place now -- see `src.clot_ml.artifacts` for why.  These
 #: are re-exported so the many existing importers of `v0.DEFAULT_NAME` / `resolve_clot_ml_name`
 #: keep working; new code should import from `artifacts` directly.

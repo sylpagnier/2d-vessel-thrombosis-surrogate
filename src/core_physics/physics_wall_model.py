@@ -22,6 +22,7 @@ Unit system here is COMSOL-native CGS, matching
 ``src/core_physics/comsol_surface_deposition.py`` and ``viscosity_mat_crit`` (2e7).
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 from dataclasses import dataclass
 
@@ -34,7 +35,7 @@ from src.core_physics.mls_gradient import (
     shear_rate_2d,
 )
 
-M_TO_CM = 100.0
+
 PER_M3_TO_PER_CM3 = 1.0e-6
 PER_M2_TO_PER_CM2 = 1.0e-4
 
@@ -561,8 +562,6 @@ def integrate_mat(
         mas = mas + h * da * gate * dep * step2t
         mat = mat + h * da * gate * (dep + auto) * step2t
     return mat
-
-
 
 
 def _wall_adjacency(data):

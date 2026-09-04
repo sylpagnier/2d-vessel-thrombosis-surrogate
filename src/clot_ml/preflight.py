@@ -29,14 +29,13 @@ Reproduce the calibration: ``python scripts/publication/generate_flow_diagnostic
 {gt,fem,pred}`` then ``python scripts/validate_preflight.py``.
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 from dataclasses import dataclass, field
 
 import numpy as np
 
-M_TO_CM = 100.0
 
-# Firing fraction outside this band is unlike any GT or FEM vessel in the 33-vessel cohort.
 FIRE_FRAC_MIN = 0.040   # below the GT min (0.0465) and the FEM min (0.0428)
 FIRE_FRAC_MAX = 0.460   # above the GT max (0.4286) and the FEM max (0.4416)
 

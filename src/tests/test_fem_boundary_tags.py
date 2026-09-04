@@ -27,9 +27,11 @@ import numpy as np
 import pytest
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
-MESHES = REPO / "data/raw/biochem_anchors"
+from src.utils.paths import anchor_meshes_dir, anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
+PACKS = anchor_packs_dir()
+MESHES = anchor_meshes_dir()
 
 skfem = pytest.importorskip("skfem")
 

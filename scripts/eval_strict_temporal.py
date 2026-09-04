@@ -47,7 +47,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -81,7 +83,7 @@ USE_STALL_ODE: bool = bool(int(os.environ.get("STALL_ODE", "0")))
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 SET_GRID = np.array([0.30, 0.45, 0.60, 0.70, 0.80, 0.88, 0.94])
 TIME_GRID = np.array([0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95])
 HEAD = dict(max_iter=300, max_depth=5, learning_rate=0.07, l2_regularization=1.0,

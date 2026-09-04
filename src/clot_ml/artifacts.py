@@ -34,8 +34,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-LOCKED = REPO / "outputs" / "clot_ml" / "locked"
+from src.utils.paths import clot_ml_locked_dir, get_project_root
+
+REPO = get_project_root()
+LOCKED = clot_ml_locked_dir()
 
 #: The locked pointer, written by `scripts/promote_clot_ml_0.py --repoint`.
 POINTER = REPO / "data/reference/clot_gnn_locked.json"

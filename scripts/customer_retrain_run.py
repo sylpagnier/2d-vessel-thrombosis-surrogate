@@ -27,7 +27,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.clot_ml.recipe import CUSTOMER_RETRAIN_EPOCHS, PROMOTION_EPOCHS, recipe
+from src.utils.paths import anchor_meshes_dir, anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -42,18 +45,17 @@ from src.core_physics.wall_cohort_splits import (  # noqa: E402
 )
 from train_clot_gnn import GRID, apply_readout, pick_readout, train_one  # noqa: E402
 
-PROC_DIR = REPO / "data/processed/graphs_biochem_anchors"
+PROC_DIR = anchor_packs_dir()
 CANDIDATE_ROOT = REPO / "outputs/customer/retrain_candidates"
 CANONICAL_NAMES = set(FIT) | set(DEV) | set(SEALED) | set(CLOT_FREE)
 
 # Modest, CPU-friendly single-config training -- not the shipped 9-member ensemble.  Speed
 # matters more than squeezing out the last point here; a promising candidate gets a real
 # ensemble run through the standard promote scripts afterward.
-DEFAULT_CFG = dict(
-    epochs=40, dim=64, layers=4, drop=0.1, lr=3e-3, wd=1e-4, pos_weight=30.0,
-    reg_w=1.0, metric_w=2.0, metric_start=0.3, rounds=1, metric="legacy",
-    off_mult=1.0, empty_gt_loss="none", burden_w=0.0, shape_w=0.0, adv_fb=False,
-    off_only=False, clot_free_w=1.0,
+# Shared objective lives in src/clot_ml/recipe.py; only the deliberate customer
+# deltas are spelled out here (shorter schedule, single round).
+DEFAULT_CFG = recipe(
+    epochs=CUSTOMER_RETRAIN_EPOCHS, rounds=1, adv_fb=False, off_only=False,
 )
 
 
@@ -177,7 +179,7 @@ def _convert_mph(mph_path: Path, mesh_path: Path, stem: str, data_dir: Path) -> 
     from src.data_gen.lib.extract_biochem_comsol_data import ComsolAnchorDataExtractor
     from src.tools.prepare_biochem_anchors import enrich_anchor_meshes
 
-    raw_dir = REPO / "data/raw/biochem_anchors"
+    raw_dir = anchor_meshes_dir()
     label_dir = REPO / "data/processed/cfd_results_biochem"
     raw_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(mesh_path, raw_dir / f"{stem}{mesh_path.suffix.lower()}")

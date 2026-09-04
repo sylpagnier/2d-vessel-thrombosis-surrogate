@@ -19,6 +19,7 @@ import torch
 from src.config import BiochemConfig, PhysicsConfig
 from src.utils import species_channels as sc
 from src.core_physics.clot_phi_simple import sdf_nd_from_data
+from src.core_physics.clot_nucleation_mask import resolve_nucleation_hops
 from src.core_physics.species_deploy_rollout import (
     alloc_species_y_series,
     band_speed_for_rollout,
@@ -429,17 +430,9 @@ def rollout_species_gnn_phi_trajectory(
     # and stops the stale on-disk t=53 beta from silently re-grading phi.
     gel_beta = resolve_clot_readout_beta()
     flow = _resolve_flow_source(flow_source)
-    nuc_hops = 1
-    try:
-        from src.architecture.runtime_config import get_active_runtime
-
-        rt = get_active_runtime()
-        if rt is not None:
-            nuc_hops = int(rt.rollout.nucleation_hops)
-        else:
-            nuc_hops = int(os.environ.get("CLOT_V2_NUCLEATION_HOPS", "1"))
-    except Exception:
-        nuc_hops = int(os.environ.get("CLOT_V2_NUCLEATION_HOPS", "1"))
+    # Precedence (typed runtime > env > default) lives in one place; see
+    # clot_nucleation_mask.resolve_nucleation_hops.
+    nuc_hops = resolve_nucleation_hops()
     with t0_rung2_env():
         traj = rollout_t0_clot_phi(
             data, phys, bio, dev,

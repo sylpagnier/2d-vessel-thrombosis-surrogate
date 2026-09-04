@@ -24,6 +24,7 @@ Usage:
     python scripts/publication/generate_timing_data.py --every 4 --repeats 3
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -36,7 +37,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -46,7 +49,7 @@ from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0, solve_fem_into_pac
 from src.config import BiochemConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, SEALED  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 
 
 def _times(data, every: int) -> list[int]:

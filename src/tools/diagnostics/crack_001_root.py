@@ -45,9 +45,9 @@ from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 from src.inference.corrector_coupling import resolve_kinematics_checkpoint  # noqa: E402
 from src.training.train_offwall_growth import build_global_base_features  # noqa: E402
 from src.utils.kinematics_inference import load_kinematics_predictor  # noqa: E402
-from src.utils.paths import get_project_root  # noqa: E402
+from src.utils.paths import anchor_packs_dir, get_project_root  # noqa: E402
 
-ANCHOR_DIR = get_project_root() / "data/processed/graphs_biochem_anchors"
+ANCHOR_DIR = anchor_packs_dir()
 DEFAULT_WALL = get_project_root() / "outputs/biochem/biochem_gnn/locked/species_gnn_best.pth"
 DEFAULT_GROWTH = (
     get_project_root()

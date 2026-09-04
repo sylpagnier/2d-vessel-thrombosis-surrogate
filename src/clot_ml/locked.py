@@ -21,7 +21,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+from src.utils.paths import clot_ml_locked_dir, get_project_root
+
+REPO = get_project_root()
 POINTER = REPO / "data/reference/clot_gnn_locked.json"
 
 
@@ -514,7 +516,7 @@ def _assert_wound_alias_integrity(manifest: dict, base: dict) -> None:
         raise ValueError(
             f"{manifest.get('name', 'wound artifact')} aliases {base_name!r} but resolves "
             f"base_model={manifest.get('base_model')!r}")
-    base_path = REPO / "outputs" / "clot_ml" / "locked" / str(manifest["base_model"]) / "manifest.json"
+    base_path = clot_ml_locked_dir() / str(manifest["base_model"]) / "manifest.json"
     expected_hash = source.get("base_manifest_sha256")
     if expected_hash:
         got_hash = sha256(base_path.read_bytes()).hexdigest().upper()
@@ -530,7 +532,7 @@ def _assert_wound_alias_integrity(manifest: dict, base: dict) -> None:
             f"expected {expected_fp!r}, got {got_fp!r}")
     wound_source = source.get("wound_artifact")
     if wound_source:
-        wound_path = REPO / "outputs" / "clot_ml" / "locked" / str(wound_source) / "manifest.json"
+        wound_path = clot_ml_locked_dir() / str(wound_source) / "manifest.json"
         source_manifest = json.loads(wound_path.read_text())
         lhs = json.dumps(manifest["wound"], sort_keys=True, separators=(",", ":"))
         rhs = json.dumps(source_manifest["wound"], sort_keys=True, separators=(",", ":"))

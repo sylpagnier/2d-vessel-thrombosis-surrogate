@@ -9,12 +9,12 @@ See `docs/PHASE10_V4.md` 5 for what these are and why the boundary-outflow term 
 `src/clot_ml/transport.py` is what makes them work.
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 import numpy as np
 
 from src.clot_ml.transport import transport_fields
 
-M_TO_CM = 100.0
 
 __all__ = ["indicator_physics", "horizon_for", "new_channels", "augment_sample",
            "V4_CHANNELS"]

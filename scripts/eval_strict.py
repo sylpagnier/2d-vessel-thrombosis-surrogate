@@ -34,7 +34,9 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -46,7 +48,7 @@ from src.clot_ml.geometry_splits import classes_for, is_priority  # noqa: E402
 from src.clot_ml.severity_metric import DEFAULT, LEGACY, SeverityScorer  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 GRID = np.round(np.linspace(0.02, 0.98, 33), 4)
 
 

@@ -14,7 +14,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 

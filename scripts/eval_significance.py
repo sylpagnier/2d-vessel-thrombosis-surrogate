@@ -31,7 +31,9 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)

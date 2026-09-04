@@ -19,6 +19,8 @@ import json
 import warnings
 from pathlib import Path
 
+from src.utils.paths import anchor_packs_dir, get_project_root
+
 import numpy as np
 import pytest
 
@@ -224,7 +226,7 @@ def test_comsol_anchor_data_extractor_rejects_m_sidecar(tmp_path):
 # --- On-disk synthetic mesh: declared unit + plausible SI d_bar ----------------
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = get_project_root()
 _SYNTHETIC_MESH_DIR = _REPO_ROOT / "data" / "raw" / "biochem"
 
 
@@ -418,7 +420,7 @@ def test_load_spatial_mask_optional_wound_missing_ok(tmp_path, _kdtree_mesh_pair
 # --- On-disk anchor metadata sanity floor --------------------------------------
 
 
-_ANCHOR_GRAPH_DIR = _REPO_ROOT / "data" / "processed" / "graphs_biochem_anchors"
+_ANCHOR_GRAPH_DIR = anchor_packs_dir()
 
 
 # --- Biochem ADR kernel: fast/slow accumulators must remain independent --------

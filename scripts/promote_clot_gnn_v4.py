@@ -37,7 +37,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.clot_ml.recipe import CUSTOMER_RETRAIN_EPOCHS, PROMOTION_EPOCHS, recipe
+from src.utils.paths import anchor_packs_dir, clot_ml_locked_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -49,16 +52,25 @@ from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
 from src.clot_ml.gnn import ClotGNN  # noqa: E402
 from train_clot_gnn import train_one  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 
 # The three configurations behind the v5a / v5b / v5c CV tags, 3 seeds each.
-BASE = dict(epochs=80, dim=64, layers=4, drop=0.1, lr=3e-3, wd=1e-4, pos_weight=30.0,
-            reg_w=1.0, metric_w=2.0, metric_start=0.3, off_mult=1.0, metric="legacy",
-            empty_gt_loss="none",   # default must match run_phase9_cv.BASE; --empty-gt-loss
-                                    # overrides it to match the tags actually being promoted
-            burden_w=0.0, burden_t=0.89, burden_tau=0.02, burden_agg="l1",
-            burden_cvar_q=0.5, burden_t_off=0.0,
-            shape_w=0.0)            # C0 (MODEL_REVIEW 9b); --shape-w overrides
+# `empty_gt_loss` and `shape_w` are C0 and must match run_phase9_cv; they now do
+# so structurally, from src/clot_ml/recipe.py, instead of by comment.
+#
+# `clot_free_w` is deliberately NOT carried into BASE here even though the shared
+# recipe defines it.  BASE is hashed into the artifact manifest fingerprint (see
+# the `fingerprint=` argument below), so adding a key -- even at its existing
+# effective value -- would change the identity of every newly promoted artifact
+# and stop it comparing against the ones already locked.  The per-member cfg sets
+# `clot_free_w` explicitly from the CLI, so training is unaffected either way.
+# NOTE: that the manifest fingerprint omits a value the members were trained with
+# is a pre-existing inconsistency, left alone here rather than changed in passing.
+BASE = {k: v for k, v in recipe(
+    epochs=PROMOTION_EPOCHS,
+    burden_t=0.89, burden_tau=0.02, burden_agg="l1",
+    burden_cvar_q=0.5, burden_t_off=0.0,
+).items() if k != "clot_free_w"}
 MEMBERS = {
     "v5a": dict(rounds=3, seeds=3),
     "v5b": dict(rounds=5, seeds=3),
@@ -216,7 +228,7 @@ def main() -> int:
     if missing_cv:
         print("[WARN] cached but not promoted on: %s" % missing_cv, flush=True)
 
-    out = REPO / "outputs/clot_ml/locked" / args.name
+    out = clot_ml_locked_dir() / args.name
     if not args.supersedes:
         sibs = sorted(q.name for q in out.parent.glob("clot_gnn_v*")
                       if q.is_dir() and q.name < args.name and not q.name.endswith("w"))

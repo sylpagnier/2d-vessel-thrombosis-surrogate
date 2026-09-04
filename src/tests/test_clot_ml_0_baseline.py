@@ -7,7 +7,9 @@ from pathlib import Path
 
 
 LOCKED = Path("outputs/clot_ml/locked")
-FINAL_HALF = {"comsol007", "comsol013", "comsol031", "comsol043"}
+from src.biochem_gnn.wall_cohort_constants import WALL_COHORT_V2_GENERALIZATION
+
+FINAL_HALF = set(WALL_COHORT_V2_GENERALIZATION)
 
 
 def _alias_manifest_path() -> Path:

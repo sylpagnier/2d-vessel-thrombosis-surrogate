@@ -41,6 +41,12 @@ class CGS_to_SI:
     PLT_PER_ML_TO_PER_M3 = 1e6  # platelets/ml -> platelets/m^3
 
 
+#: Length scale factor, metres -> centimetres.  The inverse of
+#: :attr:`CGS_to_SI.LENGTH`, kept as its own name because the graph feature
+#: builders read SI ``d_bar`` and emit cm-scale geometry for COMSOL parity.
+#: Previously redefined verbatim in eleven modules.
+M_TO_CM: float = 100.0
+
 # --- Mesh-unit invariants -------------------------------------------------
 
 MESH_UNIT_M: str = "m"

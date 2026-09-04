@@ -27,6 +27,7 @@ than the single fired/not-fired bit.
     python scripts/build_temporal_transport.py
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import sys
@@ -37,7 +38,9 @@ from pathlib import Path as pathlib_Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -48,7 +51,7 @@ from src.clot_ml.transport import _node_volume, _solve_upwind, upwind_operator  
 from src.config import BiochemConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 OUT = REPO / "outputs/temporal_transport"
 
 #: One directory per t=0 flow source.  The channels are an ODE trajectory pushed through an

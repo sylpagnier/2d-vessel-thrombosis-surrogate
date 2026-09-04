@@ -10,6 +10,7 @@ pack indices, not seconds.  Wound vessels use the WOUND_PROGRESS 13 domains
     python scripts/eval_clot_ml_0.py --cohort
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -19,7 +20,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -37,7 +40,7 @@ from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.biochem_gnn.wall_cohort_constants import WOUND_AB_PAIR, WOUND_COHORT  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, SEALED  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 DEFAULT_STEMS = tuple(WOUND_COHORT) + (
     "comsol012", "comsol020", "comsol032", "comsol041", "comsol044",
     WOUND_AB_PAIR[1],

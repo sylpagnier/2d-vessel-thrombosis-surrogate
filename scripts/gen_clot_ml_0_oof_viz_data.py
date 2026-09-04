@@ -7,6 +7,7 @@ visualization.  This script accepts only the ``--save-oof-series`` output of
 model and temporal readout that excluded that vessel.
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import json
@@ -16,7 +17,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -34,7 +37,7 @@ from src.evaluation.clot_relaxed_metrics import (
 from src.clot_ml.v0 import load_v0_bundle, predict_clot_ml_0
 from src.clot_ml.wound import solid_mask, wound_mask, wound_region_masks
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 N_FRAMES = 13
 MAX_BG_POINTS = 1800
 

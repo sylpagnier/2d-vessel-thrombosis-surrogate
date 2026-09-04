@@ -14,8 +14,9 @@ import argparse
 import json
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import get_project_root
 
+REPO = get_project_root()
 CSS = """
 :root{
   --paper:#f6f8f9; --panel:#ffffff; --ink:#14181d; --ink-2:#454d55; --muted:#79838c;

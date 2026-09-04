@@ -16,7 +16,7 @@ from pathlib import Path
 import torch
 from torch_geometric.loader import DataLoader
 
-_REPO = Path(__file__).resolve().parents[1]
+_REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 

@@ -42,7 +42,9 @@ import numpy as np
 import torch
 from scipy.spatial import cKDTree
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -54,7 +56,7 @@ from src.clot_ml.wound import solid_mask  # noqa: E402
 from src.config import PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 
 
 def _load(stem: str, flow: str):

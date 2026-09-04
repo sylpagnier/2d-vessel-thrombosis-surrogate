@@ -35,6 +35,8 @@ new parameter.
     python scripts/build_clot_ml_cache_v4.py
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import sys
@@ -47,7 +49,9 @@ from src.clot_ml import feature_fingerprint as _fp
 import torch
 from scipy.stats import spearmanr
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -58,10 +62,8 @@ from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T, SEALED  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
-M_TO_CM = 100.0
+PACKS = anchor_packs_dir()
 
-#: v3 cache to extend, per flow source.  The v4 block is an EXTENSION of the v3 sample, so
 #: the two halves must be built from the same velocity field -- `--flow pred` reads the
 #: predicted-flow v3 cache, which `scripts/build_clot_ml_cache.py --flow pred` writes.
 SRC_FOR_FLOW = {"gt": "outputs/clot_ml_cache_gt", "pred": "outputs/clot_ml_cache_pred",

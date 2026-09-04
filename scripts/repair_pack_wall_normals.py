@@ -49,6 +49,7 @@ the delta must be zero on every channel outside `EXPECTED`.  Run it before writi
     python scripts/repair_pack_wall_normals.py                   # write (backs up once)
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import shutil
@@ -58,7 +59,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -67,7 +70,7 @@ from src.core_physics.wall_cohort_splits import (  # noqa: E402
 )
 from src.data_gen.lib.pack_repair import rebuild_x, solid_of, write_x  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 BACKUP_SUFFIX = ".pt.prenormalfix"
 
 #: channels this repair is ALLOWED to move.  `wall_normal_*` and `node_type_*` are the

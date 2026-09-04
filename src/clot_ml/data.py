@@ -7,9 +7,9 @@ import numpy as np
 
 from src.core_physics.wall_cohort_splits import DEV, FIT
 
-REPO = Path(__file__).resolve().parents[2]
+from src.utils.paths import get_project_root
 
-
+REPO = get_project_root()
 def load_cache(flow: str = "gt") -> dict[str, dict]:
     """Load a feature cache, warning loudly if it predates the 2026-08-22 rebuild.
 

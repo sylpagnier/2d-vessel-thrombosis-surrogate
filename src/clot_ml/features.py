@@ -37,6 +37,7 @@ open lumen ~11 edge-lengths from the wall, owned by a distant healthy node carry
 is provably inert on every no-wound pack in the cohort.
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 import os
 
@@ -47,7 +48,7 @@ from scipy.spatial import cKDTree
 
 from src.data_gen.lib.mesh_wls import solid_boundary_nodes
 
-M_TO_CM = 100.0
+
 MAT_S = 7e10          # pack Mat_log1p_nd -> COMSOL model units
 BULK_S = 2.5e14
 

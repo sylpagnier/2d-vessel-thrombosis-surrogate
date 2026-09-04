@@ -1,6 +1,7 @@
 """Tests for the time-varying wall-AP ODE (wall_ap_renewal.py)."""
 
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import sys
 from pathlib import Path
@@ -9,7 +10,9 @@ import numpy as np
 import pytest
 import torch
 
-REPO = Path(__file__).resolve().parents[2]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -18,7 +21,7 @@ from src.core_physics.physics_wall_model import T0Fields, integrate_mat_trajecto
 from src.core_physics.wall_ap_renewal import WallApRenewal, make_species_from_renewal
 
 # Find a sample pack for realistic geometry (we need edge_index and positions for upwind)
-PACK_DIR = REPO / "data/processed/graphs_biochem_anchors"
+PACK_DIR = anchor_packs_dir()
 SAMPLE_PACK_PATH = PACK_DIR / "comsol020.pt"
 
 @pytest.fixture(scope="module")

@@ -17,14 +17,19 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from src.biochem_gnn.wall_cohort_constants import WALL_COHORT_V2_CLOT_FREE
+
 OUT = REPO / "outputs/deployclot"
 LOGS = REPO / "outputs/logs/deployclot"
-CLOT_FREE_STEMS = {"comsol017", "comsol022", "comsol023", "comsol026", "comsol027",
-                   "comsol030", "comsol033", "comsol034", "comsol038"}
+# Cohort membership has ONE home; a second copy here silently diverged the report
+# from what the evaluators score.
+CLOT_FREE_STEMS = set(WALL_COHORT_V2_CLOT_FREE)
 
 
 def _load(p: Path):

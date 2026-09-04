@@ -3,6 +3,7 @@
     python scripts/build_clot_ml_cache.py --flow gt
 """
 from __future__ import annotations
+from src.utils.paths import anchor_packs_dir
 
 import argparse
 import sys
@@ -14,7 +15,9 @@ import numpy as np
 from src.clot_ml import feature_fingerprint as _fp
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
@@ -23,7 +26,7 @@ from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T, SEALED  # noqa: E402
 
-DIR = REPO / "data/processed/graphs_biochem_anchors"
+DIR = anchor_packs_dir()
 
 
 def main() -> int:

@@ -13,12 +13,12 @@ import torch
 
 from src.config import NodeFeat, PhysicsConfig
 from src.core_physics.local_fem_solver import solve_local_t0_flow
-from src.utils.paths import get_project_root
+from src.utils.paths import anchor_meshes_dir, anchor_packs_dir, get_project_root
 
 ROOT = get_project_root()
 
-PACK = ROOT / "data" / "processed" / "graphs_biochem_anchors" / "comsol001.pt"
-MESH = ROOT / "data" / "raw" / "biochem_anchors" / "comsol001.nas"
+PACK = anchor_packs_dir() / "comsol001.pt"
+MESH = anchor_meshes_dir() / "comsol001.nas"
 
 
 def _pack():

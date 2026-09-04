@@ -21,9 +21,9 @@ from src.data_gen.lib.mesh_wls import rank_aware_pinv_sym
 from src.utils.kinematics_physics_terms import wall_band_mask
 from src.utils.math_operators import wls_derivatives
 
-REPO = Path(__file__).resolve().parents[2]
+from src.utils.paths import get_project_root
 
-
+REPO = get_project_root()
 def _p2_strip(nx: int = 12, ny: int = 4):
     """A triangulated strip with P2 mid-side nodes: the biochem mesh topology in miniature.
 

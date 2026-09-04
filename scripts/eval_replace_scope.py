@@ -30,7 +30,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -44,7 +46,7 @@ from src.clot_ml.v0 import (  # noqa: E402
 from src.clot_ml.wound import solid_mask, wound_region_masks  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 
 
 def score_one(bundle, stem: str, scope: str, every: int, flow: str) -> dict:

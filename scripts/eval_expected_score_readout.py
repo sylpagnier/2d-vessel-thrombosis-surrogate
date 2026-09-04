@@ -36,7 +36,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -53,7 +55,7 @@ from src.clot_ml.severity_metric import (  # noqa: E402
 )
 from src.clot_ml.softmetric import dilation_operator, soft_dilate, to_torch_sparse  # noqa: E402
 
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
+PACKS = anchor_packs_dir()
 GAMMA = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
 KSCALE = [0.5, 0.7, 0.85, 1.0, 1.2, 1.5, 2.0]
 N_PREFIX = 40          # log-spaced prefix lengths evaluated per vessel/domain

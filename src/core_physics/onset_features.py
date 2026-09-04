@@ -24,11 +24,12 @@ ODE's *median* onset -- a constant, on 15-26% of the mask.  ``hop`` is that geom
 explicit so a model can time the front instead of flattening it.
 """
 from __future__ import annotations
+from src.utils.units import M_TO_CM
 
 import numpy as np
 import scipy.sparse as sp
 
-M_TO_CM = 100.0
+
 RELAX, GROW = 2.0, 6
 
 #: order is fixed: it is the column order of :func:`build_features` and of every fitted

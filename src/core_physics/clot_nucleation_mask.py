@@ -22,20 +22,50 @@ from src.core_physics.clot_growth_masks import (
 from src.core_physics.clot_phi_simple import _wall_mask_from_data
 
 
-def nucleation_hops_from_env() -> int:
-    raw = (os.environ.get("CLOT_V2_NUCLEATION_HOPS") or "1").strip()
+#: Fallback when neither a typed runtime nor the environment specifies a value.
+#: Every production recipe sets nucleation hops explicitly (see
+#: ``mat_growth_simple`` leg presets and ``clot_trigger_stack``), so this only
+#: applies to ad-hoc invocation.
+DEFAULT_NUCLEATION_HOPS = 1
+DEFAULT_CATALYTIC_HOPS = 1
+
+
+def resolve_nucleation_hops() -> int:
+    """Nucleation hop count, resolved through one documented precedence.
+
+    ``typed runtime > environment > DEFAULT_NUCLEATION_HOPS``.
+
+    This precedence used to be hand-rolled at four call sites with three
+    different fallbacks (1, 1, 2, and a typed default of 3), so the effective
+    value depended on which module happened to resolve it.  Route every reader
+    through here instead.
+    """
+    try:
+        from src.architecture.runtime_config import get_active_runtime
+
+        rt = get_active_runtime()
+        if rt is not None:
+            return max(int(rt.rollout.nucleation_hops), 0)
+    except Exception:
+        pass
+    return _hops_from_env("CLOT_V2_NUCLEATION_HOPS", DEFAULT_NUCLEATION_HOPS)
+
+
+def _hops_from_env(var: str, default: int) -> int:
+    raw = (os.environ.get(var) or str(default)).strip()
     try:
         return max(int(raw), 0)
     except ValueError:
-        return 1
+        return default
+
+
+def nucleation_hops_from_env() -> int:
+    """Environment-only view. Prefer :func:`resolve_nucleation_hops`."""
+    return _hops_from_env("CLOT_V2_NUCLEATION_HOPS", DEFAULT_NUCLEATION_HOPS)
 
 
 def catalytic_hops_from_env() -> int:
-    raw = (os.environ.get("CLOT_V2_CATALYTIC_HOPS") or "1").strip()
-    try:
-        return max(int(raw), 0)
-    except ValueError:
-        return 1
+    return _hops_from_env("CLOT_V2_CATALYTIC_HOPS", DEFAULT_CATALYTIC_HOPS)
 
 
 def catalytic_beta_from_env() -> float:

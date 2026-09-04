@@ -43,15 +43,17 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+# Repo root by marker, not by depth: this file may move between
+# scripts/ and scripts/<subdir>/ without silently resolving one level off.
+REPO = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.config import PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
-from src.utils.paths import get_project_root  # noqa: E402
+from src.utils.paths import anchor_packs_dir, get_project_root  # noqa: E402
 
-ANCHOR_DIR = get_project_root() / "data/processed/graphs_biochem_anchors"
+ANCHOR_DIR = anchor_packs_dir()
 ONSET_STRIDE = 5  # grade GT clot every Nth step for onset (201 steps -> 41 probes)
 
 

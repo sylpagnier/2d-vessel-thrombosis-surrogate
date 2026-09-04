@@ -20,6 +20,24 @@ def data_root() -> Path:
     return get_project_root() / "data"
 
 
+def anchor_packs_dir() -> Path:
+    """COMSOL-anchor graph packs (``comsol0NN.pt``), the cohort everything scores against.
+
+    This path was previously spelled out at ~90 call sites in three different
+    literal forms, so a relocation had to be found by grep rather than by
+    changing one function.
+    """
+    return data_root() / "processed" / "graphs_biochem_anchors"
+
+
+def anchor_meshes_dir() -> Path:
+    """Source meshes for the COMSOL anchors (``.nas`` / ``.msh``)."""
+    return data_root() / "raw" / "biochem_anchors"
+
+
+def clot_ml_locked_dir() -> Path:
+    """Locked, promoted ``clot_ml`` artifacts -- the deploy-legal checkpoints."""
+    return outputs_root() / "clot_ml" / "locked"
 
 
 def comsol_models_dir() -> Path:

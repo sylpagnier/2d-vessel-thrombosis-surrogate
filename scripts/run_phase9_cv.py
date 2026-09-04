@@ -18,7 +18,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-REPO = Path(__file__).resolve().parents[1]
+from src.clot_ml.recipe import CUSTOMER_RETRAIN_EPOCHS, PROMOTION_EPOCHS, recipe
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
 for p in (str(REPO), str(REPO / "scripts")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -30,24 +33,21 @@ from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
 from train_clot_gnn import train_one  # noqa: E402
 
 OUT = REPO / "outputs/phase9_scores"
-PACKS = REPO / "data/processed/graphs_biochem_anchors"
-BASE = dict(epochs=80, dim=64, layers=4, drop=0.1, lr=3e-3, wd=1e-4, pos_weight=30.0,
-            reg_w=1.0, metric_w=2.0, metric_start=0.3, rounds=3, off_mult=1.0,
-            metric="legacy", adv_fb=0, off_only=0, loss_shape_w=0.5,
-            burden_w=0.0, burden_t=0.89, burden_tau=0.02,
-            # C0 / MODEL_REVIEW 3.4.  `burden_agg` weights the TAIL of the per-vessel burden
-            # error (l1 = the measured-null 2026-08-22 form, sq/cvar are the retry);
-            # `shape_w` constrains the field's SPREAD toward a running cohort reference,
-            # leaving burden free.  Both 0/"l1" reproduce the shipped objective exactly.
-            burden_agg="l1", burden_cvar_q=0.5, shape_w=0.0, burden_t_off=0.0,
-            # gradient weight on a CLOT-FREE vessel's whole loss; 1.0 = shipped objective.
-            # See train_clot_gnn.py for the measurement that motivates it.
-            clot_free_w=1.0,
-            # what a CLOT-FREE vessel contributes to the metric term.  "none" = nothing (it
-            # still trains on per-node BCE); "score" = the metric's false-positive branch.
-            # `score` has NO measurable effect either way (MODEL_REVIEW 8f.4); "none" is
-            # the default on parsimony.  See train_clot_gnn.py for the numbers.
-            empty_gt_loss="none")
+PACKS = anchor_packs_dir()
+# Objective shared with promotion lives in src/clot_ml/recipe.py -- including
+# `clot_free_w=1.0` (a clot-free vessel's whole-loss gradient weight) and
+# `empty_gt_loss="none"` (what a clot-free vessel contributes to the metric term;
+# "score" has no measurable effect either way, MODEL_REVIEW 8f.4, so "none" wins on
+# parsimony).  Only the CV-specific deltas are spelled out below.
+BASE = recipe(
+    epochs=PROMOTION_EPOCHS, rounds=3, adv_fb=0, off_only=0, loss_shape_w=0.5,
+    burden_t=0.89, burden_tau=0.02,
+    # C0 / MODEL_REVIEW 3.4.  `burden_agg` weights the TAIL of the per-vessel burden
+    # error (l1 = the measured-null 2026-08-22 form, sq/cvar are the retry);
+    # `shape_w` constrains the field's SPREAD toward a running cohort reference,
+    # leaving burden free.  Both 0/"l1" reproduce the shipped objective exactly.
+    burden_agg="l1", burden_cvar_q=0.5, burden_t_off=0.0,
+)
 
 
 def _save_fold_member(root: Path, *, tag: str, fold: int, held: list[str],
