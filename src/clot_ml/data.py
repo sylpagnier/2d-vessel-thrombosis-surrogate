@@ -43,6 +43,15 @@ def load_cache(flow: str = "gt") -> dict[str, dict]:
             "wall_normal / node_type_* / width_nd / v4 transport channels are superseded. "
             "Rebuild with `python scripts/build_clot_ml_cache.py --flow gt --force` and "
             "`build_clot_ml_cache_v4.py --force`." % str(root.name), stacklevel=2)
+    # Structural staleness check, replacing the single-event `solid`-key heuristic
+    # above: a hash of the feature builders travels with every cache written since
+    # 2026-09-03, so ANY later change to them is detectable rather than only the one
+    # historical change somebody remembered to add a marker for.  Advisory, not fatal
+    # -- refusing would strand every cache the shipped artifact was trained on.
+    from src.clot_ml.feature_fingerprint import check as _fp_check
+    _warn = _fp_check(out, f"clot_ml_cache_{flow}")
+    if _warn:
+        print(f"[!] {_warn}", flush=True)
     return out
 
 

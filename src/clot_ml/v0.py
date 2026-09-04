@@ -418,8 +418,11 @@ def _resolve_anchor_mesh(data) -> str:
 
     from src.utils.paths import get_project_root
 
+    import skfem as fem
+
     root = get_project_root()
     tried = []
+    unreadable = []
     for sub in (
         "data/raw/biochem_anchors",
         "data/raw/biochem",
@@ -429,18 +432,41 @@ def _resolve_anchor_mesh(data) -> str:
         for ext in (".nas", ".msh"):
             cand = root / sub / f"{stem}{ext}"
             tried.append(str(cand))
-            if cand.is_file():
-                return str(cand)
-    raise FileNotFoundError(
-        "flow='fem': no mesh for " + repr(stem) + "; tried: " + ", ".join(tried))
+            if not cand.is_file():
+                continue
+            # Existing is not the same as loadable.  `.nas` is tried before `.msh`, and the
+            # 60 synthetic vessels carry a gmsh-written Nastran file with no `BEGIN BULK`
+            # statement, which meshio refuses -- so the whole resolver died on a candidate
+            # sitting next to a perfectly good `.msh` of the same mesh.  Fall through to the
+            # next candidate instead, and only report the failures if none of them works.
+            try:
+                fem.Mesh.load(str(cand))
+            except Exception as exc:
+                unreadable.append(f"{cand} ({type(exc).__name__}: {exc})")
+                continue
+            return str(cand)
+    msg = "flow='fem': no mesh for " + repr(stem) + "; tried: " + ", ".join(tried)
+    if unreadable:
+        msg += "; present but unreadable: " + "; ".join(unreadable)
+    raise FileNotFoundError(msg)
 
 
-def solve_fem_into_pack(data) -> None:
+def solve_fem_into_pack(data, *, warm_start: bool = True) -> None:
     """Solve the local Carreau FEM at t=0 and write it into the pack's `u0_pred`/`v0_pred`.
 
     Separate from `predict_clot_ml_0` because callers build the feature SAMPLE before they
     call it -- doing the solve inside meant the sample, and the baseline scored beside it,
     were still ground truth while the run was labelled `fem`.
+
+    ``warm_start`` seeds the Picard iterate with the analytic Poiseuille prior and releases the
+    under-relaxation that exists only to survive the opening transient a cold start pays.  The
+    iterate is the wind the operator is linearised about and nothing else, so the converged
+    field does not move: measured over the 37-vessel FIT+DEV cohort, the largest deviation from
+    the cold solve is 9.5e-08 of the field's own max-norm.  What moves is the cost -- 267 s to
+    148 s over the cohort (1.81x), 4.9x on the worst vessel, and **not one of the 37 solved
+    slower** (`src.tools.diagnostics.fem_warm_start`).  The gain is concentrated in the
+    stenoses, where the cold Picard contracts slowly and the transient is most of the solve.
+    Pass ``False`` to reproduce the pre-2026-09 cold path exactly.
     """
     from src.config import PhysicsConfig
     from src.core_physics.local_fem_solver import solve_local_t0_flow
@@ -458,8 +484,25 @@ def solve_fem_into_pack(data) -> None:
             cand = y[0, :, 0:2].detach().cpu().numpy()
             if np.isfinite(cand).all() and float(np.abs(cand).max()) > 0.0:
                 u_gt_nd = cand
-    u_dim = solve_local_t0_flow(nas_path, data, PhysicsConfig(), max_iters=300, tol=1e-9,
-                                u_gt_inlet_nd=u_gt_nd)
+    phys = PhysicsConfig()
+    seed, damping = None, 0.5
+    if warm_start:
+        from src.data_gen.lib.legal_priors import build_analytic_priors
+
+        try:
+            au, av, _, _ = build_analytic_priors(data, phys_cfg=phys)
+            seed = torch.stack([au.reshape(-1), av.reshape(-1)], dim=1).cpu().numpy().astype(
+                np.float64)
+            damping = 1.0
+        except Exception as exc:
+            # A pack the analytic prior cannot be built on (no width channel, degenerate
+            # centreline) is still perfectly solvable cold.  Losing the speedup is not a
+            # reason to lose the solve.
+            print(f"[i] local FEM: no warm start ({type(exc).__name__}: {exc}); solving cold",
+                  flush=True)
+            seed, damping = None, 0.5
+    u_dim = solve_local_t0_flow(nas_path, data, phys, max_iters=300, tol=1e-9,
+                                u_gt_inlet_nd=u_gt_nd, u_init_nd=seed, damping=damping)
     if isinstance(u_dim, torch.Tensor):
         u_dim = u_dim.numpy()
     u_ref = float(data.u_ref.reshape(-1)[0])

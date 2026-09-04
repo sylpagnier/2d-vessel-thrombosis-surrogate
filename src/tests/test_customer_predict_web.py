@@ -44,12 +44,29 @@ def test_customer_web_payload_contains_scrubbable_fields_and_metrics():
 def test_customer_web_page_has_existing_customer_modes():
     from src.tools.customer_predict_web import PAGE
 
+    # The mode DROPDOWN ("Clot + Velocity" as one option) was replaced by a
+    # `mode-switch` button group with `data-mode` values, and the twin velocity panels by a
+    # single panel with a field picker.  These assert the CAPABILITIES still reachable, not
+    # the old control's label -- a UI rewrite should be free to move a control without
+    # breaking a test whose subject is "the customer flows still exist".
     for token in (
-        "Inbox geometry", "Parametric vessel", "Clot + Velocity", "Scientific", "field-canvas", "/api/run",
+        "Inbox geometry", "Parametric vessel", "field-canvas", "/api/run",
         "Estimate runtime", "renderPreview", "startJob('estimate')", "Add mirrored wound",
-        "markGeometryDirty", "clot_ml_0",
+        "markGeometryDirty",
     ):
         assert token in PAGE
+    for mode in ('data-mode="clot"', 'data-mode="flow"', 'data-mode="retrain"'):
+        assert mode in PAGE, f"customer mode {mode} is gone from the UI"
+
+    # The artifact binding, asserted where it actually LIVES.  This used to look for the
+    # literal "clot_ml_0" inside PAGE, where it appeared only in a topbar caption -- so the
+    # 2026-09-04 rebrand to "ClotML" broke it, while a genuine repointing of the UI to the
+    # wrong model would have passed. Check the constant the pipeline resolves instead.
+    from src.clot_ml.v0 import resolve_clot_ml_name
+    from src.inference.customer_pipeline import _LOCKED_CUSTOMER_CLOT_MODEL
+
+    assert _LOCKED_CUSTOMER_CLOT_MODEL == "clot_ml_0"
+    assert resolve_clot_ml_name(_LOCKED_CUSTOMER_CLOT_MODEL)
 
 
 def test_runtime_estimate_scales_with_mesh_and_rollout_length():

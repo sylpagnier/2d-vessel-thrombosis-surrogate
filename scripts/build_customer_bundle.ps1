@@ -71,6 +71,14 @@ Write-Host "[i] Copying app source..." -ForegroundColor DarkGray
 Copy-Item -Recurse -Force (Join-Path $RepoRoot "src") (Join-Path $BundleDir "src")
 Copy-Item -Force (Join-Path $RepoRoot "pyproject.toml") $BundleDir
 
+# `src/clot_ml/locked.py`'s readout selection (`expected_tuned` / `resid_adapt`, the deploy
+# readout clot_ml_0 actually uses -- see data/reference/clot_gnn_locked.json's "readout"
+# block) lazily imports helper functions from `scripts/eval_*.py` at call time. Despite the
+# directory name this is deploy-reachable code, not just a research tool -- copied wholesale
+# (7 MB of source, cheap) rather than hand-picking which of the ~15 possible lazy imports in
+# `locked.py` a given run happens to hit.
+Copy-Item -Recurse -Force (Join-Path $RepoRoot "scripts") (Join-Path $BundleDir "scripts")
+
 $InboxDir = Join-Path $BundleDir "customer_geometries"
 New-Item -ItemType Directory -Force -Path $InboxDir | Out-Null
 Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\README.txt") $InboxDir
@@ -80,6 +88,12 @@ Copy-Item -Force (Join-Path $RepoRoot "customer_geometries\README.txt") $InboxDi
 # outputs/clot_ml/locked/clot_ml_v0 (config/manifest) and outputs/clot_ml/locked/clot_gnn_v6
 # (the ensemble + temporal readout it points at) are ever opened. No kinematics or
 # wall-model checkpoint is on this path.
+#
+# DELIBERATELY PINNED BY NAME, not resolved dynamically: clot_ml_0 is being retrained as of
+# 2026-09-03 (see the in-progress, still-manifest-less outputs/clot_ml/locked/DeployClot*
+# folders) -- copying these two specific, already-validated directories means a bundle built
+# today ships the last known-good artifact regardless of what's mid-training alongside it.
+# Bump these two names deliberately once a retrained artifact is promoted and validated.
 Write-Host "[i] Copying clot_ml_0 checkpoints..." -ForegroundColor DarkGray
 $CkptSrc = Join-Path $RepoRoot "outputs\clot_ml\locked"
 $CkptDst = Join-Path $BundleDir "outputs\clot_ml\locked"
@@ -100,7 +114,22 @@ Copy-Item -Force (Join-Path $RepoRoot "data\reference\clot_gnn_locked.json") $Re
 # --- 5. Launcher + README -----------------------------------------------------------------
 $RunBat = @'
 @echo off
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
+set "HEREPATH=%~dp0"
+set "PATHLEN=0"
+for /l %%A in (0,1,300) do (
+    if not "!HEREPATH:~%%A,1!"=="" set /a PATHLEN=%%A+1
+)
+if !PATHLEN! GTR 100 (
+    echo WARNING: this folder's path is very long ^(!PATHLEN! characters^):
+    echo   %~dp0
+    echo Some Python packages this app depends on fail to load from long paths on
+    echo Windows. If you see an error mentioning "sklearn" or "No module named", move
+    echo this whole folder somewhere short first, e.g. C:\LocalFEMSolver\, then run
+    echo run.bat again from there.
+    echo.
+)
 echo Starting Local FEM Solver Predict...
 echo A browser tab will open automatically once it's ready. This window logs progress -- leave it open while you use the app, close it when you're done.
 "%~dp0python\python.exe" -m src.tools.customer_predict_web --cpu
@@ -111,6 +140,11 @@ Set-Content -Path (Join-Path $BundleDir "run.bat") -Value $RunBat -Encoding ASCI
 $ReadmeTxt = @'
 Local FEM Solver -- Predict
 ============================
+
+Before you run it: unzip this to somewhere with a SHORT path, close to a drive root --
+for example C:\LocalFEMSolver\ -- rather than deep inside Downloads or a synced folder.
+A few of this app's dependencies fail to load if the unzipped path is very long (a
+Windows limitation, not a bug in the app).
 
 To run:
   1. Double-click run.bat.

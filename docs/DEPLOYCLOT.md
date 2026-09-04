@@ -1429,3 +1429,211 @@ Decided explicitly, not by re-running until one metric agreed. Three reasons, to
 table, and the artifact was chosen on a NAMED metric with the other's cost stated beside it,
 rather than reported after the fact as a win on whichever metric happened to move. Do not cite
 this section by pointing at BATC₀ alone.
+
+## 26. The wound research sweeps are invalid — the pointer bug, seen from the other end
+
+`scripts/diag_sweep_lumen_audit.py`, `outputs/deployclot/sweep_lumen_audit_before.json`.
+
+Two sweep results were flagged as looking wrong: `19_wound_vs_no_wound` showing the wound arm
+producing LESS clot than no wound, and `04_inlet_width` collapsing at `w=0.020`. Audited, the
+pattern is categorical rather than physical:
+
+| | arms | lumen clot |
+|---|---|---|
+| every **wound** arm (16, 17, 18, 19, 20) | 15 | **exactly 0.0000** |
+| every **non-wound** arm | 43 | non-zero on 42 of 43 |
+
+Wound width sweeping 0.08 → 0.40 moves wall clot 6.3% → 9.6% and leaves lumen clot at
+**exactly** 0.0000 in all four arms. `18_wound_x_stenosis:occ0.75_wound` reports **25.9% wall
+clot with 0% occlusion and 100% open lumen**, which is not a physical state. Matched against
+the same occlusion without a wound (`01_stenosis_strength:occ_0.75`, 32.0% wall / 1.39%
+lumen), adding a wound *removed* the entire lumen thrombus.
+
+### 26.1 Mechanism — two shipped bugs meeting
+
+`run_research_sweep.py` drives `CustomerDeployPipeline`, which requests the artifact by the
+name `clot_ml_0`. Until 2026-09-03 that name **did not resolve through the locked pointer**
+(§21) and fell through to the legacy `clot_ml_v0` stub. That stub's manifest records no
+`replace_scope`, so it inherited the then-current default — `all_lumen`.
+
+Under `all_lumen` the chemistry field replaces the GNN's verdict across the **whole lumen**,
+not just the wound region. Where chemistry `Mat` does not clear `crit/att`, the replacement
+writes nothing, and the GNN's own verdict — the one the identical no-wound arm keeps and
+scores 0.30% lumen clot with — is discarded. **A wound could therefore only ever reduce
+predicted lumen clot, to exactly zero.** §10 measured the same erasure on real packs, where
+it cost the far field 0.2448 → 0.0817; on synthetic geometry it goes all the way down.
+
+So `19_wound_vs_no_wound` is not backwards physics and not solver noise. It is a
+model-selection bug reading out through a scope default, and **every wound figure resting on
+these sweeps is invalid.** Both causes are now fixed: the pointer resolves (§21) and
+`replace_scope` defaults to `wound_region` (§10).
+
+### 26.2 `04_inlet_width:w_0.020` is a different failure
+
+That arm carries no wound, so the replacement story does not apply — it is the GNN's own
+off-wall cut committing nothing (28 clot nodes, all wall). This is the cut-placement
+brittleness of §20/§23 in its extreme form: the off-wall verdict is a threshold, and on
+out-of-distribution geometry it can fall to zero rather than degrade. Worth noting that
+`w_0.020` also reports FEWER lumen nodes (2361) than the narrower `w_0.016` (2943), which a
+wider vessel should not, so a meshing contribution is not excluded. **Re-run first, then
+re-examine — do not interpret the old number.**
+
+### 26.3 The standing check
+
+`diag_sweep_lumen_audit.py` fails the build if any arm shows `lumen = 0` AND `occlusion = 0`
+AND `open = 100` together. The failure is silent by nature — every field is populated, every
+value is a valid float, and the arms read as a monotone trend until you notice the zeros are
+*exact* — so it needs a gate rather than an eye. It runs as the last stage of
+`go_deployclot_final.sh`, immediately after the sweeps it validates.
+
+## 27. The final build — 2026-09-04, and what the three open questions answered
+
+`scripts/go_deployclot_final.sh`, 5 h 44 m, every stage `rc=0` except the refusal gate, which
+must fail. Two artifact families from one frozen configuration (`clot_free_w=0.25`,
+`replace_depth=1`, `att_beta=0.5`, `replace_scope=wound_region`), plus a GT-flow comparison arm.
+
+| family | pool | pointer | metrics |
+|---|---|---|---|
+| `DeployClot2_0` **validated** | 36 non-SEALED | ✅ | strictly-nested CV; publish these |
+| `DeployClotP_0` **production** | 40, SEALED included | by name only | **none** — stamped `metrics_invalid` |
+| `DeployClotG_0` GT-flow | 36, COMSOL flow | no | comparison arm only |
+
+Both hard gates behaved as designed. The refusal gate returned `rc=2` with its reason, so the
+production artifact cannot be scored by accident. The lumen audit went from **16 collapsed arms
+to 0 of 59**.
+
+### 27.1 Training on GT flow is WORSE, and the deploy skew is why
+
+The proposal was to train on COMSOL flow and deploy against the in-house solver. Measured both
+ways, it loses.
+
+*In its own world*, GT flow is genuinely better — paired over vessels, each arm scored on its
+own cache with thresholds refit in-fold on that flow:
+
+| domain | GT-trained/GT-scored | FEM-trained/FEM-scored | Δ | 95% CI | P |
+|---|---|---|---|---|---|
+| wall | 0.9703 | 0.9345 | **−0.0358** | [−0.0747, −0.0035] | 0.022 |
+| off-wall | 0.8078 | 0.8221 | +0.0143 | [−0.0548, +0.0978] | 0.777 |
+
+*Deployed*, it inverts. GT-trained weights running on FEM features at inference, against the
+matched-FEM artifact on the identical cohort:
+
+| | wall | off-wall |
+|---|---|---|
+| FEM-trained, matched (`DeployClot2_0`) | **0.8403** | **0.7893** |
+| GT-trained, run on FEM (`DeployClotG_0`) | 0.8261 | 0.7125 |
+
+**The train/deploy skew costs 0.077 off-wall — five times what GT flow buys on the wall.**
+Keep training matched on the solver the product will actually run. (Both rows are in-sample on
+the 36 and comparable only to each other; the honest generalisation number is the CV.)
+
+### 27.2 The GT-vs-FEM wall gap is INFORMATION, not calibration
+
+This is what the threshold refit answers. Both arms in the paired table above had their
+readout scalars refitted **in-fold on their own flow**, so each sits at its own best operating
+point. The wall gap survives that refit at P=0.022 — a threshold cannot recover it. The
+off-wall gap does not exist at all (P=0.777), and the ranking comparison agrees: GT leads
+P@n_gt by +0.014 and the oracle by +0.0289, but after the readout the deployed difference is
+**+0.0034**. Nothing to recover, because there is nothing there.
+
+### 27.3 The sweeps, re-run — one anomaly resolved, one narrowed
+
+`04_inlet_width` no longer drops at `w=0.020`. Wall clot now rises monotonically
+**3.3 → 5.8 → 19.4 → 61.5%** across the width axis; the old non-monotone drop to zero was the
+stale-artifact bug of §26, not physics or meshing.
+
+`19_wound_vs_no_wound` is no longer backwards in the catastrophic sense — the wound arm's
+lumen verdict is no longer erased, and wall clot now correctly exceeds the control (6.85% vs
+5.81%). **But a second-order problem survives and should not be reported as fixed.** Across
+`16_wound_width`, widening the wound 0.08 → 0.40 moves wall clot 6.3 → 9.6% while lumen clot
+stays at **0.2686–0.2759** — a 2.7% relative range against a 52% change in wall clot — and max
+occlusion *falls* 15.4 → 5.0%.
+
+Lumen clot that barely moves while the wound quadruples is lumen clot the wound is not
+driving. Under `replace_scope=wound_region` the chemistry only owns the wound-local lumen, so
+what these arms are reporting is very largely the GNN's far-field verdict, which is identical
+across the axis. **The chemistry replacement still contributes ~nothing on synthetic geometry**
+— the same magnitude shortfall as §23/§24, now visible on the sweep axis the wound figures
+rest on. The fix removed the erasure; it did not make the wound drive lumen thrombus here.
+
+Do not build a wound-dose figure on `16_wound_width` until that is understood.
+
+## 28. Bug sweep and the publication regeneration — 2026-09-04
+
+Nine red tests, all fixed; the suite goes from **crashing at 45%** to **923 passed, 0 failed**
+(kinematics module run separately -- see 28.4). Every figure and table regenerated against
+`DeployClot2_0`.
+
+### 28.1 Two bugs that would have mislabelled every core figure
+
+`eval_strict_temporal.py` had **no CLI setter for `FLOW`**. It is a module global consumed by
+the ODE clock and the per-time transport channels, documented as "set by the promotion entry
+point", and only that entry point ever assigned it. Run standalone with `--cache v5_fem` it
+still built a **GT-flow clock**, silently. Worse, the OOF archive's metadata hardcoded
+`flow="gt"`, so the archive asserted the wrong protocol even when the run was right.
+
+Both fixed: `--flow` added (inferred from the cache when omitted) and the metadata now records
+what actually ran. The regenerated archive reads **`flow: fem`, cache `v5_fem`, 27 vessels**
+against the old `flow: gt`, 23 vessels.
+
+The knock-on: `oof_data.build_vessel_figure_data` replays the archive's own flow, and a SOLVED
+flow must be solved first (`features.build_features` reads `data.u0_pred`, which only the FEM
+solve writes). Latent while the archive mislabelled itself; it surfaced as an `AttributeError`
+the moment the label was correct. Fixed in the shared loader, so every consumer inherits it.
+
+And `generate_kfold_table.py` hardcoded a **caption caveat** reading "OOF masks are exported
+under GT t=0 flow ... the flow-requirement section licenses reading one as the other." That is
+a sentence destined for the paper, and it became false the moment the archive was rebuilt on
+the solved field. Now derived from `archive.flow`.
+
+### 28.2 The wound patch is no longer 100% GT clot
+
+`test_eval_domains` asserted `frac == 1.0` on every wound -- true of the three that existed
+when it was written. Measured at n=6: five are exactly 1.0 and **`wound_patient006` is 70.2%**
+(73 of 104 nodes), carrying the lowest wound `Mat` in the cohort (median 4.77x crit against
+8.0-103.8x), the same marginality that makes it the one stagnation-regime wound.
+
+The A3 decision survives -- the patch is still a free score at 70%, so it still should not be
+folded into a global domain. What does **not** survive is reading the promotion gate's "wound
+coverage 100%" as accuracy: on 006, committing the whole patch is ~30% false positives and the
+gate reports a pass. The test now encodes the measured split and fails if a NEW wound goes
+partial, which would mean the gate is over-reporting on it too.
+
+### 28.3 An incomplete removal, and an env leak that made the suite order-dependent
+
+Five failures were one cause: the CorrectorArm purge added `_DEPRECATED_RUNTIME_FIELDS` and
+`_strip_deprecated_runtime_kwargs` and wired them into `from_kwargs`/`with_overrides` -- but
+missed `mat_growth_simple.materialize_leg_spec`, which validates directly. Legacy leg specs
+and old checkpoint meta legitimately carry `corrector_coupling` ("old ckpt meta may still carry
+these"), so they raised `TypeError` instead of being ignored. The env spellings had no
+deprecation path at all, so they survived into `env_overrides`; `split_legacy_runtime_env` now
+consumes and drops them.
+
+`test_resolve_checkpoint...` passed alone and failed in the suite: `kinematics_dir()` honours
+`KINEMATICS_OUTPUT_DIR`, and the launcher test's `monkeypatch.delenv(..., raising=False)` on an
+**absent** key registers no undo, so the `os.environ[...] =` inside the code under test escaped
+and leaked `production_allfix` into every later test. Fixed at both ends -- `setenv` at the
+leaker so monkeypatch owns the key, `delenv` at the victim so it is order-independent
+regardless of future leakers.
+
+Mirror-Y augmentation: `augment_mirror_y` is neither a live runtime field nor a deprecated one,
+so the four leg specs still passing it would have raised had anyone materialised them -- and
+there are zero mirror packs on disk. Dead plumbing removed.
+
+The customer-web test asserted the literal `clot_ml_0` inside the HTML, where it appeared only
+in a topbar caption. The 2026-09-04 rebrand to "ClotML" broke it, while a genuine repointing of
+the UI to the wrong artifact would have passed. It now asserts the binding where it lives.
+
+### 28.4 The suite crash was cumulative, not a defect
+
+Every module passes in isolation; everything-except-kinematics completes at 923 passed; the two
+together reach 99% of 944 tests and exit without a summary. That is resource exhaustion across
+one long process on a 4 GB card, not a failing test. Fixing the env leak moved the crash point
+from 45% to 99%. Run the kinematics module separately until the suite is sharded.
+
+### 28.5 One published claim changed
+
+Onset timing, regenerated on the new archive: **median lag +0.0 steps, 34.3% early / 39.6%
+on-time / 26.1% late**, over 2,995 matched pairs across 27 vessels. The documented figure was
+19% / 45% / 36% -- "a real but mild late bias". **That bias is gone**; the distribution is now
+centred and very slightly early-leaning. Fig 12's caption must be rewritten, not reused.

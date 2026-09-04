@@ -251,6 +251,11 @@ def main() -> int:
         cfg = dict(BASE)
         cfg["empty_gt_loss"] = args.empty_gt_loss
         cfg["shape_w"] = float(args.shape_w)
+        # MUST be threaded explicitly: `cfg` starts from BASE, so a CLI flag that is parsed
+        # but not copied here is silently ignored -- the run trains at the BASE value while
+        # the manifest records the flag.  That would have shipped a clot_free_w=1.0 model
+        # labelled 0.25 (DEPLOYCLOT.md 25).
+        cfg["clot_free_w"] = float(args.clot_free_w)
         cfg.update({k: v for k, v in over.items() if k != "seeds"})
         fp = _fingerprint(cfg)
         n_seeds = int(args.seeds) if int(args.seeds) > 0 else int(over.get("seeds", 3))

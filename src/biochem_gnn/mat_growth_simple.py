@@ -610,7 +610,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
             init_ckpt=wall_gen_init,
             init_mode="full",
             config_kwargs={**v3_config},
-            runtime_kwargs={**v3_runtime, "augment_mirror_y": True},
+            runtime_kwargs=dict(v3_runtime),
             env_overrides={},
         ),
         "WG_sweep_v3_05": MatGrowthLegSpec(
@@ -640,7 +640,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "geom_feats_rich": True,
                 "flux_stag_feat": True,
             },
-            runtime_kwargs={**v3_runtime, "augment_mirror_y": True},
+            runtime_kwargs=dict(v3_runtime),
             env_overrides={},
         ),
         "WG_sweep_v3_07": MatGrowthLegSpec(
@@ -712,7 +712,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "geom_feats_rich": True,
                 "flux_stag_feat": True,
             },
-            runtime_kwargs={**v3_runtime, "augment_mirror_y": True},
+            runtime_kwargs=dict(v3_runtime),
             env_overrides={},
         ),
         # Same feature/runtime stack as WG_featfix_03; data axis = clot-rich N+ LOAO.
@@ -1930,7 +1930,7 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
             init_ckpt=WG_FEATFIX_03_CKPT,
             init_mode="full",
             config_kwargs={**prec_config},
-            runtime_kwargs={**prec_runtime, "augment_mirror_y": True},
+            runtime_kwargs=dict(prec_runtime),
             env_overrides={},
         ),
         # Re-test N+/sites with the fixed prec objective (not the spray-prone v1/v2 recipe).
@@ -4403,7 +4403,6 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "SPECIES_SNAPSHOT_WALL_HOPS": "3",
                 "SPECIES_CONTINUOUS_DUAL_HEAD": "1",
                 "BIOCHEM_PUSHFORWARD_SPECIES_SCOPE": "mat",
-                "SPECIES_AUGMENT_MIRROR_Y": "1",
             },
         ),
         "WG_geom_rich": MatGrowthLegSpec(
@@ -4477,7 +4476,6 @@ def mat_growth_leg_spec(leg: str) -> MatGrowthLegSpec:
                 "SPECIES_CONTINUOUS_TEACHER_FP_FRAC": "0.12",
                 "SPECIES_CONTINUOUS_TBPTT_TAIL": "15",
                 "SPECIES_PUSHFORWARD_MAX_UNROLL": "120",
-                "SPECIES_AUGMENT_MIRROR_Y": "1",
                 "SPECIES_GEOM_FEATS_RICH": "1",
                 "SPECIES_FLUX_STAG_FEAT": "1",
             },
@@ -4627,12 +4625,19 @@ def mat_growth_precision_selection_enabled() -> bool:
 def materialize_leg_spec(spec: MatGrowthLegSpec) -> MatGrowthLegSpec:
     """Split legacy env_overrides into typed config_kwargs + runtime_kwargs."""
     from src.architecture.pushforward_config import split_legacy_env_overrides, validate_config_kwargs
-    from src.architecture.runtime_config import split_legacy_runtime_env, validate_runtime_kwargs
+    from src.architecture.runtime_config import (
+        _strip_deprecated_runtime_kwargs, split_legacy_runtime_env, validate_runtime_kwargs,
+    )
 
     auto_cfg, rem1 = split_legacy_env_overrides(spec.env_overrides)
     auto_rt, rem2 = split_legacy_runtime_env(rem1)
     merged_cfg = {**auto_cfg, **dict(spec.config_kwargs)}
-    merged_rt = {**auto_rt, **dict(spec.runtime_kwargs)}
+    # Drop the corrector-purge leftovers BEFORE validating, the same way
+    # `BiochemRuntimeConfig.from_kwargs` and `.with_overrides` already do.  This call site was
+    # missed by that purge, so a leg spec carrying `corrector_coupling` -- which old
+    # checkpoint meta and legacy env overrides still do, by design ("old ckpt meta may still
+    # carry these") -- raised TypeError here instead of being ignored.
+    merged_rt = _strip_deprecated_runtime_kwargs({**auto_rt, **dict(spec.runtime_kwargs)})
     validate_config_kwargs(merged_cfg)
     validate_runtime_kwargs(merged_rt)
     if (

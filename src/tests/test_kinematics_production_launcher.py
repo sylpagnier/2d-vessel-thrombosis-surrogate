@@ -35,7 +35,12 @@ def test_clear_foundation_checkpoints(tmp_path: Path) -> None:
 def test_foundation_config_binds_arch_env(monkeypatch) -> None:
     for key in ALLFIX_ARCH_ENV:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.delenv("KINEMATICS_OUTPUT_DIR", raising=False)
+    # `delenv(..., raising=False)` on an ABSENT key registers no undo, so the direct
+    # `os.environ[...] = ...` that `bind_process_env` performs below escapes this test and
+    # leaks `production_allfix` into every test that runs after it -- which is what made
+    # `test_resolve_checkpoint_prefers_new_names_but_reads_legacy` pass alone and fail in the
+    # suite.  `setenv` DOES register an undo, so monkeypatch restores (removes) the key.
+    monkeypatch.setenv("KINEMATICS_OUTPUT_DIR", "")
     cfg = FoundationConfig()
     cfg.bind_process_env()
     import os

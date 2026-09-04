@@ -193,7 +193,13 @@ def _pointer_scores(repo) -> dict:
                             "note": ("config spread of one arm on this cohort. Per-vessel "
                                      "spread is far larger: median 0.042 wall / 0.112 off.")},
         }
-    ev = repo / "outputs/deployclot/eval_fem_dc1.json"
+    # Prefer the CURRENT build's evaluation.  `eval_fem_dc1.json` is the previous
+    # generation's and, left first in this list, silently pinned DeployClot_1's wound numbers
+    # onto a DeployClot2_0 pointer -- current weights beside superseded scores, which is the
+    # exact failure 21.1 exists to prevent.
+    ev = next((q for q in (repo / "outputs/deployclot/final_eval_validated.json",
+                           repo / "outputs/deployclot/eval_fem_dc1.json") if q.exists()),
+              repo / "outputs/deployclot/final_eval_validated.json")
     if ev.exists():
         rows = _json.loads(ev.read_text())
         w = [r for r in rows if r.get("wound")]

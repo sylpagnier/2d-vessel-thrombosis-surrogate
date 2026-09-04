@@ -42,6 +42,8 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+from src.clot_ml import feature_fingerprint as _fp
 import torch
 from scipy.stats import spearmanr
 
@@ -137,7 +139,9 @@ def main() -> int:
         S["cols"] = np.array(cols + order)
         S["mat_ind"] = np.asarray(mat_ind, np.float32)
         S["gate_ind"] = np.asarray(gate_ind, np.float32)
-        np.savez_compressed(dst, **S)
+        # See src/clot_ml/feature_fingerprint.py: a content hash of the feature
+        # builders, so a cache written before a features change is detectably stale.
+        np.savez_compressed(dst, **_fp.stamp(dict(S)))
 
         # --- diagnostics: does either family order GT Mat better than what v3 has? ----
         mg = S["mat_gt"].astype(np.float64)

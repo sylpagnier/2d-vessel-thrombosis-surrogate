@@ -1,7 +1,18 @@
-"""Orchestrates customer data ingest and Biochem GNN retraining."""
+"""Orchestrates customer data ingest and clot_ml_0 candidate retraining.
 
-import json
+Delegates the actual work to ``scripts/customer_retrain_run.py`` in a subprocess: file
+recognition (.pt graphs vs .mph COMSOL solves), feature-cache building, a real train/val/test
+split, training, and scoring. This process never imports torch/torch-geometric itself, so a
+long or crashing training run cannot take the UI server down with it.
+
+The result is a CANDIDATE checkpoint under ``outputs/customer/retrain_candidates/<timestamp>/``
+-- it is never auto-promoted to the live ``clot_ml_0`` checkpoint. See
+``scripts/customer_retrain_run.py`` for why, and ``scripts/promote_clot_gnn_v4.py`` for the
+manual promotion step.
+"""
+
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Callable
@@ -16,47 +27,16 @@ class CustomerRetrainPipeline:
         self._stop_event = threading.Event()
 
     def run(self, data_dir: Path, progress_cb: Callable[[str], None], log_cb: Callable[[str], None]) -> bool:
-        """Run the retrain pipeline on a directory of geometry/solution files."""
+        """Run the retrain pipeline on a directory of .pt graphs / .mph COMSOL solves."""
         self._stop_event.clear()
-        
-        # 1. Discover files
-        progress_cb(f"Scanning {data_dir.name} for graphs...")
-        files = [p for p in data_dir.iterdir() if p.suffix.lower() == ".pt"]
-        if not files:
-            log_cb("[ERR] No .pt files found in the selected directory.")
-            return False
-            
-        log_cb(f"[i] Found {len(files)} files for retraining.")
-        
-        # 2. Build custom split manifest
-        # (For now, we use a simple 80/20 train/val split or just pass them as anchors)
-        manifest_path = get_project_root() / "data" / "reference" / "customer_retrain_manifest.json"
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        train_names = [p.stem for p in files]
-        val_name = train_names[0] if train_names else "patient007" # Fallback validation anchor
-        
-        # In a real scenario we'd copy/link these to the cache, but train_biochem_gnn 
-        # usually reads from KINEMATICS_PREPARED_CACHE or accepts anchors.
-        
-        # 3. Launch the subprocess
-        progress_cb("Launching Biochem GNN training...")
-        
-        # Using the standard biochem gnn training entry point
+        progress_cb(f"Scanning {data_dir.name} for graphs and COMSOL files...")
+
         cmd = [
-            "python", "-u", "-m", "src.training.train_biochem_gnn",
-            "--step", "species",
-            "--val-anchor", val_name,
-            "--epochs", "20",  # shorter for customer UI default
-            "--early-stop", "10",
+            sys.executable, "-u", str(get_project_root() / "scripts" / "customer_retrain_run.py"),
+            "--data-dir", str(data_dir),
         ]
-        
-        # Pass the custom anchors if we have them
-        if train_names:
-            cmd.extend(["--anchors", ",".join(train_names)])
-            
         log_cb(f"> {' '.join(cmd)}")
-        
+
         try:
             self._process = subprocess.Popen(
                 cmd,
@@ -64,31 +44,30 @@ class CustomerRetrainPipeline:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
             )
-            
-            # Stream output
+
             for line in self._process.stdout:
                 if self._stop_event.is_set():
                     self._process.terminate()
                     break
                 log_cb(line.rstrip())
-                
+                progress_cb(line.rstrip())
+
             self._process.wait()
             rc = self._process.returncode
-            
+
             if rc == 0:
-                progress_cb("Training complete. Model weights saved.")
+                progress_cb("Retrain complete. Candidate checkpoint saved for review.")
                 return True
-            else:
-                progress_cb(f"Training failed with exit code {rc}.")
-                return False
-                
+            progress_cb(f"Retrain failed with exit code {rc}.")
+            return False
+
         except Exception as e:
             log_cb(f"[ERR] Subprocess failed: {e}")
-            progress_cb("Training failed.")
+            progress_cb("Retrain failed.")
             return False
-            
+
     def cancel(self):
         """Cancel the running training process."""
         self._stop_event.set()

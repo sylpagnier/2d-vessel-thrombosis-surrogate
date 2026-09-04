@@ -6,6 +6,10 @@ import src.utils.training_diary as diary_mod
 
 def test_resolve_checkpoint_prefers_new_names_but_reads_legacy(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_mod, "get_project_root", lambda: tmp_path)
+    # `kinematics_dir()` honours this env override, so without clearing it the patched
+    # project root is ignored and the assertion compares a real production path against the
+    # fixture.  The neighbouring diary test already clears its own env for the same reason.
+    monkeypatch.delenv("KINEMATICS_OUTPUT_DIR", raising=False)
 
     legacy = tmp_path / "outputs" / "stage_a" / "kinematics_best.pth"
     legacy.parent.mkdir(parents=True, exist_ok=True)

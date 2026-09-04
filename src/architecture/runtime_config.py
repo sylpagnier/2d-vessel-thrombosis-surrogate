@@ -294,6 +294,8 @@ def split_legacy_runtime_env(
     if not env:
         return kwargs, remaining
     for key, val in env.items():
+        if str(key) in _DEPRECATED_RUNTIME_ENV:
+            continue                      # known-dead, not unknown -- drop it silently
         field_name = RUNTIME_ENV_TO_FIELD.get(str(key))
         if field_name is None:
             remaining[str(key)] = str(val)
@@ -307,6 +309,26 @@ def validate_runtime_kwargs(kwargs: Mapping[str, Any]) -> None:
     if bad:
         raise TypeError(f"Unknown BiochemRuntimeConfig fields: {bad}")
 
+
+#: The ENV spellings of the fields below.  `split_legacy_runtime_env` consumes and DROPS
+#: these instead of passing them through as "unknown remaining", for the same reason
+#: `_strip_deprecated_runtime_kwargs` exists: legacy leg specs and old checkpoint meta still
+#: declare them, and a setting for a subsystem that no longer exists is not an unknown key --
+#: it is a known-dead one.  Without this they survived into `env_overrides` and any consumer
+#: asserting a clean split failed.
+_DEPRECATED_RUNTIME_ENV = frozenset(
+    {
+        "BIOCHEM_CORRECTOR_COUPLING",
+        "BIOCHEM_CORRECTOR_NUM_HOPS",
+        "BIOCHEM_CORRECTOR_MU_THRESH",
+        "BIOCHEM_CORRECTOR_MAX_DELTA_MU",
+        "BIOCHEM_CORRECTOR_CKPT",
+        "BIOCHEM_CORRECTOR_LOCAL_CLUSTERS",
+        "BIOCHEM_CORRECTOR_CLUSTER_RADIUS_ND",
+        "BIOCHEM_CORRECTOR_CLUSTER_MAX_NODES",
+        "BIOCHEM_CORRECTOR_GROWTH_FACTOR",
+    }
+)
 
 # Removed with the local kinematic corrector purge; old ckpt meta may still carry these.
 _DEPRECATED_RUNTIME_FIELDS = frozenset(

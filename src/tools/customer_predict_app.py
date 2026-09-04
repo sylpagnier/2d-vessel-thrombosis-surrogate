@@ -1,4 +1,4 @@
-"""Local FEM Solver Customer Predict App (matplotlib desktop).
+"""ClotML Customer Predict App (matplotlib desktop).
 
 Warm, concise chrome + white graphics viewport:
   - left control rail
@@ -380,7 +380,7 @@ class PredictApp:
         self.wound_editor: WoundRegionEditor | None = None
 
         try:
-            self.fig.canvas.manager.set_window_title("Local FEM Solver Unified App")  # type: ignore[union-attr]
+            self.fig.canvas.manager.set_window_title("ClotML Unified App")  # type: ignore[union-attr]
         except Exception:
             pass
 
@@ -416,15 +416,15 @@ class PredictApp:
         # Header
         self.ax_header = self._add_panel([0.015, 0.925, 0.97, 0.055])
         self.ax_header.text(
-            0.018, 0.52, "Local FEM Solver", transform=self.ax_header.transAxes,
+            0.018, 0.52, "ClotML", transform=self.ax_header.transAxes,
             fontsize=15, fontweight="bold", color=C["accent"], va="center",
         )
         self.ax_header.text(
-            0.132, 0.52, "Predict", transform=self.ax_header.transAxes,
+            0.075, 0.52, "Predict", transform=self.ax_header.transAxes,
             fontsize=15, fontweight="bold", color=C["text"], va="center",
         )
         self.ax_header.text(
-            0.245, 0.52, "Customer vessel forecast", transform=self.ax_header.transAxes,
+            0.16, 0.52, "clot_ml_0: local FEM at t=0, then ML rollout", transform=self.ax_header.transAxes,
             fontsize=9, color=C["muted"], va="center",
         )
         self.status_text = self.ax_header.text(
@@ -671,7 +671,9 @@ class PredictApp:
             self._set_status("Flow Simulator: Predict kinematics and visualize anchors.", tone="accent")
             self.radio_field.set_active(1)  # force Clot + Velocity for flow
         elif label == "Retrain Model":
-            self._set_status("Retrain Model: Select a folder of .pt files and click Run.", tone="accent")
+            self._set_status(
+                "Retrain Model: pick a folder of .pt graphs / .mph COMSOL files and click Run. "
+                "Produces a candidate for review, not a live model update.", tone="accent")
         else:
             self._set_status("Clot Predictor: Forecast biochem species over time.", tone="accent")
 
@@ -893,7 +895,7 @@ class PredictApp:
             initialdir=str(inbox),
             filetypes=[
                 ("Vessel geometries", "*.pt *.msh *.nas"),
-                ("Local FEM Solver graph (.pt)", "*.pt"),
+                ("ClotML graph (.pt)", "*.pt"),
                 ("Gmsh mesh (.msh)", "*.msh"),
                 ("Nastran (.nas)", "*.nas"),
                 ("All files", "*.*"),
@@ -1232,7 +1234,7 @@ class PredictApp:
 
         fig, axes = plt.subplots(3, 1, figsize=(9.0, 8.0), sharex=True, facecolor=C["bg"])
         try:
-            fig.canvas.manager.set_window_title("Local FEM Solver Scientific metrics")  # type: ignore[union-attr]
+            fig.canvas.manager.set_window_title("ClotML Scientific metrics")  # type: ignore[union-attr]
         except Exception:
             pass
         ax0, ax1, ax2 = axes
@@ -1553,12 +1555,12 @@ def _log_startup_device(*, require_cuda: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Local FEM Solver customer predict app")
+    ap = argparse.ArgumentParser(description="ClotML customer predict app")
     ap.add_argument("--cpu", action="store_true", help="Allow CPU (slow; CUDA recommended)")
     args = ap.parse_args(argv)
     require_cuda = not args.cpu
     inbox = ensure_inbox()
-    print("[i] Local FEM Solver Predict", flush=True)
+    print("[i] ClotML Predict", flush=True)
     print(f"[i] Geometries folder: {inbox}", flush=True)
     _log_startup_device(require_cuda=require_cuda)
     app = PredictApp(require_cuda=require_cuda)

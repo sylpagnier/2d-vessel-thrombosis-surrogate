@@ -794,6 +794,10 @@ def main() -> int:
     ap.add_argument("--arms", nargs="+", required=True,
                     help="each arm is a comma-separated tag list")
     ap.add_argument("--cache", default="gt")
+    ap.add_argument("--flow", default="", choices=["", "gt", "fem", "pred"],
+                    help="t=0 flow for the ODE clock and transport channels. Empty = infer "
+                         "from --cache, which is what you want: the clock the head is fitted "
+                         "against must be the clock deploy replays.")
     ap.add_argument("--n-times", type=int, default=11)
     ap.add_argument("--inner", type=int, default=3)
     ap.add_argument("--save", default="")
@@ -838,7 +842,15 @@ def main() -> int:
 
     # New runs bind the ODE clock through explicit CLI state.  The environment fallback is
     # retained only to replay old commands; no new architecture flag should use it.
-    global USE_WAKE_ODE, USE_STALL_ODE
+    # `FLOW` is a module global consumed by `_tt_dir` and `precompute` (the ODE clock and the
+    # per-time transport channels).  It had NO command-line setter: running this script
+    # standalone with `--cache v5_fem` still built a GT-flow clock, silently, because the
+    # default is "gt" and only the promotion entry point ever assigned it.  Every figure built
+    # from the resulting archive would be GT-flow masks labelled as the deployed model.
+    global FLOW, USE_WAKE_ODE, USE_STALL_ODE
+    FLOW = args.flow or ("fem" if "fem" in args.cache else
+                         "pred" if "pred" in args.cache else "gt")
+    print(f"[i] t=0 flow for the clock and transport: {FLOW} (cache={args.cache})", flush=True)
     if args.wake:
         USE_WAKE_ODE, USE_STALL_ODE = True, False
     elif args.stall:
@@ -1109,7 +1121,7 @@ def main() -> int:
             meta=np.asarray([json.dumps(dict(
                 schema_version=1,
                 purpose="strict nested out-of-fold temporal trajectories for visualization",
-                arms=list(args.arms), cache=args.cache, flow="gt",
+                arms=list(args.arms), cache=args.cache, flow=FLOW,
                 n_times=int(args.n_times), inner=int(args.inner),
                 vessels=sorted(oof_series), final_half_excluded=sorted(SEALED),
             ))]),

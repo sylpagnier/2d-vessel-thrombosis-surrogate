@@ -59,6 +59,7 @@ class CustomerTrajectory:
     elapsed_s: float = 0.0
     n_steps: int = 0
     meta: dict[str, Any] = field(default_factory=dict)
+    shear_mag: dict[int, np.ndarray] = field(default_factory=dict)
     mask_wall: np.ndarray | None = None
     mask_wound: np.ndarray | None = None
     mask_inlet: np.ndarray | None = None
@@ -574,16 +575,38 @@ class CustomerDeployPipeline:
         vel_all: dict[int, np.ndarray] = {
             int(i): np.zeros_like(phi_all[int(i)], dtype=np.float32) for i in indices
         }
+        shear_all: dict[int, np.ndarray] = {
+            int(i): np.zeros_like(phi_all[int(i)], dtype=np.float32) for i in indices
+        }
         velocity_indices: list[int] = []
         if include_velocity and indices and hasattr(out, "u0_pred") and out.u0_pred is not None:
-            velocity_indices = [indices[0], indices[-1]] if len(indices) > 1 else [indices[0]]
-            velocity_indices = sorted(set(velocity_indices))
-            log(f"[i] Using frozen t=0 flow at {len(velocity_indices)} bookend step(s)…")
-            u0 = out.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float32)
-            v0 = out.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float32)
-            frozen_vel = np.sqrt(u0 * u0 + v0 * v0)
-            for i in velocity_indices:
-                vel_all[int(i)] = frozen_vel
+            # The flow field comes from a single local FEM solve at t=0 and is never
+            # recomputed over the rollout -- there is exactly one flow snapshot to report,
+            # not an "initial vs final" pair (those would be identical and misleading).
+            velocity_indices = [indices[0]]
+            log("[i] Using t=0 flow field...")
+            # u0_pred/v0_pred are non-dimensional (u/u_ref, see solve_fem_into_pack) -- scale
+            # back to physical m/s so the UI can show a real, labelled unit.
+            u_ref_mps = float(out.u_ref.reshape(-1)[0])
+            u0 = out.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64) * u_ref_mps
+            v0 = out.v0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64) * u_ref_mps
+            vel_all[int(indices[0])] = np.sqrt(u0 * u0 + v0 * v0).astype(np.float32)
+            try:
+                from src.clot_ml.temporal import _flow_hops
+                from src.core_physics.mls_gradient import build_mls_gradient, node_positions, shear_rate_2d
+
+                pos_nd = node_positions(out)
+                ei_np = out.edge_index.detach().cpu().numpy()
+                Dx, Dy = build_mls_gradient(pos_nd, ei_np, hops=_flow_hops(DEFAULT_CUSTOMER_FLOW))
+                # u0/v0 are already physical (m/s); the gradient operators differentiate
+                # w.r.t. non-dimensional position, so dividing by d_bar (metres) converts the
+                # result to a physical d(m/s)/d(m) = 1/s shear rate directly.
+                d_bar = float(out.d_bar.reshape(-1)[0])
+                ux, uy, vx, vy = Dx @ u0, Dy @ u0, Dx @ v0, Dy @ v0
+                sr = shear_rate_2d(ux, uy, vx, vy) / d_bar
+                shear_all[int(indices[0])] = sr.astype(np.float32)
+            except Exception as exc:
+                log(f"[WARN] shear rate unavailable: {exc}")
 
         def _mask_np(name: str) -> np.ndarray | None:
             value = getattr(out, name, None)
@@ -607,6 +630,7 @@ class CustomerDeployPipeline:
             vel_mag=vel_all,
             mu_eff_si=mu_all,
             phi=phi_all,
+            shear_mag=shear_all,
             n_steps=n_steps,
             meta={
                 "model": DEFAULT_CUSTOMER_CLOT_MODEL,
@@ -614,7 +638,7 @@ class CustomerDeployPipeline:
                 "flow_source": DEFAULT_CUSTOMER_FLOW,
                 "include_velocity": bool(include_velocity),
                 "velocity_indices": velocity_indices,
-                "velocity_mode": "bookends" if include_velocity else "none",
+                "velocity_mode": "single" if include_velocity else "none",
                 "wound_enabled": bool(getattr(out, "customer_wound_enabled", False)),
                 "wound_position_frac": getattr(out, "customer_wound_position_frac", None),
                 "wound_width_frac": getattr(out, "customer_wound_width_frac", None),

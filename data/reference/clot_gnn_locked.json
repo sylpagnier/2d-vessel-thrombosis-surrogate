@@ -1,14 +1,14 @@
 {
-  "name": "DeployClot_1",
+  "name": "DeployClot2_0",
   "kind": "unified_v0",
-  "path": "outputs/clot_ml/locked/DeployClot_1",
-  "manifest": "outputs/clot_ml/locked/DeployClot_1/manifest.json",
-  "promoted_at": "2026-09-03T09:47:00Z",
+  "path": "outputs/clot_ml/locked/DeployClot2_0",
+  "manifest": "outputs/clot_ml/locked/DeployClot2_0/manifest.json",
+  "promoted_at": "2026-09-04T03:06:20Z",
   "docs": "docs/WOUND_PROGRESS.md",
-  "supersedes": "DeployClot_w",
+  "supersedes": "DeployClot2_w",
   "flow": "fem",
   "v0": {
-    "base_model": "DeployClot_w",
+    "base_model": "DeployClot2_w",
     "ap_renewal_scale": 1.0,
     "da_scale_auto": 123.0,
     "washout": true,
@@ -19,10 +19,10 @@
     "ap_residual": null
   },
   "readout": {
-    "wall": "resid",
+    "wall": "resid_adapt",
     "off": "resid_adapt",
     "lag_anchor": "ode",
-    "burden_gate": 0,
+    "burden_gate": 15,
     "wake_ode": false,
     "stall_ode": false,
     "flow": "fem"
@@ -33,20 +33,20 @@
     "cohort": "27 clot-carrying + 9 clot-free; SEALED 007/013/031/043 never in the pool",
     "metric": "`guiding` -- the default deploy score (`species_continuous_clout_score_mode()`), and the one every other evaluation here reports. `severity` is Deploy Score v2, more forgiving; it is what the readout family was SELECTED on and the arm ordering is the same under both. Never mix them (DEPLOYCLOT.md 0 and 22).",
     "shipped_readout": {
-      "wall": 0.8721,
-      "off": 0.6411
+      "wall": 0.8667,
+      "off": 0.6369
     },
     "shipped_readout_severity": {
-      "wall": 0.9398,
-      "off": 0.8358
+      "wall": 0.9331,
+      "off": 0.8221
     },
     "per_vessel_oracle_cut": {
-      "wall": 0.8857,
-      "off": 0.6885
+      "wall": 0.8872,
+      "off": 0.7272
     },
     "readout_gap": {
-      "wall": 0.0136,
-      "off": 0.0474,
+      "wall": 0.0205,
+      "off": 0.0903,
       "note": "Headroom left in the CUT, against the best single per-vessel threshold. Both are inside the noise floor. Seven label-free per-vessel cut rules were measured on this pool and none beats `resid` by more than noise -- DEPLOYCLOT.md 20."
     },
     "noise_floor": {
@@ -59,10 +59,10 @@
     "protocol": "scripts/eval_clot_ml_0.py --flow fem; n=6; the depth rule's (beta, depth) picked LEAVE-ONE-VESSEL-OUT (scripts/diag_wound_offwall_attenuation.py)",
     "n_vessels": 6,
     "final": {
-      "wall": 0.8866,
-      "w_reg": 0.9307,
+      "wall": 0.8999,
+      "w_reg": 0.9271,
       "w_lum": 0.8728,
-      "far": 0.2448
+      "far": 0.2819
     },
     "lovo_held_out": {
       "w_lum": 0.8611,
@@ -71,12 +71,40 @@
     },
     "non_wound_is_bit_identical": {
       "vessels": [
+        "patient003",
+        "patient004",
+        "patient005",
+        "patient006",
+        "patient008",
+        "patient009",
+        "patient011",
         "patient012",
+        "patient015",
+        "patient016",
+        "patient018",
+        "patient019",
         "patient020",
+        "patient021",
+        "patient024",
+        "patient025",
+        "patient028",
+        "patient029",
         "patient032",
+        "patient035",
+        "patient036",
+        "patient037",
+        "patient001",
+        "patient010",
+        "patient014",
+        "patient045",
+        "patient046",
+        "patient047",
+        "patient048",
+        "patient039",
+        "patient040",
         "patient041",
-        "patient044",
-        "patient048"
+        "patient042",
+        "patient044"
       ],
       "wall_delta": 0.0,
       "off_delta": 0.0,

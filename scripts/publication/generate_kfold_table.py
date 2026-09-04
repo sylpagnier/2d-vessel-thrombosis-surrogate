@@ -192,9 +192,18 @@ def main() -> int:
         "source": str(path),
         "flow": archive.flow,
         "caveats": [
-            "OOF masks are exported under GT t=0 flow; the shipped path uses a local FEM solve. "
-            "The flow-requirement section licenses reading one as the other (FEM within noise "
-            "of GT). State this in the caption.",
+            # DERIVED, not asserted.  This used to hardcode "exported under GT t=0 flow",
+            # which became false the moment the archive was rebuilt on the solved field --
+            # and it is a CAPTION string, so a stale value here misstates the protocol in the
+            # paper itself.  `eval_strict_temporal` hardcoded `flow="gt"` into the archive
+            # metadata until 2026-09-04, so archives written before then really are GT and
+            # really do need the licensing sentence; newer ones do not.
+            ("OOF masks are exported under the SAME local FEM solve the shipped path uses; "
+             "no GT velocity field enters the inputs. No flow-source licensing is needed."
+             if archive.flow == "fem" else
+             "OOF masks are exported under %s t=0 flow; the shipped path uses a local FEM "
+             "solve. The flow-requirement section licenses reading one as the other (FEM "
+             "within noise of GT). State this in the caption." % archive.flow),
             "Aneurysm generalization is n=1: no fold trains on one aneurysm and measures "
             "another (src/clot_ml/geometry_splits.py).",
             "Off-wall means cover ONLY vessels with non-empty off-wall GT. Vessels with zero "

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+from src.clot_ml import feature_fingerprint as _fp
 import torch
 
 REPO = Path(__file__).resolve().parents[1]
@@ -87,11 +89,15 @@ def main() -> int:
             print("[drop] %s empty GT (not on the clot-free list)" % a, flush=True)
             continue
         X, cols = feature_matrix(S["F"])
+        # Every cache carries a hash of the feature builders, so a later change to
+        # `features.py` / `features_v4.py` makes this file detectably stale instead of
+        # silently wrong (src/clot_ml/feature_fingerprint.py).
         np.savez_compressed(
             dst, X=X, cols=np.array(cols), y=S["y"], mat_gt=S["mat_gt"],
             wall=S["wall"], solid=S["solid"], shell=S["shell"], owner=S["owner"],
             edge_index=S["edge_index"], pos=S["pos"], mat_phys=S["mat_phys"],
-            gate=S["gate"], sr=S["sr"], spd=S["spd"], u=S["u"], v=S["v"])
+            gate=S["gate"], sr=S["sr"], spd=S["spd"], u=S["u"], v=S["v"],
+            **_fp.stamp({}))
         print("[ok  ] %-12s n=%6d feats=%d clot=%5d (off %4d)%s  %.1fs"
               % (a, S["n"], X.shape[1], int(S["y"].sum()),
                  int((S["y"] > 0.5).sum() - ((S["y"] > 0.5) & S["wall"]).sum()),

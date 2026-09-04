@@ -8,6 +8,8 @@ from typing import Callable
 DIAGNOSTICS: dict[str, str] = {
     "clot-free-headroom": "src.tools.diagnostics.clot_free_headroom",
     "crack-001-root": "src.tools.diagnostics.crack_001_root",
+    "fem-prior-headroom": "src.tools.diagnostics.fem_prior_headroom",
+    "fem-warm-start": "src.tools.diagnostics.fem_warm_start",
     "field-calibration": "src.tools.diagnostics.field_calibration",
     "geometry-class-recal": "src.tools.diagnostics.geometry_class_recal",
     "local-fem-accuracy": "src.tools.diagnostics.local_fem_accuracy",

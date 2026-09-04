@@ -35,7 +35,12 @@ COL_MU_PRIOR = 13
 COL_WSS_PRIOR = 14
 COL_WIDTH = 15
 
-PRIOR_SOURCES = ("stored", "analytic", "zero")
+PRIOR_SOURCES = ("stored", "analytic", "zero", "fem")
+
+#: Where ``build_fem_priors`` keeps its solves.  A converged Carreau solve costs 3-30 s per
+#: vessel and the trainer rewrites the prior block on every graph of every dataset build, so
+#: the cache is not an optimisation -- without it the prior source is unusable in training.
+FEM_PRIOR_CACHE_SUBDIR = ("data", "processed", "fem_priors")
 
 
 def potential_flow_direction(
@@ -298,6 +303,100 @@ def build_analytic_priors(
     return mag * dx, mag * dy, mu, wss
 
 
+def _fem_prior_cache_path(data, stem: str):
+    from src.utils.paths import get_project_root
+
+    d = get_project_root().joinpath(*FEM_PRIOR_CACHE_SUBDIR)
+    return d / f"{stem}_n{int(data.num_nodes)}.npz"
+
+
+def build_fem_priors(
+    data, *, phys_cfg: PhysicsConfig | None = None, cache: bool = True
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Local Carreau FEM solve as the prior block. Returns ``(u, v, mu, wss)``, all non-dim.
+
+    Same contract and same units as :func:`build_analytic_priors`, so the two are drop-in
+    alternatives -- ``mu`` and ``wss`` are the Carreau law and ``mu*gamma`` evaluated on the
+    FEM shear rate exactly where the analytic branch evaluates them on the Poiseuille one.
+
+    **Deploy-legal by construction.**  The solve is handed ``u_gt_inlet_nd=None``, so its inlet
+    Dirichlet is the analytic profile built from ``u_ref`` and the inlet geometry, never
+    COMSOL's own inlet velocity.  ``src.clot_ml.v0.solve_fem_into_pack`` does pass the COMSOL
+    inlet when the pack carries one -- legitimate there, where the field is a t=0 flow estimate
+    scored against that same COMSOL run, and inadmissible here, where it would become a model
+    INPUT and put ground truth back in the channel s17 Z2 exists to keep clean.
+
+    The solve is seeded with the analytic prior.  Picard's iterate only sets the wind the
+    operator is linearised about, so this cannot move the converged field -- it just skips the
+    opening transient (``src.tools.diagnostics.fem_warm_start``).
+    """
+    import numpy as np
+
+    ph = phys_cfg or PhysicsConfig()
+    dev = data.x.device
+    n = int(data.num_nodes)
+    stem = str(getattr(data, "graph_stem", "") or "").strip()
+
+    cached = None
+    path = None
+    if cache and stem:
+        path = _fem_prior_cache_path(data, stem)
+        if path.is_file():
+            with np.load(path) as z:
+                if int(z["n"]) == n:
+                    cached = (z["u"], z["v"])
+
+    if cached is None:
+        from src.clot_ml.v0 import _resolve_anchor_mesh
+        from src.core_physics.local_fem_solver import solve_local_t0_flow
+
+        au, av, _, _ = build_analytic_priors(data, phys_cfg=ph)
+        seed = torch.stack([au.reshape(-1), av.reshape(-1)], dim=1).cpu().numpy().astype("float64")
+        u_dim = solve_local_t0_flow(
+            _resolve_anchor_mesh(data), data, ph, max_iters=300, tol=1e-9,
+            u_gt_inlet_nd=None, u_init_nd=seed, verbose=False,
+        )
+        if torch.is_tensor(u_dim):
+            u_dim = u_dim.cpu().numpy()
+        nd = np.asarray(u_dim, dtype=np.float64) / float(data.u_ref.reshape(-1)[0])
+        cached = (nd[:, 0].copy(), nd[:, 1].copy())
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(path, u=cached[0], v=cached[1], n=np.int64(n))
+
+    u_np, v_np = cached
+    u = torch.as_tensor(u_np, dtype=torch.float32, device=dev).reshape(-1)
+    v = torch.as_tensor(v_np, dtype=torch.float32, device=dev).reshape(-1)
+
+    # Shear rate on the graph, in the SAME non-dimensional convention `build_analytic_priors`
+    # uses for its `gamma` -- the MLS operators are built on non-dim positions, so the result is
+    # already gamma_si * d_bar / u_ref and pairs with `lam_nd` below without a further scaling.
+    # `t0_flow_fields` multiplies by (u_ref/d_bar) at this point because it wants SI; we do not.
+    from src.core_physics.mls_gradient import build_mls_gradient, node_positions, shear_rate_2d
+
+    pos = node_positions(data)
+    ei = data.edge_index.detach().cpu().numpy()
+    Dx, Dy = build_mls_gradient(pos, ei)
+    un, vn = u_np.astype(np.float64), v_np.astype(np.float64)
+    gamma_np = shear_rate_2d(Dx @ un, Dy @ un, Dx @ vn, Dy @ vn)
+    gamma = torch.as_tensor(gamma_np, dtype=torch.float32, device=dev).reshape(-1)
+
+    if getattr(ph, "viscosity_model", "carreau") == "newtonian":
+        mu = torch.ones_like(gamma)
+    else:
+        ref = float(ph.mu_viscosity_nd_scale)
+        u_ref = float(getattr(data, "u_ref", torch.tensor(1.0)).reshape(-1)[0])
+        d_bar = float(getattr(data, "d_bar", torch.tensor(1.0)).reshape(-1)[0])
+        lam_nd = ph.lam * (u_ref / max(d_bar, 1e-12))
+        mu = (ph.mu_inf / ref) + ((ph.mu_0 / ref) - (ph.mu_inf / ref)) * (
+            1.0 + (lam_nd * gamma) ** ph.a
+        ) ** ((ph.n - 1.0) / ph.a)
+
+    wall = _mask(data, "mask_wall", n, dev)
+    wss = mu * gamma * wall.to(mu.dtype)
+    return u, v, mu, wss
+
+
 def resolve_prior_source(default: str = "stored") -> str:
     """Active prior source from the runtime config, else ``SPECIES_PRIOR_SOURCE``, else default."""
     import os
@@ -335,6 +434,10 @@ def apply_prior_source(data, source: str = "analytic", *, phys_cfg: PhysicsConfi
     * ``stored``   -- leave as-is. **Illegal under the s17 Z2 contract** (these are GT CFD).
     * ``analytic`` -- Poiseuille magnitude + potential-flow direction. Legal.
     * ``zero``     -- all four columns zeroed. The ablation control for Z1.
+    * ``fem``      -- the local Carreau solve under an analytic inlet. Legal (geometry + BCs
+      only), and a ~13x closer base point than ``analytic`` for the hard BC that reads it, so
+      the model's job becomes the FEM's own error rather than the flow. Costs a cached FEM
+      solve per vessel; see :func:`build_fem_priors`.
 
     Always returns a NEW ``Data`` object whose tensors are shared with ``data`` except for the
     rewritten ``x`` (RGP_DEQ_REPAIR_PLAN.md B12).  The old code returned the caller's own
@@ -359,7 +462,8 @@ def apply_prior_source(data, source: str = "analytic", *, phys_cfg: PhysicsConfi
         x[:, COL_MU_PRIOR] = 0.0
         x[:, COL_WSS_PRIOR] = 0.0
     else:
-        u, v, mu, wss = build_analytic_priors(out, phys_cfg=phys_cfg)
+        build = build_fem_priors if src == "fem" else build_analytic_priors
+        u, v, mu, wss = build(out, phys_cfg=phys_cfg)
         x[:, COL_U_PRIOR] = u.to(x.dtype)
         x[:, COL_V_PRIOR] = v.to(x.dtype)
         x[:, COL_MU_PRIOR] = mu.to(x.dtype)

@@ -27,6 +27,7 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
                         lu_refresh: float = 1.0, lu_max_age: int = 25, anderson_m: int = 5,
                         art_visc: float = 0.70, stab: str = "iso",
                         delta_mu_nodal_si: np.ndarray | None = None,
+                        u_init_nd: np.ndarray | None = None,
                         verbose: bool = True):
     """Solve steady-state Carreau Navier-Stokes on the .nas/.msh mesh.
 
@@ -48,6 +49,13 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
                    off unconverged solves.  Pass 0 to disable.
 
     ``tol`` is RELATIVE, on the undamped increment measured over the velocity DoFs only.
+
+    ``u_init_nd`` optional per-TARGET-NODE non-dimensional velocity (u/u_ref, the same units
+                   `u0_pred`/`v0_pred` are stored in) used as the INITIAL ITERATE.  Picard's
+                   first step is `x <- A(x_0)^-1 b`, so this only sets the wind the first
+                   operator is linearised about -- the fixed point, and therefore the returned
+                   field, is unchanged.  Starting from a surrogate field instead of zero skips
+                   the opening transient where the wind is furthest from the answer.
 
     ``delta_mu_nodal_si`` optional per-TARGET-NODE clot viscosity elevation [Pa.s], added to
                    the Carreau viscosity at the quadrature points.  This is what makes the
@@ -451,6 +459,32 @@ def solve_local_t0_flow(mesh_path, data, phys_cfg: PhysicsConfig, max_iters=300,
         return 1e4 * u_t * v_t
 
     x_bc[D_wall.all()] = 0.0
+
+    # Warm start.  Assigned AFTER `x_bc` is built so the boundary rows can be overwritten with
+    # the conditions the solve actually imposes: a surrogate is only approximately no-slip and
+    # only approximately the inlet profile, and seeding the wind with a wall that slips is the
+    # one way a warm start can cost iterations instead of saving them.  Everything else --
+    # pressure included -- keeps its zero, which is what the cold solve starts from.
+    if u_init_nd is not None:
+        u_init = np.asarray(u_init_nd, dtype=np.float64)
+        if u_init.shape != (pos_target_nd.shape[0], 2):
+            raise ValueError(
+                f"u_init_nd has shape {u_init.shape}, expected "
+                f"({pos_target_nd.shape[0]}, 2) (one row per graph node, [u, v] / u_ref)")
+        if not np.isfinite(u_init).all():
+            raise ValueError("u_init_nd contains non-finite entries")
+        # Nearest graph node per velocity DoF.  On a P2 mesh file every DoF location IS a graph
+        # node (vertices then mid-sides), so this is exact; on a P1 file the facet DoFs sit at
+        # edge midpoints the graph may not carry and the nearest node is the right stand-in for
+        # an initial guess.
+        for blk in (basis.nodal_dofs, basis.facet_dofs):
+            if blk.shape[1] == 0:
+                continue
+            _, near = kd.query(basis.doflocs[:, blk[0, :]].T)
+            x[blk[0, :]] = u_init[near, 0] * u_ref
+            x[blk[1, :]] = u_init[near, 1] * u_ref
+        if len(D_all) > 0:
+            x[D_all] = x_bc[D_all]
 
     # Outlet penalty is iterate-independent, so it is assembled once.
     A_outlet = fem.asm(outlet_penalty, basis_outlet) if basis_outlet is not None else None

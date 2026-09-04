@@ -128,6 +128,15 @@ def build_vessel_figure_data(
 
     bio = BiochemConfig(phase="biochem")
     phys = PhysicsConfig(phase="biochem")
+    # The archive's own flow decides how the sample is built, and a SOLVED flow has to be
+    # solved first: `features.build_features` reads `data.u0_pred`, which only the FEM solve
+    # writes.  This was latent while the archive mislabelled itself as `gt`
+    # (eval_strict_temporal hardcoded it); with the label fixed, every consumer that replays
+    # the archive needs the field the archive was actually built on.
+    if oof.flow == "fem" and not hasattr(data, "u0_pred"):
+        from src.clot_ml.v0 import solve_fem_into_pack
+
+        solve_fem_into_pack(data)
     S = build_sample(data, bio, flow=oof.flow, variant="v4")
     wall = np.asarray(S["wall"], dtype=bool)
     solid = solid_mask(data)

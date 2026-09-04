@@ -22,6 +22,9 @@ It reinstalls CPU-only `torch` from `https://download.pytorch.org/whl/cpu`, then
 bridge, both stay in even though the deploy path never calls their functions, because
 `src/data_gen/__init__.py` imports `AnchorGenerator`/`PatientDataExtractor` eagerly at package
 level and pulls them in transitively -- see the comment in `requirements-customer.txt`).
+`scikit-learn` is version-pinned (`==1.8.0`): the readout heads in
+`outputs/clot_ml/locked/clot_gnn_v6/temporal.pkl` are pickled sklearn objects, and sklearn's
+pickle format is not stable across versions.
 
 ## What's in the bundle, and why that's everything it needs
 
@@ -35,7 +38,19 @@ level and pulls them in transitively -- see the comment in `requirements-custome
 - `outputs/clot_ml/locked/{clot_ml_v0,clot_gnn_v6}/` -- the only checkpoints
   `CustomerDeployPipeline.run()` ever loads for this tool (traced end to end: Flow Simulator
   and Scientific modes call the identical pipeline, no extra footprint; no kinematics or
-  wall-model checkpoint is on this path at all).
+  wall-model checkpoint is on this path at all). **Pinned by name, not resolved dynamically**:
+  `clot_ml_0` is being retrained as of 2026-09-03 (see the in-progress
+  `outputs/clot_ml/locked/DeployClot*` folders, no manifest yet). Copying these two specific,
+  already-validated directories means a bundle built today ships the last known-good artifact
+  regardless of what's mid-training alongside it -- bump the two names in
+  `build_customer_bundle.ps1` deliberately once a retrained artifact is promoted and validated.
+- `data/reference/clot_gnn_locked.json` -- `src/clot_ml/locked.py::load_ensemble()` reads this
+  pointer file unconditionally at the top of the function, even on the branch that ignores its
+  contents (an explicit `name=` is passed). Tiny reference JSON, not a checkpoint.
+- `scripts/` -- despite the directory name, this is deploy-reachable: `locked.py`'s readout
+  selection (`expected_tuned` / `resid_adapt`) lazily imports helper functions from
+  `scripts/eval_*.py` at call time. Copied wholesale (7 MB) rather than hand-picking which of
+  the several lazy imports a given run happens to hit.
 - `customer_geometries/README.txt` -- the empty geometry inbox, matching what the app already
   documents for `.msh`/`.nas`/`.pt` uploads.
 - `run.bat` -- launches `python -m src.tools.customer_predict_web --cpu`. The app itself opens
@@ -54,6 +69,18 @@ existing manual checkpoint-promotion scripts -- not wired into CI.
 
 ## Known limitations
 
+- **Unzip to a short path.** Extracting to a deeply nested path (over roughly 240 characters
+  total, e.g. a long chain of subfolders under Downloads, or certain synced-folder setups) hits
+  Windows' legacy `MAX_PATH` (260 char) limit, which breaks loading
+  `sklearn.metrics._pairwise_distances_reduction._datasets_pair.pyd` specifically -- scikit-learn's
+  package nesting is unusually deep, and this is the one file most likely to cross the limit.
+  The symptom is a `ModuleNotFoundError` mentioning `sklearn` on the very first prediction,
+  even though the app itself starts and serves the page fine. `run.bat` checks the path length
+  and warns before this can happen; README.txt tells users to unzip near a drive root (e.g.
+  `C:\LocalFEMSolver\`). Verified: the identical bundle at a short path (~180 chars) runs a
+  full prediction end to end; the same bytes at a long path (~260+ chars) fail on that one
+  import. Not something the build can fix from its side -- it's how Windows resolves paths for
+  the caller, not a property of the files themselves.
 - **Windows only.** No embeddable-Python equivalent bundling story for macOS exists here yet;
   a Mac build would need a different approach (e.g. a relocatable venv + shell launcher).
 - **Unsigned.** First launch triggers a Windows SmartScreen "unrecognized app" prompt (this is
