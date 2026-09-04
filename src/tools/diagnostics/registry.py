@@ -7,7 +7,6 @@ from typing import Callable
 # slug -> import path of module with main(argv) -> int
 DIAGNOSTICS: dict[str, str] = {
     "clot-free-headroom": "src.tools.diagnostics.clot_free_headroom",
-    "crack-001-root": "src.tools.diagnostics.crack_001_root",
     "fem-error-indicators": "src.tools.diagnostics.fem_error_indicators",
     "fem-prior-headroom": "src.tools.diagnostics.fem_prior_headroom",
     "fem-warm-start": "src.tools.diagnostics.fem_warm_start",
@@ -19,7 +18,6 @@ DIAGNOSTICS: dict[str, str] = {
     "prior-vs-model-gate": "src.tools.diagnostics.prior_vs_model_gate",
     "residual-head-audit": "src.tools.diagnostics.residual_head_audit",
     "pi-flux-interaction": "src.tools.diagnostics.pi_flux_interaction",
-    "signs-of-life-001": "src.tools.diagnostics.signs_of_life_001",
     "wound-composition": "src.tools.diagnostics.wound_composition",
     "wound-p003-causes": "src.tools.diagnostics.wound_p003_causes",
 }

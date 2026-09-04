@@ -1,8 +1,7 @@
 """Steady kinematics viz + GraphSAGE biochem deploy smoke.
 
-GNODE teacher/corrector temporal inspector was removed in the 2026-06 GraphSAGE
-migration. Biochem visualization routes to ``predict_species_gnn_deploy``;
-for full species timelines use ``scripts/viz_species_gnn_deploy.py``.
+Steady kinematics (RGP-DEQ / FEM) flow visualisation. The species deploy branch
+that used to hang off this module went with the retired species stack.
 """
 
 from __future__ import annotations
@@ -417,33 +416,6 @@ def _run_phase_comparison_graphsage_redirect(
         run_steady_kinematics_viz(cases=[("comsol_anchor", stem, anchor_path)], time_index=time_index)
     except Exception as exc:  # viz is best-effort
         print(f"[WARN] kinematics viz failed: {exc}", flush=True)
-
-    print(f"[i]  Biochem deploy via GraphSAGE biochem_gnn stack for {stem}", flush=True)
-    try:
-        from src.inference.predict_species_gnn_deploy import predict_species_gnn_deploy
-
-        result = predict_species_gnn_deploy(anchor_path, flow_source="kinematics")
-        print(
-            f"[OK]  GraphSAGE deploy {stem}: clot_F1@t_last={result['clot_f1_t_last']:.3f} "
-            f"health_pass={result['health_pass']} ckpt={Path(result['species_ckpt']).name}",
-            flush=True,
-        )
-        print(
-            "[i]  Full deploy metrics/JSON: "
-            f"python -m src.inference.predict_species_gnn_deploy --graph {anchor_path}",
-            flush=True,
-        )
-        print(
-            "[i]  Species timeline viz: "
-            "python scripts/viz_species_gnn_deploy.py",
-            flush=True,
-        )
-    except Exception as exc:  # deploy needs CUDA + a trained species ckpt
-        print(
-            f"[WARN] GraphSAGE biochem deploy unavailable ({exc}). "
-            "Run on a CUDA host with a trained species ckpt; see docs/BIOCHEM_GNN.md.",
-            flush=True,
-        )
 
 
 def run_phase_comparison(

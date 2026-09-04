@@ -45,10 +45,8 @@ def test_orchestrate_all_runs_kinematics_then_biochem_in_order(monkeypatch):
     monkeypatch.setattr(orchestrate, "_run_module", _fake_run_module)
     orchestrate.main(["all"])
 
-    assert calls == [
-        "src.training.train_kinematics_predictor",
-        "src.training.train_biochem_gnn",
-    ]
+    # The biochem/species trainer was retired; `all` now runs kinematics only.
+    assert calls == ["src.training.train_kinematics_predictor"]
 
 
 def test_orchestrate_kinematics_runs_unified_kinematics(monkeypatch):

@@ -41,17 +41,6 @@ from src.biochem_gnn.config import (
     reference_manifest_path,
     species_ckpt_for_anchor,
 )
-from src.biochem_gnn.model import (
-    MODELED_SPECIES_NAMES,
-    N_MODELED_SPECIES,
-    BiochemDeployConfig,
-    BiochemDeployRollout,
-    BiochemDeployStack,
-    BiochemGNN,
-    BiochemGNNConfig,
-    BiochemGNNRollout,
-    FlowMode,
-)
 
 __all__ = [
     "STACK_NAME",
@@ -88,13 +77,4 @@ __all__ = [
     "normalize_train_phase",
     "is_biochem_gnn_checkpoint_phase",
     "is_deploy_gnn_checkpoint_phase",
-    "BiochemGNN",
-    "BiochemDeployStack",
-    "BiochemDeployConfig",
-    "BiochemGNNConfig",
-    "BiochemDeployRollout",
-    "BiochemGNNRollout",
-    "FlowMode",
-    "MODELED_SPECIES_NAMES",
-    "N_MODELED_SPECIES",
 ]

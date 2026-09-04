@@ -27,9 +27,11 @@ def main(argv: list[str] | None = None) -> None:
     if phase in ("kinematics", "all"):
         print("=== Kinematics training ===")
         _run_module("src.training.train_kinematics_predictor")
-    if phase in ("biochem", "all"):
-        print("=== Biochem training ===")
-        _run_module("src.training.train_biochem_gnn")
+    if phase == "biochem":
+        raise SystemExit(
+            "the biochem/species training stack was retired; the shipped clot model is "
+            "clot_ml_0 (scripts/train_clot_gnn.py -> scripts/promote_clot_ml_0.py)"
+        )
 
 
 if __name__ == "__main__":

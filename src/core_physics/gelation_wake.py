@@ -115,7 +115,7 @@ def make_gelation_wake_blockage(
 
     ``scale_dsrx`` rescales the shear GRADIENT by the same local factor: exact for a uniform
     rescale, first-order otherwise, and the same convention
-    :func:`~src.core_physics.shear_redistribution.make_blockage` uses, so the two gate
+    the retired shear-redistribution blockage used, so the two gate
     branches stay consistent with each other.
 
     An already-committed node keeps at least the gate it ignited with -- ``mu1`` has fired,
