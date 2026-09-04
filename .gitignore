@@ -48,6 +48,7 @@ ENV/
 .vscode/
 .idea/
 .claude/
+.cursor/
 *.swp
 *.swo
 .DS_Store

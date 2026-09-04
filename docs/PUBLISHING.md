@@ -56,7 +56,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_bundle.ps1
 
 This builds the zip (`scripts/build_customer_bundle.ps1`), then tags, pushes, and publishes
 it as a GitHub Release via the `gh` CLI -- one command, and none of the private artifacts it
-packages ever leave this machine or pass through CI.
+packages ever leave this machine or pass through CI. Full detail on what's in the bundle and
+why: [`CUSTOMER_INSTALLER.md`](CUSTOMER_INSTALLER.md).
 
 ## Script surface
 

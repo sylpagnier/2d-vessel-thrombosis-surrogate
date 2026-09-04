@@ -45,6 +45,8 @@ Download the latest **[Predict app release](https://github.com/sylpagnier/2d-ves
 
 This is the recommended path for anyone who just wants to run predictions, not modify the code -- a plain `git clone` of this repo does **not** include the checkpoints or demo geometry (see [`docs/PUBLISHING.md`](docs/PUBLISHING.md)).
 
+![ClotML Predict app: wall clot forming across a stenosis vessel](docs/assets/customer_predict_demo.png)
+
 ---
 
 ## Quick start (development)

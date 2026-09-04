@@ -59,13 +59,18 @@ pickle format is not stable across versions.
 ## Publish
 
 ```
-gh release create v<Version> dist\LocalFEMSolver-Predict-win64-<Version>.zip \
-    --title "Predict UX v<Version>" \
-    --notes "Local FEM Solver Predict, Windows, CPU-only. Unzip and run run.bat."
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_bundle.ps1 -Version <Version>
 ```
 
+`release_bundle.ps1` runs the build above, then tags, pushes, and runs `gh release create` to
+attach the zip to a GitHub Release, with a confirm prompt and rollback if any step fails (see
+[`docs/PUBLISHING.md`](PUBLISHING.md#distributing-the-customer-app)). It requires the `gh` CLI
+to be installed and authenticated (`gh auth login`), and a clean working tree so the bundle
+matches the tag it ships under.
+
 Publishing is a deliberate manual step when the tool changes meaningfully, same as the repo's
-existing manual checkpoint-promotion scripts -- not wired into CI.
+existing manual checkpoint-promotion scripts -- not wired into CI, since the checkpoints and
+demo geometry it packages are gitignored and never reach a CI runner.
 
 ## Known limitations
 

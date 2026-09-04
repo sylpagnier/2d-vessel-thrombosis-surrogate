@@ -41,7 +41,8 @@ Active design and operator docs for **Local FEM Solver**. Lab notebooks, sweep l
 | [../scripts/README.md](../scripts/README.md) | Supported launchers |
 | [../AGENTS.md](../AGENTS.md) | Short agent / contributor cheat sheet |
 | [../data/reference/README.md](../data/reference/README.md) | Tracked baseline manifests |
-| [assets/](assets/) | README figures (e.g. clot timeline) |
+| [CUSTOMER_INSTALLER.md](CUSTOMER_INSTALLER.md) | Building and releasing the self-contained Predict app bundle |
+| [assets/](assets/) | README figures |
 
 ## Archive
 
