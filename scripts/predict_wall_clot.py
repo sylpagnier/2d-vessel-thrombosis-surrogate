@@ -214,7 +214,7 @@ def main() -> int:
                   if hot.any() else "     (nothing ignites)")
 
     if args.score:
-        from src.core_physics.species_pushforward_continuous import resolve_deploy_eval_time_index
+        from src.core_physics.deploy_time_index import resolve_deploy_eval_time_index
         from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
         from src.evaluation.clot_relaxed_metrics import (
             clot_score_from_deploy_dict, compute_clot_relaxed_metrics, metrics_to_deploy_prefix,

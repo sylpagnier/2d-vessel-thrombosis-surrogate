@@ -1,6 +1,6 @@
 {
  "generated_from": "os.environ reads/writes across tracked *.py",
- "total": 471,
+ "total": 468,
  "typed_runtime_bound": [
   "BIOCHEM_KINE_RESOLVE_GROWTH_FACTOR",
   "BIOCHEM_KINE_RESOLVE_MIN_BAND_FRAC",
@@ -247,9 +247,6 @@
   "CLOT_TRIGGER_TRAIN_SOFT_COMMIT",
   "CLOT_V2_CATALYTIC_BETA",
   "CLOT_V2_NUCLEATION_HOPS",
-  "CUSTOMER_COMPOUND",
-  "CUSTOMER_OFFWALL_CKPT",
-  "CUSTOMER_WALL_CKPT",
   "FEM_ASM_THREADS",
   "GMSH_SIZE_FACTOR",
   "KINEMATICS_ANDERSON_M",

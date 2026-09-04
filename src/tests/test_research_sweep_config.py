@@ -10,7 +10,6 @@ import pytest
 from src.evaluation.research_sweep_config import (
     DEFAULT_RESEARCH_FLOW,
     DEFAULT_RESEARCH_MODEL,
-    LEGACY_BIOCHEM_MODEL,
     default_control,
     load_sweep_config,
     list_sweep_configs,
@@ -35,10 +34,13 @@ def test_active_sweeps_default_to_clot_ml_0():
         assert cfg["control"].get("flow") == DEFAULT_RESEARCH_FLOW
 
 
-def test_legacy_stack_coupling_stays_locked_canonical():
-    path = Path("configs/research_sweeps/legacy/15_stack_coupling.json")
-    cfg = load_sweep_config(path)
-    assert cfg["model"] == LEGACY_BIOCHEM_MODEL
+def test_legacy_sweep_model_is_no_longer_supported():
+    """The mat-growth comparison arm is gone; a config asking for it must fail loudly."""
+    with pytest.raises(Exception):
+        normalize_sweep_config(
+            {"id": "x", "arms": [{"name": "a"}], "model": "locked_canonical"},
+            path=Path("x.json"),
+        )
 
 
 def test_normalize_fills_missing_flow():
@@ -49,8 +51,8 @@ def test_normalize_fills_missing_flow():
     assert cfg["control"]["flow"] == DEFAULT_RESEARCH_FLOW
 
 
-def test_list_sweep_configs_excludes_legacy_by_default():
-    active = list_sweep_configs(include_legacy=False)
-    legacy = list_sweep_configs(include_legacy=True)
-    assert len(legacy) >= len(active)
-    assert not any("legacy" in p.parts for p in active)
+def test_list_sweep_configs_has_no_legacy_directory():
+    """The legacy sweep directory was retired with the mat-growth stack."""
+    cfgs = list_sweep_configs()
+    assert cfgs, "no sweep configs found"
+    assert not any("legacy" in p.parts for p in cfgs)

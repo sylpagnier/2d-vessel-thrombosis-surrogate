@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.biochem_gnn.mat_growth_simple import (
+from src.biochem_gnn.wall_cohort_constants import (
     WALL_COHORT_V2_CLOT_FREE,
     WALL_COHORT_V2_GENERALIZATION,
     WALL_COHORT_V2_SEALED_PRE_20260822,

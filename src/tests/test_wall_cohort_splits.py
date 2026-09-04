@@ -1,6 +1,6 @@
 """FIT / DEV / SEALED are disjoint and match the wall-cohort protocol."""
 
-from src.biochem_gnn.mat_growth_simple import (
+from src.biochem_gnn.wall_cohort_constants import (
     WALL_COHORT_V2_DEV_HOLDOUT,
     WALL_COHORT_V2_DEV_TRAIN,
     WALL_COHORT_V2_FIT,

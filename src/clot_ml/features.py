@@ -138,7 +138,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     from src.core_physics.physics_wall_model import (
         deposition_gate, dsrx_gain, integrate_mat_trajectory, t0_flow_fields)
     from src.core_physics.ap_closure import SHIPPED, SHIPPED_DA_SCALE, make_rollout_hook
-    from src.core_physics.species_pushforward_continuous import resolve_deploy_eval_time_index
+    from src.core_physics.deploy_time_index import resolve_deploy_eval_time_index
     from src.core_physics.t0_mu_physics import gt_clot_phi_at_time
 
     n = int(data.num_nodes)

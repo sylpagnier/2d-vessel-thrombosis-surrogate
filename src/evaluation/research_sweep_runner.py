@@ -1,4 +1,4 @@
-"""Research sweep rollout backends: clot_ml_0 + in-house FEM (default) or legacy biochem."""
+"""Research sweep rollout backend: clot_ml_0 on the in-house FEM t=0 flow."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from src.evaluation.research_parameters import (
 )
 from src.evaluation.research_sweep_geometry import load_or_build_research_graph
 from src.inference.customer_pipeline import (
-    DEFAULT_MAT_LEG,
     CustomerDeployPipeline,
 )
 
@@ -196,28 +195,6 @@ def _hop_from_wall(data) -> np.ndarray | None:
         return None
 
 
-def run_legacy_biochem_arm(
-    *,
-    pipeline: CustomerDeployPipeline,
-    data,
-    geom_spec: dict[str, Any],
-    env_overrides: dict[str, str] | None,
-    include_velocity: bool,
-    progress: Callable[[str], None] | None = None,
-):
-    """Legacy biochem species + phi rollout (locked_canonical)."""
-    t_final_s = float(geom_spec.get("t_final_s", 30000.0))
-    traj = pipeline.run(
-        data,
-        t_final_s=t_final_s,
-        include_velocity=include_velocity,
-        extra_env=env_overrides or None,
-        progress=progress,
-    )
-    pack = research_parameters_from_trajectory(traj)
-    return traj, pack
-
-
 def run_research_arm(
     *,
     arm: dict[str, Any],
@@ -276,25 +253,11 @@ def run_research_arm(
             "clot_model": clot_model,
             "flow": flow_use,
         }
-    elif model_norm in ("locked_canonical", "biochem", "legacy"):
-        if pipeline is None:
-            raise ValueError("locked_canonical requires CustomerDeployPipeline (legacy_species)")
-        log(f"[i] Arm {name}: rolling out legacy biochem deploy...")
-        traj, pack = run_legacy_biochem_arm(
-            pipeline=pipeline,
-            data=data,
-            geom_spec=geom_spec,
-            env_overrides=env_overrides,
-            include_velocity=include_velocity,
-            progress=log,
-        )
-        model_meta = {
-            "resolver": "locked_canonical",
-            "wall_ckpt": str(pipeline.wall_ckpt),
-            "mat_leg": pipeline.mat_leg,
-        }
     else:
-        raise ValueError(f"Unsupported model={model!r}")
+        raise ValueError(
+            f"Unsupported model={model!r}. The legacy biochem / "
+            "locked_canonical arm was removed; sweeps run clot_ml_0 on FEM t=0 flow."
+        )
 
     arm_out = {
         "name": name,
@@ -378,7 +341,7 @@ def run_sweep(
     """Run all arms in a normalized sweep config and write summary.json."""
     from pathlib import Path
 
-    from src.evaluation.research_sweep_config import DEFAULT_RESEARCH_MODEL, LEGACY_BIOCHEM_MODEL
+    from src.evaluation.research_sweep_config import DEFAULT_RESEARCH_MODEL
     from src.evaluation.research_sweep_geometry import default_mesh_cache_dir
     from src.utils.paths import get_project_root
 
@@ -403,8 +366,6 @@ def run_sweep(
 
     log(f"[i] Sweep {cfg.get('id')}: {len(arms)} arm(s) -> {out_dir}")
     log(f"[i] Model: {model}  flow={flow}  clot_model={clot_model}")
-    if model == LEGACY_BIOCHEM_MODEL and pipeline is not None:
-        log(f"[i] Legacy mat_leg={pipeline.mat_leg}  ckpt={pipeline.wall_ckpt}")
 
     # One bad arm used to raise straight out of the sweep, so an unattended run lost every
     # later arm and wrote no summary at all.  Keep going, but record what failed and re-raise
@@ -457,9 +418,6 @@ def run_sweep(
         "failed_arms": failed_arms,
         "arms": summary_rows,
     }
-    if pipeline is not None and model == LEGACY_BIOCHEM_MODEL:
-        summary["wall_ckpt"] = str(pipeline.wall_ckpt.as_posix())
-        summary["mat_leg"] = pipeline.mat_leg
 
     summary_path = out_dir / "summary.json"
     import json
@@ -478,8 +436,6 @@ def run_sweep(
 __all__ = [
     "ClotMlResearchTrajectory",
     "run_clot_ml_0_arm",
-    "run_legacy_biochem_arm",
     "run_research_arm",
     "run_sweep",
-    "DEFAULT_MAT_LEG",
 ]

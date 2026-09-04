@@ -172,7 +172,7 @@ def test_locked_ensemble_manifest_is_consistent():
     man = json.loads((root / p["manifest"].split("/")[-1]).read_text())
     assert man["name"] == p["name"]
 
-    from src.biochem_gnn.mat_growth_simple import (
+    from src.biochem_gnn.wall_cohort_constants import (
         WALL_COHORT_V2_GENERALIZATION,
         WALL_COHORT_V2_SEALED_PRE_20260822,
     )

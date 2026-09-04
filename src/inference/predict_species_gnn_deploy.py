@@ -36,7 +36,7 @@ from src.inference.species_gnn_deploy_env import (
     species_ckpt_for_anchor,
     species_gnn_deploy_env,
 )
-from src.core_physics.species_pushforward_continuous import default_deploy_metric_times
+from src.core_physics.deploy_time_index import default_deploy_metric_times
 from src.evaluation.clot_relaxed_metrics import legacy_clot_f1_metrics as _clot_metrics
 
 

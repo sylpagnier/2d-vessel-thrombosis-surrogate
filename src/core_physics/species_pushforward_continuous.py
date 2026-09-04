@@ -9,6 +9,20 @@ See ``docs/SPECIES_GNN_LADDER.md``.
 
 from __future__ import annotations
 
+# Deploy time-index arithmetic moved to its own module: it is the only part of this
+# file the shipped clot_ml feature builder needs, and importing it from here pulled
+# the whole species stack into the product's import closure.
+from src.core_physics.deploy_time_index import (  # noqa: F401,E402
+    LEGACY_CAPPED_DEPLOY_HORIZON,
+    default_deploy_metric_times,
+    deploy_eval_time_index,
+    deploy_eval_use_full_timeline,
+    deploy_horizon_steps,
+    graph_last_time_index,
+    legacy_capped_deploy_time_index,
+    resolve_deploy_eval_time_index,
+)
+
 import json
 import math
 import contextlib
@@ -198,17 +212,6 @@ def parse_biochem_train_anchors(
 
 # Historical short-horizon regime on comsol007 (~53 macro-steps, ~2.2 h physical; F1 ~0.70-0.73).
 # Not the default deploy eval horizon — use ``graph_last_time_index`` / ``deploy_eval_time_index``.
-LEGACY_CAPPED_DEPLOY_HORIZON = 53
-
-
-def graph_last_time_index(n_times: int) -> int:
-    """Last macro-step index for a graph with ``n_times`` knots (0-based)."""
-    return max(int(n_times) - 1, 0)
-
-
-def legacy_capped_deploy_time_index(n_times: int) -> int:
-    """Legacy short-horizon deploy checkpoint."""
-    return min(LEGACY_CAPPED_DEPLOY_HORIZON, graph_last_time_index(n_times))
 
 
 # Minimum steps left after the latest allowed t0, regardless of coverage_frac -- must clear the
@@ -258,7 +261,6 @@ def resolve_train_t0_max(n_times: int) -> int | None:
     if pushforward_train_t0_per_vessel():
         return train_t0_max_for_n_times(n_times)
     return pushforward_train_t0_max()
-
 
 
 def continuous_ckpt_path() -> Path:
@@ -1963,60 +1965,6 @@ def continuous_speed_fp_weight() -> float:
         return max(float(raw), 0.0)
     except ValueError:
         return 0.0
-
-
-def deploy_horizon_steps() -> int:
-    try:
-        from src.architecture.runtime_config import get_active_runtime
-
-        rt = get_active_runtime()
-        if rt is not None:
-            return max(int(rt.rollout.deploy_horizon), 0)
-    except Exception:
-        pass
-    raw = (os.environ.get("SPECIES_CONTINUOUS_DEPLOY_HORIZON") or "0").strip()
-    try:
-        return max(int(float(raw)), 0)
-    except ValueError:
-        return 0
-
-
-def deploy_eval_use_full_timeline() -> bool:
-    try:
-        from src.architecture.runtime_config import get_active_runtime
-
-        rt = get_active_runtime()
-        if rt is not None:
-            return bool(rt.rollout.deploy_eval_full)
-    except Exception:
-        pass
-    raw = (os.environ.get("SPECIES_CONTINUOUS_DEPLOY_EVAL_FULL") or "1").strip().lower()
-    return raw in ("1", "true", "yes", "on", "full", "last")
-
-
-def deploy_eval_time_index(n_times: int) -> int:
-    """Deploy metric time index: per-graph last step unless explicitly capped."""
-    last = graph_last_time_index(n_times)
-    if deploy_eval_use_full_timeline():
-        return last
-    h = deploy_horizon_steps()
-    if h > 0:
-        return min(h, last)
-    return last
-
-
-def resolve_deploy_eval_time_index(n_times: int, *, time_index: int | None = None) -> int:
-    """Resolve eval index from explicit override or deploy convention."""
-    if time_index is not None:
-        return max(0, min(int(time_index), graph_last_time_index(n_times)))
-    return deploy_eval_time_index(n_times)
-
-
-def default_deploy_metric_times(n_times: int) -> list[int]:
-    """Standard deploy eval grid: t=0, mid probes, per-graph last."""
-    last = graph_last_time_index(n_times)
-    candidates = (0, 27, legacy_capped_deploy_time_index(n_times), last)
-    return sorted({max(0, min(int(t), last)) for t in candidates})
 
 
 def train_deploy_eval_flow_source() -> str:

@@ -21,23 +21,13 @@ from src.evaluation.research_sweep_presets import (
 from src.utils.paths import get_project_root
 
 SWEEPS_DIR = Path("configs/research_sweeps")
-LEGACY_SWEEPS_DIR = Path("configs/research_sweeps/legacy")
 OUTPUT_ROOT = Path("outputs/research_sweeps")
 
 DEFAULT_RESEARCH_MODEL = "clot_ml_0"
 DEFAULT_RESEARCH_FLOW = "fem"
 DEFAULT_CLOT_MODEL = "clot_ml_0"
-LEGACY_BIOCHEM_MODEL = "locked_canonical"
 
-SUPPORTED_MODELS = frozenset(
-    {
-        DEFAULT_RESEARCH_MODEL,
-        "clot_ml_v0",
-        LEGACY_BIOCHEM_MODEL,
-        "biochem",
-        "legacy",
-    }
-)
+SUPPORTED_MODELS = frozenset({DEFAULT_RESEARCH_MODEL, "clot_ml_v0"})
 
 
 def default_control() -> dict[str, Any]:
@@ -94,28 +84,17 @@ def _abs(path: Path | str) -> Path:
     return p
 
 
-def list_sweep_configs(*, include_legacy: bool = False) -> list[Path]:
-    roots = [_abs(SWEEPS_DIR)]
-    if include_legacy:
-        roots.append(_abs(LEGACY_SWEEPS_DIR))
-    out: list[Path] = []
-    for root in roots:
-        if root.is_dir():
-            out.extend(sorted(root.glob("*.json")))
-    return out
+def list_sweep_configs() -> list[Path]:
+    root = _abs(SWEEPS_DIR)
+    return sorted(root.glob("*.json")) if root.is_dir() else []
 
 
-def resolve_sweep_path(name: str, *, include_legacy: bool = False) -> Path:
+def resolve_sweep_path(name: str) -> Path:
     raw = str(name).strip()
-    if raw.startswith("legacy/"):
-        include_legacy = True
-        raw = raw.split("/", 1)[1]
     p = Path(raw)
     if p.is_file():
         return p.resolve()
     search_roots = [_abs(SWEEPS_DIR)]
-    if include_legacy:
-        search_roots.append(_abs(LEGACY_SWEEPS_DIR))
     for root in search_roots:
         cand = root / raw
         if cand.is_file():
@@ -170,7 +149,7 @@ def normalize_sweep_config(cfg: dict[str, Any], *, path: Path | None = None) -> 
     return cfg
 
 
-def load_sweep_config(path: Path | str, *, include_legacy: bool = True) -> dict[str, Any]:
+def load_sweep_config(path: Path | str) -> dict[str, Any]:
     p = Path(path)
     cfg = json.loads(p.read_text(encoding="utf-8"))
     return normalize_sweep_config(cfg, path=p)
@@ -180,8 +159,6 @@ __all__ = [
     "DEFAULT_CLOT_MODEL",
     "DEFAULT_RESEARCH_FLOW",
     "DEFAULT_RESEARCH_MODEL",
-    "LEGACY_BIOCHEM_MODEL",
-    "LEGACY_SWEEPS_DIR",
     "OUTPUT_ROOT",
     "SUPPORTED_MODELS",
     "SWEEPS_DIR",

@@ -219,59 +219,6 @@ def enforce_owner_and_monotone(series: dict[int, np.ndarray], wall: np.ndarray,
     return out
 
 
-def predict_temporal_v3(bundle: dict, data, times, *, flow: str = "gt",
-                        sample: dict | None = None) -> dict:
-    """Time-conditioned prediction: P(clot at t) is a direct model output, not a schedule
-    imposed on a static onset ranking.  Returns ``{score, mask, onset, series}`` with the
-    same shape as :func:`predict_clot_series`, so callers do not need to know which
-    generation shipped."""
-    from scripts.promote_clot_gnn_v3 import node_feats, time_row  # noqa: PLC0415
-    from src.clot_ml.temporal import ode_trajectory  # noqa: PLC0415
-    from src.config import BiochemConfig  # noqa: PLC0415
-
-    bio = BiochemConfig(phase="biochem")
-    S = sample if sample is not None else build_sample(data, bio, flow=flow)
-    wall = S["wall"]
-    crit = float(bio.viscosity_mat_crit)
-
-    sc = predict_scores(bundle["ens"], S)
-    gnn_mask = ((sc >= THRESH_WALL) & wall) | ((sc >= THRESH_OFF) & ~wall)
-
-    traj, t_grid = ode_trajectory(data, bio, flow=flow)
-    r0 = traj[1] / max(float(t_grid[1] - t_grid[0]), 1e-9)
-    hot = traj >= crit
-    T = traj.shape[0]
-    oon = np.where(hot.any(0), hot.argmax(0), T)
-    Xn = node_feats(S, r0, oon, T, sc)
-
-    clf = bundle["clf"]
-    P = np.zeros((len(times), len(wall)), dtype=np.float32)
-    for j, ti in enumerate(times):
-        P[j] = clf.predict_proba(time_row(Xn, int(ti), T, oon))[:, 1]
-    Pmono = np.maximum.accumulate(P, axis=0)
-
-    widx = np.flatnonzero(wall)
-    owner = S["owner"] if "owner" in S else widx[np.zeros(len(wall), dtype=int)]
-
-    raw = {int(ti): gnn_mask & (Pmono[j] >= np.where(wall, bundle["thresh_wall"],
-                                                     bundle["thresh_off"]))
-           for j, ti in enumerate(times)}
-    series = enforce_owner_and_monotone(raw, wall, owner, times)
-
-    onset = np.full(len(wall), -1, dtype=int)
-    seen = np.zeros(len(wall), dtype=bool)
-    for ti in times:
-        newly = series[int(ti)] & ~seen
-        onset[newly] = int(ti)
-        seen |= series[int(ti)]
-    score = Pmono[-1] if len(times) else sc
-    return dict(score=score, mask=series[int(times[-1])], onset=onset, series=series)
-
-
-# ---------------------------------------------------------------------------
-# v4: expected-score readout + ODE-anchored learned off-wall lag
-# (docs/PHASE10_V4.md 10, 15; scripts/promote_clot_gnn_v4_temporal.py)
-# ---------------------------------------------------------------------------
 def load_temporal_v4(name: str | None = None) -> dict:
     """Load a v4-kind artifact: the v4 GNN ensemble plus the temporal readout.
 
@@ -360,7 +307,7 @@ def _committed_set_v4(S: dict, sc: np.ndarray, temporal: dict) -> np.ndarray:
 def predict_temporal_v4(bundle: dict, data, times, *, flow: str = "gt",
                         sample: dict | None = None) -> dict:
     """Time-conditioned v4 prediction.  Returns ``{score, mask, onset, series}``, the same
-    shape as :func:`predict_clot_series` / :func:`predict_temporal_v3`.
+    shape as :func:`predict_clot_series`.
 
     ``times`` is used directly as the evaluation grid (sorted, deduplicated) -- the
     time-resolved transport field (mat_adv_t) is solved fresh for exactly these times, so
@@ -652,5 +599,14 @@ def predict_default_series(bundle: dict, kind: str, data, times, *, flow: str = 
     if kind == "temporal_v4":
         return predict_temporal_v4(bundle, data, times, flow=flow, sample=sample)
     if kind == "temporal_v3":
-        return predict_temporal_v3(bundle, data, times, flow=flow, sample=sample)
+        # `clot_gnn_v3` is a retired generation. Its promotion script
+        # (`scripts/promote_clot_gnn_v3.py`) was deleted, so the reader that went
+        # with it could not be imported either -- loading such an artifact raised a
+        # bare ImportError about a missing module, which named neither the cause nor
+        # the cure. Say so instead.
+        raise NotImplementedError(
+            "clot_ml artifact kind 'temporal_v3' (clot_gnn_v3) is retired: its "
+            "promotion script and reader were removed. Re-promote with "
+            "scripts/promote_clot_ml_0.py, or recover the v3 reader from git history."
+        )
     return predict_clot_series(bundle, data, times, flow=flow, sample=sample)

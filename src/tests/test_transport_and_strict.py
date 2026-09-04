@@ -16,7 +16,7 @@ VIZ_RELEASE_DATE = "2026-08-22"
 
 def sealed_at_promotion(manifest: dict) -> set:
     """The SEALED set that applied when this artifact was promoted."""
-    from src.biochem_gnn.mat_growth_simple import (
+    from src.biochem_gnn.wall_cohort_constants import (
         WALL_COHORT_V2_GENERALIZATION,
         WALL_COHORT_V2_SEALED_PRE_20260822,
     )
