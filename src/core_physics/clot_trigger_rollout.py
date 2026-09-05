@@ -26,6 +26,12 @@ from src.core_physics.clot_nucleation_mask import (
 )
 from src.core_physics.clot_phi_simple import build_clot_phi_step, clot_phi_model_uses_mpnn
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_PHI_TRIGGER_TBPTT_DETACH = "1"
+
+
 GrowthSeed = Literal["gt", "pred"]
 
 
@@ -110,7 +116,7 @@ def clot_phi_trigger_rollout_enabled() -> bool:
 
 
 def clot_phi_trigger_rollout_detach_prev() -> bool:
-    raw = (os.environ.get("CLOT_PHI_TRIGGER_TBPTT_DETACH") or "1").strip().lower()
+    raw = CLOT_PHI_TRIGGER_TBPTT_DETACH.strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 

@@ -17,6 +17,7 @@ import torch
 
 from src.config import BiochemConfig, PhysicsConfig, STATE_CHANNEL_MU_EFF_ND
 from src.core_physics.clot_phi_simple import (
+
     _graph_dilate,
     _wall_mask_from_data,
     cap_mu_eff_si,
@@ -25,6 +26,12 @@ from src.core_physics.clot_phi_simple import (
     clot_phi_thresh_si,
     dgamma_dx_slice_mask,
 )
+
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+SPECIES_GROWTH_DILATION = "1"
+
 
 
 def clot_ceiling_hops() -> int:
@@ -189,9 +196,9 @@ def resolve_growth_support_at_time(
     try:
         from src.architecture.pushforward_config import resolve_config
         _cfg = resolve_config()
-        dil_hops = int(_cfg.growth_dilation) if _cfg is not None else int(os.environ.get("SPECIES_GROWTH_DILATION", "1"))
+        dil_hops = int(_cfg.growth_dilation) if _cfg is not None else int(SPECIES_GROWTH_DILATION)
     except Exception:
-        dil_hops = int(os.environ.get("SPECIES_GROWTH_DILATION", "1"))
+        dil_hops = int(SPECIES_GROWTH_DILATION)
     if t <= 0:
         return t0 & ceiling
 

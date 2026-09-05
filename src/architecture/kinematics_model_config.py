@@ -18,6 +18,21 @@ from src.architecture.ginodeq import GINO_DEQ, RGP_DEQ
 from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX
 from src.utils.paths import data_root, get_project_root, kinematics_dir
 
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_BC_ENVELOPE = os.environ.get("KINEMATICS_BC_ENVELOPE", "0")
+KINEMATICS_BC_ENVELOPE_DECAY = os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0")
+KINEMATICS_BC_ENVELOPE_FLOOR = os.environ.get("KINEMATICS_BC_ENVELOPE_FLOOR", "0.0")
+KINEMATICS_DECODER_SKIP = os.environ.get("KINEMATICS_DECODER_SKIP", "0")
+KINEMATICS_FOURIER_LEARNABLE = "0"
+KINEMATICS_RESIDUAL_GAIN = os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0")
+KINEMATICS_RESIDUAL_REZERO = os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0")
+KINEMATICS_USE_WIDTH_PRIORS = "1"
+KINEMATICS_WSS_FUSE = "0"
+
+
 KINEMATICS_MODEL_CONFIG_SCHEMA = 1
 KINEMATICS_REFERENCE_REL = Path("reference") / "kinematics_best_20260426T184600Z.json"
 KINEMATICS_ARCH_MANIFEST_NAME = "kinematics_architecture.json"
@@ -63,6 +78,7 @@ def snapshot_rgp_deq_model_config(model: RGP_DEQ) -> dict[str, Any]:
         "bc_envelope": bool(getattr(model, "bc_envelope", False)),
         "bc_lambda": float(getattr(model, "bc_lambda", 10.0)),
         "bc_envelope_decay": float(getattr(model, "bc_envelope_decay", 0.0)),
+        "bc_envelope_floor": float(getattr(model, "bc_envelope_floor", 0.0)),
         "fourier_learnable": bool(getattr(model, "fourier_learnable", False)),
         "shear_head": bool(getattr(model, "shear_head", False)),
         "decoder_skip": bool(getattr(model, "decoder_skip", False)),
@@ -164,7 +180,7 @@ def infer_num_fourier_freqs_from_state_dict(
     if w is None or not hasattr(w, "shape") or len(w.shape) != 2:
         return None
     if use_width_priors is None:
-        use_width_priors = bool(int(os.environ.get("KINEMATICS_USE_WIDTH_PRIORS", "1")))
+        use_width_priors = bool(int(KINEMATICS_USE_WIDTH_PRIORS))
     width_extra = 3 if use_width_priors else 0
     encoded_channels = int(w.shape[1])
     bands = (encoded_channels - int(in_channels) - width_extra) // 10
@@ -198,22 +214,24 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["wss_fuse"] = (
                 inferred_wss
                 if inferred_wss is not None
-                else bool(int(os.environ.get("KINEMATICS_WSS_FUSE", "0")))
+                else bool(int(KINEMATICS_WSS_FUSE))
             )
         if "fourier_learnable" not in ctor or ctor.get("fourier_learnable") is None:
             inferred_fl = infer_fourier_learnable_from_state_dict(state_dict)
             ctor["fourier_learnable"] = (
                 inferred_fl
                 if inferred_fl is not None
-                else bool(int(os.environ.get("KINEMATICS_FOURIER_LEARNABLE", "0")))
+                else bool(int(KINEMATICS_FOURIER_LEARNABLE))
             )
         if "bc_envelope" not in ctor or ctor.get("bc_envelope") is None:
-            ctor["bc_envelope"] = bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
+            ctor["bc_envelope"] = bool(int(KINEMATICS_BC_ENVELOPE))
         if ctor.get("bc_lambda") is None:
             ctor["bc_lambda"] = float(os.environ.get("KINEMATICS_BC_LAMBDA", "10.0"))
         if ctor.get("bc_envelope_decay") is None:
             ctor["bc_envelope_decay"] = float(
-                os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0"))
+                KINEMATICS_BC_ENVELOPE_DECAY)
+        if ctor.get("bc_envelope_floor") is None:
+            ctor["bc_envelope_floor"] = float(KINEMATICS_BC_ENVELOPE_FLOOR)
         if "shear_head" not in ctor or ctor.get("shear_head") is None:
             ctor["shear_head"] = any(str(k).startswith("shear_decoder.") for k in state_dict)
         # The tensors outrank the manifest for both of these: the decoder width and the presence
@@ -223,17 +241,17 @@ def resolve_rgp_deq_ctor_kwargs(
         if inferred_skip is not None:
             ctor["decoder_skip"] = inferred_skip
         elif "decoder_skip" not in ctor or ctor.get("decoder_skip") is None:
-            ctor["decoder_skip"] = bool(int(os.environ.get("KINEMATICS_DECODER_SKIP", "0")))
+            ctor["decoder_skip"] = bool(int(KINEMATICS_DECODER_SKIP))
         # The tensor is the truth here too: `residual_scale` exists in the state dict iff the
         # model was built with the flag, so a manifest cannot describe a model that will not load.
         has_rezero = any(str(k) == "residual_scale" for k in state_dict)
         if has_rezero or ctor.get("residual_rezero") is None:
             ctor["residual_rezero"] = bool(has_rezero) if has_rezero else bool(
-                int(os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0"))
+                int(KINEMATICS_RESIDUAL_REZERO)
             )
         inferred_gain = infer_residual_gain_from_state_dict(state_dict)
         ctor["residual_gain"] = bool(inferred_gain) if inferred_gain is not None else bool(
-            int(os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0"))
+            int(KINEMATICS_RESIDUAL_GAIN)
         )
         return ctor
 
@@ -260,6 +278,8 @@ def resolve_rgp_deq_ctor_kwargs(
             ctor["bc_lambda"] = float(saved["bc_lambda"])
         if "bc_envelope_decay" in saved:
             ctor["bc_envelope_decay"] = float(saved["bc_envelope_decay"])
+        if "bc_envelope_floor" in saved:
+            ctor["bc_envelope_floor"] = float(saved["bc_envelope_floor"])
         if "fourier_learnable" in saved:
             ctor["fourier_learnable"] = bool(saved["fourier_learnable"])
         if "decoder_skip" in saved:

@@ -20,6 +20,16 @@ from typing import Any, Dict, Mapping, Optional
 
 from src.utils.paths import reports_training_dir
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_TRAINING_LOG = "1"
+BIOCHEM_TRAINING_LOG_INDEX = "1"
+BIOCHEM_TRAINING_LOG_KEEP = "20"
+KINEMATICS_TRAINING_DIARY = "1"
+KINEMATICS_TRAINING_DIARY_PATH = ""
+
+
 # Env keys copied into biochem ``meta`` / index rows (comparison-relevant knobs only).
 _BIOCHEM_RUN_LOG_ENV_KEYS: tuple[str, ...] = (
     "BIOCHEM_RUN_NOTE",
@@ -117,7 +127,7 @@ class TrainingDiary:
     def __init__(self, phase: str, enabled: Optional[bool] = None):
         self.phase = phase
         if enabled is None:
-            raw = os.environ.get("KINEMATICS_TRAINING_DIARY", "1").strip().lower()
+            raw = KINEMATICS_TRAINING_DIARY.strip().lower()
             enabled = raw not in ("0", "false", "no", "off")
         self.enabled = enabled
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -128,7 +138,7 @@ class TrainingDiary:
         reports = reports_training_dir(self.phase)
         self.run_dir = reports / self.run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        custom = os.environ.get("KINEMATICS_TRAINING_DIARY_PATH", "").strip()
+        custom = KINEMATICS_TRAINING_DIARY_PATH.strip()
         if custom:
             self.path = Path(custom)
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +191,7 @@ class BiochemRunLogger:
 
     def __init__(self, enabled: Optional[bool] = None):
         if enabled is None:
-            raw = os.environ.get("BIOCHEM_TRAINING_LOG", "1").strip().lower()
+            raw = BIOCHEM_TRAINING_LOG.strip().lower()
             enabled = raw not in ("0", "false", "no", "off")
         self.enabled = enabled
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -193,7 +203,7 @@ class BiochemRunLogger:
             return
         reports = reports_training_dir("biochem")
         try:
-            keep = max(1, int(os.environ.get("BIOCHEM_TRAINING_LOG_KEEP", "20")))
+            keep = max(1, int(BIOCHEM_TRAINING_LOG_KEEP))
         except ValueError:
             keep = 20
         self.run_dir = reports / self.run_id
@@ -258,7 +268,7 @@ class BiochemRunLogger:
         self._append("end", end_row)
         if self.run_dir is None:
             return
-        index_on = (os.environ.get("BIOCHEM_TRAINING_LOG_INDEX", "1") or "").strip().lower() not in (
+        index_on = (BIOCHEM_TRAINING_LOG_INDEX or "").strip().lower() not in (
             "0",
             "false",
             "no",

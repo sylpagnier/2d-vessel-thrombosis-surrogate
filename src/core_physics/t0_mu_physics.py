@@ -10,6 +10,12 @@ import torch
 from src.config import STATE_CHANNEL_MU_EFF_ND, BiochemConfig, PhysicsConfig
 from src.utils import species_channels as sc
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+T0_GAMMA_MODE = "proxy"
+
+
 _ROLLOUT_CACHE: dict[tuple, dict[int, dict[str, torch.Tensor]]] = {}
 
 
@@ -61,7 +67,7 @@ def gt_clot_phi_at_time(
 
 
 def resolve_t0_gamma_mode() -> str:
-    return (os.environ.get("T0_GAMMA_MODE") or "proxy").strip().lower()
+    return T0_GAMMA_MODE.strip().lower()
 
 
 def resolve_t0_flow_uv_nd(

@@ -14,6 +14,22 @@ from src.architecture.spectral_linear import SpectralLinear
 from src.architecture.siren_decoder import SIRENDecoder
 from src.config import NodeFeat, PhysicsConfig, PredChannels, WIDTH_D1_MAX, WIDTH_D2_MAX
 from src.utils.batching import get_batch_tensor
+
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_BC_ENVELOPE = os.environ.get("KINEMATICS_BC_ENVELOPE", "0")
+KINEMATICS_BC_ENVELOPE_DECAY = os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0")
+KINEMATICS_BC_ENVELOPE_FLOOR = os.environ.get("KINEMATICS_BC_ENVELOPE_FLOOR", "0.0")
+KINEMATICS_DECODER_SKIP = os.environ.get("KINEMATICS_DECODER_SKIP", "0")
+KINEMATICS_FOURIER_LEARNABLE = "0"
+KINEMATICS_PHYS_GAT_PRIORS_MULTIPLY_BEFORE_ADDITIVE = "0"
+KINEMATICS_RESIDUAL_GAIN = os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0")
+KINEMATICS_RESIDUAL_GAIN_CLAMP = "3.0"
+KINEMATICS_RESIDUAL_REZERO = os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0")
+KINEMATICS_WSS_FUSE = "0"
+
 def _spectral_or_plain_linear(in_features: int, out_features: int, bias: bool, spectral: bool) -> nn.Module:
     if spectral:
         return SpectralLinear(in_features, out_features, bias=bias)
@@ -113,7 +129,7 @@ class MultiHeadPhysicsGATConv(MessagePassing):
         # Candidate toggle: multiply edge projection into logits before additive log-modulators.
         # Env: KINEMATICS_PHYS_GAT_PRIORS_MULTIPLY_BEFORE_ADDITIVE=1
         self.priors_multiply_before_add = bool(
-            int(os.environ.get("KINEMATICS_PHYS_GAT_PRIORS_MULTIPLY_BEFORE_ADDITIVE", "0"))
+            int(KINEMATICS_PHYS_GAT_PRIORS_MULTIPLY_BEFORE_ADDITIVE)
         )
 
         self.lin_src = _spectral_or_plain_linear(latent_dim, latent_dim, True, use_spectral_norm)
@@ -279,6 +295,7 @@ class RGP_DEQ(nn.Module):
         bc_envelope: Optional[bool] = None,
         bc_lambda: Optional[float] = None,
         bc_envelope_decay: Optional[float] = None,
+        bc_envelope_floor: Optional[float] = None,
         fourier_learnable: Optional[bool] = None,
         shear_head: bool = True,
         decoder_skip: Optional[bool] = None,
@@ -316,7 +333,7 @@ class RGP_DEQ(nn.Module):
         self.bc_envelope = (
             bool(bc_envelope)
             if bc_envelope is not None
-            else bool(int(os.environ.get("KINEMATICS_BC_ENVELOPE", "0")))
+            else bool(int(KINEMATICS_BC_ENVELOPE))
         )
         # Snapshotted alongside `bc_envelope`, not read from the environment at load time.
         # It sets the SHAPE of the hard BC -- `u = prior + (1 - exp(-bc_lambda*sdf)) * r` -- so
@@ -345,17 +362,44 @@ class RGP_DEQ(nn.Module):
         self.bc_envelope_decay = float(
             bc_envelope_decay
             if bc_envelope_decay is not None
-            else os.environ.get("KINEMATICS_BC_ENVELOPE_DECAY", "0.0")
+            else KINEMATICS_BC_ENVELOPE_DECAY
         )
+        # Lower bound on the far-field decay, so BAND-LOCALISED does not mean CONFINED:
+        #
+        #     env(sdf) = (1 - exp(-bc_lambda*sdf)) * (floor + (1 - floor)*exp(-decay*sdf))
+        #
+        # `0.0` is exactly the decayed envelope above, so this defaults to a no-op, and the
+        # value at the wall is still exactly zero for any floor -- the hard BC is untouched.
+        #
+        # Why it exists.  At `decay=12` the envelope in the core is `exp(-12*sdf)`, which is
+        # 2.5e-3 at mid-lumen: the head has no authority there at all, by construction.  That
+        # is right for a prior whose error is a near-wall film, and it is exactly wrong for the
+        # two vessels the deploy score is actually lost on -- `comsol045` and `comsol046`, the
+        # highest-peak-velocity vessels in the corpus, whose FEM prior misplaces a downstream
+        # shear layer and reads rel-L2 0.53 / 0.67 with the error entirely OFF the wall
+        # (DEPLOYCLOT.md s1).  Measured: E5's prediction on those two is bit-identical to the
+        # prior it was handed (0.5335 / 0.6705, gate Jaccard 0.487 / 0.234 -> 0.487 / 0.234).
+        # Those two carry 37% of the whole FEM-vs-GT wall deploy gap, so a head that cannot
+        # reach them cannot close it.  A floor buys core authority back at a fixed, auditable
+        # fraction of the wall band's, instead of trading the band away.
+        self.bc_envelope_floor = float(
+            bc_envelope_floor
+            if bc_envelope_floor is not None
+            else KINEMATICS_BC_ENVELOPE_FLOOR
+        )
+        if not 0.0 <= self.bc_envelope_floor <= 1.0:
+            raise ValueError(
+                "bc_envelope_floor must lie in [0, 1] (0 = the decayed envelope, 1 = the plain "
+                f"one); got {self.bc_envelope_floor}")
         self.wss_fuse = (
             bool(wss_fuse)
             if wss_fuse is not None
-            else bool(int(os.environ.get("KINEMATICS_WSS_FUSE", "0")))
+            else bool(int(KINEMATICS_WSS_FUSE))
         )
         self.fourier_learnable = (
             bool(fourier_learnable)
             if fourier_learnable is not None
-            else bool(int(os.environ.get("KINEMATICS_FOURIER_LEARNABLE", "0")))
+            else bool(int(KINEMATICS_FOURIER_LEARNABLE))
         )
 
         # WSS decoder: either z-only (legacy) or fused with (u,v,p) and mu.
@@ -415,16 +459,16 @@ class RGP_DEQ(nn.Module):
         self.decoder_skip = (
             bool(decoder_skip)
             if decoder_skip is not None
-            else bool(int(os.environ.get("KINEMATICS_DECODER_SKIP", "0")))
+            else bool(int(KINEMATICS_DECODER_SKIP))
         )
         self.residual_gain = (
             bool(residual_gain)
             if residual_gain is not None
-            else bool(int(os.environ.get("KINEMATICS_RESIDUAL_GAIN", "0")))
+            else bool(int(KINEMATICS_RESIDUAL_GAIN))
         )
         # exp(+-3) -> gain in [0.05, 20]: ~6x headroom over the 3x deficit measured above, and
         # bounded, so a diverging gain cannot take the field with it.
-        self.residual_gain_clamp = float(os.environ.get("KINEMATICS_RESIDUAL_GAIN_CLAMP", "3.0"))
+        self.residual_gain_clamp = float(KINEMATICS_RESIDUAL_GAIN_CLAMP)
 
         freqs = (self.fourier_base ** torch.arange(num_fourier_freqs)) * torch.pi
         if self.fourier_learnable:
@@ -494,7 +538,7 @@ class RGP_DEQ(nn.Module):
         self.residual_rezero = (
             bool(residual_rezero)
             if residual_rezero is not None
-            else bool(int(os.environ.get("KINEMATICS_RESIDUAL_REZERO", "0")))
+            else bool(int(KINEMATICS_RESIDUAL_REZERO))
         )
         if self.residual_rezero:
             self.residual_scale = nn.Parameter(torch.zeros(1))
@@ -697,7 +741,11 @@ class RGP_DEQ(nn.Module):
                 # Soft-envelope hard-BC: exact at sdf=0, but keeps derivatives closer to wall.
                 envelope = 1.0 - torch.exp(-self.bc_lambda * sdf)
                 if self.bc_envelope_decay > 0.0:
-                    envelope = envelope * torch.exp(-self.bc_envelope_decay * sdf)
+                    far = torch.exp(-self.bc_envelope_decay * sdf)
+                    floor = self.bc_envelope_floor
+                    if floor > 0.0:
+                        far = floor + (1.0 - floor) * far
+                    envelope = envelope * far
                 u_v_constrained = uv_prior + envelope * u_v_p[:, :2]
             else:
                 u_v_constrained = uv_prior + sdf * u_v_p[:, :2]

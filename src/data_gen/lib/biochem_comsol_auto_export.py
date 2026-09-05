@@ -51,6 +51,12 @@ from src.config import PhysicsConfig, VesselConfig, biochem_comsol_time_cap_s
 from src.data_gen.lib.biochem_comsol_datasets import resolve_solution_dataset
 from src.utils.paths import comsol_models_dir, data_root
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_COMSOL_MODEL = ""
+
+
 logger = logging.getLogger(__name__)
 
 _BOUNDARY_SUFFIXES = ("_inlet", "_outlet", "_wall", "_wound")
@@ -336,7 +342,7 @@ def resolve_biochem_comsol_model_path(stem: str, explicit: Path | None = None) -
             return p.resolve()
         raise FileNotFoundError(f"COMSOL model not found: {p}")
 
-    env = (os.environ.get("BIOCHEM_COMSOL_MODEL") or "").strip()
+    env = BIOCHEM_COMSOL_MODEL.strip()
     if env:
         p = Path(env)
         if p.is_file():
@@ -600,7 +606,7 @@ class BiochemComsolAutoExporter:
         self.label_dir = Path(label_dir) if label_dir else dr / "processed" / "cfd_results_biochem"
         self.label_dir.mkdir(parents=True, exist_ok=True)
         self.domain_exprs = tuple(domain_exprs) if domain_exprs else _parse_expr_list(
-            os.environ.get("BIOCHEM_COMSOL_DOMAIN_EXPRS")
+            None
         )
         self.sol_tag = (sol_tag or os.environ.get("BIOCHEM_COMSOL_SOL_TAG") or "sol1").strip()
         self._dataset_tag_explicit = (dataset_tag or os.environ.get("BIOCHEM_COMSOL_DATASET_TAG") or "").strip()

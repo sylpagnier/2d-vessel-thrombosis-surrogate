@@ -25,6 +25,12 @@ from src.model_nomenclature import (
 )
 from src.utils.paths import get_project_root
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_GNN_LOAO_AUTO = ""
+
+
 # --- identity (canonical SciML ids; legacy aliases still resolve) ---
 STACK_NAME = BIOCHEM_GNN_STACK.id
 PHASE_TRAIN = BIOCHEM_GNN_STACK.id
@@ -549,7 +555,7 @@ def species_ckpt_for_anchor(
             pref = m.get("loao_preferred") or []
             if isinstance(pref, list) and stem in pref:
                 return loao
-            auto = str(m.get("loao_auto", os.environ.get("BIOCHEM_GNN_LOAO_AUTO", ""))).strip().lower()
+            auto = str(m.get("loao_auto", BIOCHEM_GNN_LOAO_AUTO)).strip().lower()
             if auto in ("1", "true", "yes", "on"):
                 return loao
     return global_ckpt

@@ -27,6 +27,8 @@ from src.utils.units import M_TO_CM
 from dataclasses import dataclass
 
 import numpy as np
+
+from src.core_physics import flow_sources
 import torch
 
 from src.core_physics.mls_gradient import (
@@ -183,7 +185,10 @@ DSRX_SURROGATE_GAIN = 1.38   # = PRED_DSRX_GAIN / DSRX_STENCIL_GAIN
 #: Deliberately NOT applied in ``src/differentiable_wall_model``: its gates are soft and its
 #: thresholds are *learned* per artifact (``compute_soft_gates`` / ``ParameterMap``), so they
 #: absorb the scale themselves and rescaling the input would invalidate its trained weights.
-PRED_DSRX_GAIN = 3.00   # = DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN; keep for DEQ arm
+#: Re-exported from `flow_sources.DSRX_GAIN` so the value has ONE literal, and kept as a
+#: module attribute because it is the knob ablations monkey-patch (a table lookup alone
+#: would make `pwm.PRED_DSRX_GAIN = 7.0` silently inert).
+PRED_DSRX_GAIN = flow_sources.DSRX_GAIN["pred"]   # = DSRX_STENCIL_GAIN * DSRX_SURROGATE_GAIN
 
 
 def dsrx_gain(flow_source: str) -> float:
@@ -199,12 +204,14 @@ def dsrx_gain(flow_source: str) -> float:
     """
     import os as _os
 
-    src = str(flow_source)
-    if src in ("pred", "fem"):
+    src = flow_sources.check(flow_source)
+    if src in flow_sources.RECONSTRUCTED:
         raw = _os.environ.get("CLOT_PRED_DSRX_GAIN", "").strip()
         if raw:
             return float(raw)
-    return {"pred": PRED_DSRX_GAIN}.get(src, 1.0)
+    # `PRED_DSRX_GAIN` first: it is the same value as the table entry, but as a module
+    # attribute it is what an ablation patches, and it must keep reaching the gate branch.
+    return {"pred": PRED_DSRX_GAIN}.get(src, flow_sources.DSRX_GAIN[src])
 
 
 def t0_flow_fields(
@@ -225,9 +232,8 @@ def t0_flow_fields(
     # rest of the pipeline treats it as a reconstructed field, which is what it is.  An
     # UNRECOGNISED source raises -- it used to fall through to the ground-truth branch, so a
     # `flow="fem"` run silently scored GT and looked like a perfect solver.
-    if flow_source not in ("gt", "pred", "fem"):
-        raise ValueError(f"unknown flow_source {flow_source!r}; expected gt, pred or fem")
-    if flow_source in ("pred", "fem"):
+    flow_sources.check(flow_source)
+    if flow_source in flow_sources.RECONSTRUCTED:
         if getattr(data, "u0_pred", None) is None:
             raise ValueError(f"pack has no u0_pred (flow_source={flow_source!r})")
         u = data.u0_pred.reshape(-1).detach().cpu().numpy().astype(np.float64)

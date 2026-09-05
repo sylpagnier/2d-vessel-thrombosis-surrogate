@@ -8,12 +8,22 @@ from typing import TYPE_CHECKING
 
 import torch
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_ML_CONTINUOUS_EXTRAP = "1"
+CLOT_ML_EXTRAP_FRAC_HEADROOM = "0.12"
+CLOT_ML_SIM_END_SCALE = "1.0"
+CLOT_ML_TAU_REF_S = ""
+CLOT_ML_USE_MACRO_TAU = "0"
+
+
 if TYPE_CHECKING:
     from src.config import BiochemConfig
 
 
 def continuous_time_frac_enabled() -> bool:
-    return (os.environ.get("CLOT_ML_USE_MACRO_TAU") or "0").strip().lower() in (
+    return CLOT_ML_USE_MACRO_TAU.strip().lower() in (
         "1",
         "true",
         "yes",
@@ -22,7 +32,7 @@ def continuous_time_frac_enabled() -> bool:
 
 
 def resolve_tau_ref_s(data, bio_cfg: BiochemConfig | None = None) -> float:
-    raw = (os.environ.get("CLOT_ML_TAU_REF_S") or "").strip()
+    raw = CLOT_ML_TAU_REF_S.strip()
     if raw:
         return max(float(raw), 1e-6)
     if hasattr(data, "t") and data.t is not None:
@@ -76,7 +86,7 @@ def time_frac_for_rollout(
 
 
 def sim_end_scale_from_env() -> float:
-    raw = (os.environ.get("CLOT_ML_SIM_END_SCALE") or "1.0").strip()
+    raw = CLOT_ML_SIM_END_SCALE.strip()
     try:
         return max(float(raw), 1.0)
     except ValueError:
@@ -87,7 +97,7 @@ def continuous_extrap_growth_enabled() -> bool:
     """Axis C: continue progressive growth past COMSOL export (requires macro tau)."""
     if not continuous_time_frac_enabled():
         return False
-    raw = (os.environ.get("CLOT_ML_CONTINUOUS_EXTRAP") or "1").strip().lower()
+    raw = CLOT_ML_CONTINUOUS_EXTRAP.strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -138,7 +148,7 @@ def growth_u_from_t_frac(
 
 
 def extrap_frac_headroom() -> float:
-    raw = (os.environ.get("CLOT_ML_EXTRAP_FRAC_HEADROOM") or "0.12").strip()
+    raw = CLOT_ML_EXTRAP_FRAC_HEADROOM.strip()
     try:
         return max(float(raw), 0.0)
     except ValueError:

@@ -25,6 +25,12 @@ from __future__ import annotations
 
 import os
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_DEPLOY_PROBE_STEMS = ""
+
+
 #: Spans the measured failure modes; override with `KINEMATICS_DEPLOY_PROBE_STEMS`.
 DEFAULT_STEMS = ("comsol010", "comsol005", "comsol020", "comsol003", "comsol011")
 
@@ -39,7 +45,7 @@ _GT_OFF = {"comsol010": 0.895, "comsol005": 0.415, "comsol020": 0.477,
 
 
 def probe_stems() -> list[str]:
-    raw = os.environ.get("KINEMATICS_DEPLOY_PROBE_STEMS", "").strip()
+    raw = KINEMATICS_DEPLOY_PROBE_STEMS.strip()
     return [s.strip() for s in raw.split(",") if s.strip()] or list(DEFAULT_STEMS)
 
 

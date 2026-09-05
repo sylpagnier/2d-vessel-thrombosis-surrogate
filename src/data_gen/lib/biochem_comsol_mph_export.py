@@ -10,6 +10,12 @@ import re
 import shutil
 from pathlib import Path
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_COMSOL_MESH_TAG = ""
+
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_EXPORT_TAGS: dict[str, str] = {
@@ -189,7 +195,7 @@ def _resolve_export_tag(model_java, preferred: str) -> str | None:
 
 def find_comp1_mesh_tag(model_java) -> str:
     """Prefer ``comp1`` mesh sequence ``mesh1`` (same as GUI Mesh 1 under Component 1)."""
-    preferred = (os.environ.get("BIOCHEM_COMSOL_MESH_TAG") or "").strip()
+    preferred = BIOCHEM_COMSOL_MESH_TAG.strip()
     if preferred:
         return preferred
 
@@ -320,7 +326,7 @@ def pull_exports_via_mph_nodes(
 
     nas_path = raw_dir / f"{stem}.nas"
     need_mesh = force or not nas_path.is_file()
-    if need_mesh or os.environ.get("BIOCHEM_COMSOL_FORCE_MESH", "").strip().lower() in ("1", "true", "yes"):
+    if need_mesh or False:
         tag = mesh_tag or find_comp1_mesh_tag(model_java)
         safe_nas = str(nas_path.resolve()).replace("\\", "/")
         logger.info("[NEW] %s: exporting comp1 mesh -> %s", stem, nas_path.name)

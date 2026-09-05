@@ -17,6 +17,7 @@ import torch
 
 from src.clot_ml.features import build_features, feature_matrix  # noqa: E402
 from src.clot_ml.v0 import solve_fem_into_pack  # noqa: E402
+from src.core_physics.flow_sources import FLOW_SOURCES  # noqa: E402
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.wall_cohort_splits import CLOT_FREE, DEV, FIT, MIN_T, SEALED  # noqa: E402
 
@@ -25,7 +26,10 @@ DIR = anchor_packs_dir()
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", default="gt", choices=["gt", "pred", "fem"])
+    ap.add_argument("--flow", default="gt", choices=list(FLOW_SOURCES),
+                    help="`rgp` reads the u0_pred that `scripts/precache_rgp_deq.py` wrote "
+                         "(RGP-DEQ residual on the FEM prior) and, unlike `fem`, does NOT "
+                         "re-solve -- so the pack must already carry a matching cache.")
     ap.add_argument("--out", default="")
     ap.add_argument("--force", action="store_true",
                     help="rebuild vessels already present.  Needed after any change to the "
@@ -67,6 +71,17 @@ def main() -> int:
             continue
         t0 = time.time()
         try:
+            if args.flow == "rgp":
+                # The field is precached, not solved here.  A pack still carrying a `pred`-era
+                # or `analytic`-prior u0_pred would build a cache named for a model it was
+                # never produced by, so the provenance stamp is a HARD requirement.
+                prov = getattr(d, "u0_pred_provenance", None)
+                if not prov:
+                    raise ValueError(
+                        "flow='rgp': pack has no u0_pred provenance -- run "
+                        "`python scripts/precache_rgp_deq.py --prior-source fem "
+                        "--checkpoint <arm>/kinematics_best.pth` first")
+                print("[prov] %s %s" % (a, prov), flush=True)
             if args.flow == "fem":
                 # `torch.load` restores no provenance, so the mesh resolver has nothing to go
                 # on; the stem IS the anchor name here.

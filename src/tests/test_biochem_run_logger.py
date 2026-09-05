@@ -8,7 +8,7 @@ import src.utils.training_diary as diary_mod
 
 def test_biochem_run_logger_writes_compact_run_and_index(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.delenv("BIOCHEM_TRAINING_LOG_INDEX", raising=False)
+    monkeypatch.setattr(diary_mod, "BIOCHEM_TRAINING_LOG_INDEX", "1")
 
     log = diary_mod.BiochemRunLogger()
     assert log.run_dir is not None
@@ -43,8 +43,8 @@ def test_biochem_run_logger_writes_compact_run_and_index(tmp_path, monkeypatch):
 
 def test_biochem_run_logger_prunes_old_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setenv("BIOCHEM_TRAINING_LOG_KEEP", "3")
-    monkeypatch.setenv("BIOCHEM_TRAINING_LOG_INDEX", "0")
+    monkeypatch.setattr(diary_mod, "BIOCHEM_TRAINING_LOG_KEEP", "3")
+    monkeypatch.setattr(diary_mod, "BIOCHEM_TRAINING_LOG_INDEX", "0")
 
     base = tmp_path / "outputs" / "reports" / "training" / "biochem"
     for idx in range(1, 6):

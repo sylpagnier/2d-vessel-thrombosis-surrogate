@@ -10,6 +10,12 @@ import argparse
 import json
 from pathlib import Path
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_MAX_NODES = "0"
+
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
@@ -28,7 +34,7 @@ def main() -> int:
     for k, v in (("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1"), ("SPECIES_PRIOR_SOURCE", "analytic")):
         os.environ.setdefault(k, v)
     os.environ.setdefault("KINEMATICS_PDE_FLOOR", "1")
-    max_nodes = int(os.environ.get("KINEMATICS_MAX_NODES", "0") or 0)
+    max_nodes = int(KINEMATICS_MAX_NODES or 0)
     pde_floor = os.environ["KINEMATICS_PDE_FLOOR"].strip().lower() not in ("0", "false", "no", "off")
     print(f"[i] NORMALIZE_SHEAR_GRAD={os.environ['KINEMATICS_NORMALIZE_SHEAR_GRAD']}"
           f"  PRIOR_SOURCE={os.environ['SPECIES_PRIOR_SOURCE']}"

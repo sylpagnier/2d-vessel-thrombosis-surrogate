@@ -74,11 +74,12 @@ from src.clot_ml.temporal import ode_trajectory  # noqa: E402
 #: OFF reproduces every shipped number bit-for-bit.  A head fitted with this ON is a NEW
 #: artifact generation -- the clock it learns against is a different object -- so it must be
 #: promoted under its own name and never mixed with wake-free members.
-#: Set by `--wake` on the promote/eval entry points, or WAKE_ODE=1 in the environment.
-USE_WAKE_ODE: bool = bool(int(os.environ.get("WAKE_ODE", "0")))
-USE_STALL_ODE: bool = bool(int(os.environ.get("STALL_ODE", "0")))
+#: Set by `--wake` / `--stall` on the promote/eval entry points; OFF is the shipped path.
+USE_WAKE_ODE: bool = False
+USE_STALL_ODE: bool = False
 from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
 from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
+
 
 PACKS = anchor_packs_dir()
 SET_GRID = np.array([0.30, 0.45, 0.60, 0.70, 0.80, 0.88, 0.94])
@@ -679,8 +680,7 @@ def main() -> int:
                            help="fit/evaluate against the near-stall ODE clock")
     args = ap.parse_args()
 
-    # New runs bind the ODE clock through explicit CLI state.  The environment fallback is
-    # retained only to replay old commands; no new architecture flag should use it.
+    # The ODE clock is bound through explicit CLI state only.
     # `FLOW` is a module global consumed by `_tt_dir` and `precompute` (the ODE clock and the
     # per-time transport channels).  It had NO command-line setter: running this script
     # standalone with `--cache v5_fem` still built a GT-flow clock, silently, because the

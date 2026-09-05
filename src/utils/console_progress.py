@@ -25,6 +25,12 @@ from typing import Iterable, Iterator, Optional
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+PIPELINE_PROGRESS = ""
+
+
 # Bars stay narrow on purpose: a torn redraw then costs one short line, not one
 # 158-column line, and the numbers still fit next to the pipeline's own output.
 _BAR_FORMAT = "{desc} {percentage:3.0f}%|{bar:18}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}{postfix}]"
@@ -32,16 +38,11 @@ _BAR_FORMAT = "{desc} {percentage:3.0f}%|{bar:18}| {n_fmt}/{total_fmt} [{elapsed
 
 def verbose() -> bool:
     """True when the caller asked for the full, unfiltered log stream."""
-    return os.environ.get("PIPELINE_VERBOSE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return False
 
 
 def _bars_enabled() -> bool:
-    raw = os.environ.get("PIPELINE_PROGRESS", "").strip().lower()
+    raw = PIPELINE_PROGRESS.strip().lower()
     if raw in ("0", "false", "no", "off"):
         return False
     if raw in ("1", "true", "yes", "on"):

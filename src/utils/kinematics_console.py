@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import os
 
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_VAL_EVERY = os.environ.get("KINEMATICS_VAL_EVERY", "")
+
+
 
 def kinematics_quiet_logs() -> bool:
     """Epoch + validation summary lines only (no tqdm bars)."""
@@ -31,7 +38,7 @@ def kinematics_val_progress_enabled() -> bool:
 
 def kinematics_val_every(total_epochs: int) -> int:
     """Validate every N epochs (every epoch when total_epochs <= 12 or VAL_EVERY=1)."""
-    raw = os.environ.get("KINEMATICS_VAL_EVERY", "").strip()
+    raw = KINEMATICS_VAL_EVERY.strip()
     if raw:
         return max(1, int(raw))
     if total_epochs <= 12:

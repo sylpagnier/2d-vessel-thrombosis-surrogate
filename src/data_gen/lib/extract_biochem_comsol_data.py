@@ -26,6 +26,12 @@ from src.data_gen.lib.kinematics_graph_builder import (
 from src.utils.units import MESH_UNIT_CM, assert_mesh_unit
 from src.data_gen.lib.boundary_snap import boundary_snap_tol_m
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINE_ANCHOR_PRIOR_MODE = "analytic"
+
+
 # Inlet/outlet/wall must land on a real mesh line. Wound is optional on nowound packs.
 CSV_MATCH_RATE_MIN = 0.30
 MIN_REQUIRED_VERTEX_HITS = 5
@@ -859,7 +865,7 @@ class ComsolAnchorDataExtractor:
             phys_cfg=kine_phys,
             raw_sidecar_dir=self.raw_dir,
             geometry_level=geometry_level,
-            prior_mode=(os.environ.get("KINE_ANCHOR_PRIOR_MODE") or "analytic").strip() or "analytic",
+            prior_mode=KINE_ANCHOR_PRIOR_MODE.strip() or "analytic",
         )
         x_kine = kine_data.x
         u_prior = kine_data.u_prior

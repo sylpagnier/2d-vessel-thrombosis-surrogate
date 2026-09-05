@@ -19,6 +19,12 @@ import torch
 from src.core_physics.mls_gradient import graph_gradient_operators
 from src.utils.rheology import compute_shear_rate
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_PRIOR_SCORE_MODE = "legacy"
+
+
 if TYPE_CHECKING:
     from src.config import BiochemConfig
 
@@ -226,7 +232,7 @@ def _normalize_field(
 def clot_prior_score_mode() -> str:
     if _env_truthy("BIOCHEM_PRIOR_COMSOL_ALIGNED"):
         return "comsol_hybrid"
-    raw = (os.environ.get("BIOCHEM_PRIOR_SCORE_MODE") or "legacy").strip().lower()
+    raw = BIOCHEM_PRIOR_SCORE_MODE.strip().lower()
     return raw if raw else "legacy"
 
 

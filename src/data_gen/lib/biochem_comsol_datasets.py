@@ -8,6 +8,16 @@ from typing import Any
 
 import numpy as np
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_COMSOL_DATASET_TAG = ""
+BIOCHEM_COMSOL_INLET_DATASET = ""
+BIOCHEM_COMSOL_OUTLET_DATASET = ""
+BIOCHEM_COMSOL_WALL_DATASET = ""
+BIOCHEM_COMSOL_WOUND_DATASET = ""
+
+
 logger = logging.getLogger(__name__)
 
 _BOUNDARY_NAMES = ("inlet", "outlet", "wall", "wound")
@@ -112,7 +122,7 @@ def resolve_solution_dataset(
     if explicit and str(explicit).strip():
         return str(explicit).strip()
 
-    env = (os.environ.get("BIOCHEM_COMSOL_DATASET_TAG") or "").strip()
+    env = BIOCHEM_COMSOL_DATASET_TAG.strip()
     if env:
         return env
 
@@ -187,10 +197,10 @@ def _boundary_dataset_score(bname: str, label: str, tag: str) -> int:
 def resolve_boundary_datasets(model_java) -> dict[str, str]:
     """Map inlet/outlet/wall -> dataset tags (prefer Results ``Inlet``/``Outlet``/``Wall``)."""
     env_map = {
-        "inlet": (os.environ.get("BIOCHEM_COMSOL_INLET_DATASET") or "").strip(),
-        "outlet": (os.environ.get("BIOCHEM_COMSOL_OUTLET_DATASET") or "").strip(),
-        "wall": (os.environ.get("BIOCHEM_COMSOL_WALL_DATASET") or "").strip(),
-        "wound": (os.environ.get("BIOCHEM_COMSOL_WOUND_DATASET") or "").strip(),
+        "inlet": BIOCHEM_COMSOL_INLET_DATASET.strip(),
+        "outlet": BIOCHEM_COMSOL_OUTLET_DATASET.strip(),
+        "wall": BIOCHEM_COMSOL_WALL_DATASET.strip(),
+        "wound": BIOCHEM_COMSOL_WOUND_DATASET.strip(),
     }
     found: dict[str, str] = {k: v for k, v in env_map.items() if v}
     best_score: dict[str, int] = {k: 10_000 for k in found}

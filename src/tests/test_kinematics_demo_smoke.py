@@ -101,7 +101,7 @@ def test_process_mesh_minimal_contract(tmp_path):
 
 
 def test_load_predictor_smoke():
-    ckpt_env = os.environ.get("KIN_DEMO_CKPT")
+    ckpt_env = None
     if ckpt_env:
         ckpt = Path(ckpt_env)
     else:
@@ -116,7 +116,7 @@ def test_load_predictor_smoke():
 
 
 def test_demo_no_gui_runs(tmp_path):
-    ckpt_env = os.environ.get("KIN_DEMO_CKPT")
+    ckpt_env = None
     if ckpt_env:
         ckpt = Path(ckpt_env)
     else:
@@ -150,7 +150,7 @@ def test_demo_edited_walls_no_gui(tmp_path):
 
     from src.data_gen.lib.vessel_geometry import compute_geometry_from_params, geometry_to_params_override
 
-    ckpt_env = os.environ.get("KIN_DEMO_CKPT")
+    ckpt_env = None
     if ckpt_env:
         ckpt = Path(ckpt_env)
     else:

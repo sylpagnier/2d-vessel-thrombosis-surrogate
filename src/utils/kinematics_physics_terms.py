@@ -7,6 +7,15 @@ the **exact** same code path as training (no duplicated derivative stacks).
 
 from __future__ import annotations
 
+import os
+
+
+def _envflag(name: str, default: bool) -> bool:
+    """Boolean knob, environment-overridable; the swept constant is the default."""
+    raw = os.environ.get(name, "").strip().lower()
+    return default if not raw else raw in ("1", "true", "yes", "on")
+
+
 from typing import Dict, Optional
 
 import torch
@@ -16,6 +25,23 @@ from src.config import PredChannels
 from src.core_physics.physics_kernels import PhysicsKernels, scatter_add
 from src.utils.anchor_mask import anchor_node_mask
 from src.utils.rheology import compute_shear_rate
+
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_BAND_CORNER_HOPS = ""
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_BAND_ON_CORNERS = _envflag("KINEMATICS_BAND_ON_CORNERS", False)
+KINEMATICS_BAND_SHEAR_FLOOR = _envflag("KINEMATICS_BAND_SHEAR_FLOOR", False)
+KINEMATICS_BAND_DATA_WEIGHT = ""
+KINEMATICS_GATE_NEG_WEIGHT = ""
+KINEMATICS_GATE_TAU_MULT = ""
+KINEMATICS_RING_WEIGHT = ""
+KINEMATICS_TAIL_BAND_MULT = "2.0"
+
 
 
 #: Hops from the wall that count as "near-wall" for the supervised data term.
@@ -233,7 +259,7 @@ def _corner_hops(hops: int) -> int:
     """Hop count on the corner view that spans the same distance as ``hops`` on P2."""
     import os
 
-    raw = os.environ.get("KINEMATICS_BAND_CORNER_HOPS", "").strip()
+    raw = KINEMATICS_BAND_CORNER_HOPS.strip()
     if raw:
         try:
             return max(1, int(raw))
@@ -246,9 +272,7 @@ def _band_dsrx_absolute() -> bool:
     """``KINEMATICS_BAND_DSRX_ABS`` -- off by default.  See the note in `wall_band_shear_losses`."""
     import os
 
-    return os.environ.get("KINEMATICS_BAND_DSRX_ABS", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
+    return False
 
 
 def _band_on_corners() -> bool:
@@ -259,9 +283,7 @@ def _band_on_corners() -> bool:
     """
     import os
 
-    return os.environ.get("KINEMATICS_BAND_ON_CORNERS", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
+    return KINEMATICS_BAND_ON_CORNERS
 
 
 def _boundary_data_weight(default: float) -> float:
@@ -275,7 +297,7 @@ def _boundary_data_weight(default: float) -> float:
     """
     import os
 
-    raw = os.environ.get("KINEMATICS_BAND_DATA_WEIGHT", "").strip()
+    raw = KINEMATICS_BAND_DATA_WEIGHT.strip()
     if not raw:
         return float(default)
     try:
@@ -302,7 +324,7 @@ def _first_ring_loss(data, pred, node_is_anchor):
     """
     import os
 
-    w = os.environ.get("KINEMATICS_RING_WEIGHT", "").strip()
+    w = KINEMATICS_RING_WEIGHT.strip()
     if not w:
         return pred.sum() * 0.0
     try:
@@ -353,7 +375,7 @@ def _wall_sr_tail_loss(data, band, sr_pr, sr_gt, s_scale):
 
     g = sr_gt[band] * k
     q = sr_pr[band] * k
-    lo = g < (lss * float(_os.environ.get("KINEMATICS_TAIL_BAND_MULT", "2.0") or 2.0))
+    lo = g < (lss * float(KINEMATICS_TAIL_BAND_MULT or 2.0))
     if int(lo.sum()) < 2:
         return sr_pr.sum() * 0.0
     # SYMMETRIC, deliberately.  A one-sided penalty was the first instinct -- the surrogate
@@ -525,16 +547,14 @@ def _band_shear_floor_enabled() -> bool:
     """``KINEMATICS_BAND_SHEAR_FLOOR`` -- off by default until measured on gate Jaccard."""
     import os
 
-    return os.environ.get("KINEMATICS_BAND_SHEAR_FLOOR", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
+    return KINEMATICS_BAND_SHEAR_FLOOR
 
 
 def _gate_tau_mult() -> float:
     """``KINEMATICS_GATE_TAU_MULT`` -- soft-gate temperature as a fraction of the GT spread."""
     import os
 
-    raw = os.environ.get("KINEMATICS_GATE_TAU_MULT", "").strip()
+    raw = KINEMATICS_GATE_TAU_MULT.strip()
     if not raw:
         return 0.1
     try:
@@ -547,7 +567,7 @@ def _gate_neg_weight() -> float:
     """``KINEMATICS_GATE_NEG_WEIGHT`` -- cost of a spurious firing node vs a missed one."""
     import os
 
-    raw = os.environ.get("KINEMATICS_GATE_NEG_WEIGHT", "").strip()
+    raw = KINEMATICS_GATE_NEG_WEIGHT.strip()
     if not raw:
         return 1.0
     try:

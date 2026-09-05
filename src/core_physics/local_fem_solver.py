@@ -9,6 +9,12 @@ import torch
 from src.config import PhysicsConfig
 from src.core_physics.inlet_profile import get_inlet_profile
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+FEM_ASM_THREADS = ""
+
+
 
 def _asm_threads() -> int:
     """Threads for the form kernel loop.  numpy releases the GIL inside the ufuncs the kernel
@@ -16,7 +22,7 @@ def _asm_threads() -> int:
     that the scheduling overhead wins beyond a handful of workers.
     """
     import os
-    env = os.environ.get("FEM_ASM_THREADS", "")
+    env = FEM_ASM_THREADS
     if env.strip():
         return max(1, int(env))
     return max(1, min(4, (os.cpu_count() or 1) - 1))

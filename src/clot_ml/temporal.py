@@ -31,6 +31,12 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial import cKDTree
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_PRED_HOPS = ""
+
+
 DEFAULT_ATTENUATION = 0.16
 
 
@@ -41,7 +47,8 @@ DEFAULT_ATTENUATION = 0.16
 #: h6 gateJ 0.062-0.67 (the shipped path scored 0.520 at h6 g3.0).
 #: `pred` uses hops=6 to match `features.py` (features.py was 6, temporal.py was 4 -- aligned
 #: here so the chemistry/ODE path and the feature builder use the same stencil for the same arm).
-_FLOW_HOPS = {"gt": 3, "pred": 6, "fem": 3}
+#: `rgp` is the FEM prior plus a band-localised residual, so it inherits `fem`'s stencil.
+from src.core_physics.flow_sources import HOPS as _FLOW_HOPS
 
 
 def _flow_hops(flow: str) -> int:
@@ -53,7 +60,7 @@ def _flow_hops(flow: str) -> int:
     """
     import os
 
-    raw = os.environ.get("CLOT_PRED_HOPS", "").strip()
+    raw = CLOT_PRED_HOPS.strip()
     if raw and flow != "gt":
         try:
             return max(1, int(raw))

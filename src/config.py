@@ -5,6 +5,13 @@ from typing import Dict, Optional, Tuple, Union
 from src.utils.paths import comsol_models_dir, data_root, get_project_root
 from pathlib import Path
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINE_WALL_NOISE_AMP_SCALE = "1.0"
+KINE_WALL_NOISE_FREQ_SCALE = "1.0"
+
+
 # Channel index for effective viscosity in [u, v, p, mu_eff_nd, ...] state / label tensors.
 # Convention: mu_eff_nd = mu_eff_si / PhysicsConfig.mu_viscosity_nd_scale (see that property).
 STATE_CHANNEL_MU_EFF_ND = 3
@@ -188,8 +195,8 @@ class VesselConfig:
         # sampler's SHAPE fixed and moves it as one dial, so a calibration run varies one thing.
         # Read here, in the one place every construction site passes through, so a sweep does not
         # depend on editing this file and forgetting to put it back.
-        freq_scale = float(os.environ.get("KINE_WALL_NOISE_FREQ_SCALE", "1.0"))
-        amp_scale = float(os.environ.get("KINE_WALL_NOISE_AMP_SCALE", "1.0"))
+        freq_scale = float(KINE_WALL_NOISE_FREQ_SCALE)
+        amp_scale = float(KINE_WALL_NOISE_AMP_SCALE)
         if freq_scale != 1.0 or amp_scale != 1.0:
             for _f in ("wall_noise_freq_lo", "wall_noise_freq_hi",
                        "wall_noise_freq2_lo", "wall_noise_freq2_hi",

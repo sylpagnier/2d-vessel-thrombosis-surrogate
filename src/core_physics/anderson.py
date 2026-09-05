@@ -2,6 +2,12 @@ import os
 
 import torch
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_ANDERSON_M = ""
+
+
 
 def _history_size(m: int) -> int:
     """Anderson history depth, overridable by ``KINEMATICS_ANDERSON_M``.
@@ -12,7 +18,7 @@ def _history_size(m: int) -> int:
     mid-solve.  Lowering ``m`` trades convergence rate for headroom without changing the node
     count -- which must stay matched to deployment -- or the architecture.
     """
-    raw = os.environ.get("KINEMATICS_ANDERSON_M", "").strip()
+    raw = KINEMATICS_ANDERSON_M.strip()
     if not raw:
         return int(m)
     try:

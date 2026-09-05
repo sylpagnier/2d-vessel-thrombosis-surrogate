@@ -28,6 +28,18 @@ from src.utils.channel_schema import infer_missing_schema
 from src.utils.kinematics_paths import kinematics_graph_rheology_dir
 from src.utils.paths import get_project_root, resolve_checkpoint
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_FORCE_PRIOR_REFRESH = "0"
+KINEMATICS_PRIOR_Y_TIME_INDEX = "0"
+KINEMATICS_SKIP_PRIOR_REFRESH = "0"
+VIZ_ANCHOR_STEM = ""
+VIZ_KIN_ANDERSON_BETA = "0.8"
+VIZ_KIN_ANDERSON_WARMUP = "5"
+VIZ_KIN_SOLVER = "anderson"
+
+
 # Standard channel indices across all models for kinematics
 _CHANNEL = dict(u=0, v=1, p=2, mu_eff=STATE_CHANNEL_MU_EFF_ND)
 _KIN_CKPT_CANDIDATES = ("kinematics_best.pth", "kinematics_ckpt_latest.pth", "kinematics_ckpt_100.pth")
@@ -46,7 +58,7 @@ def _list_anchor_stems() -> List[str]:
 
 
 def _default_val_anchor_stem(stems: List[str]) -> str:
-    env = (os.environ.get("VIZ_ANCHOR_STEM") or "").strip()
+    env = VIZ_ANCHOR_STEM.strip()
     if env and env in stems:
         return env
     if _DEFAULT_VAL_ANCHOR_STEM in stems:
@@ -89,7 +101,7 @@ def _load_graph_pt(path: Path, device: torch.device, *, phase_hint: str):
         refreshed = refresh_kinematics_node_x_on_graph(
             data,
             stem=stem,
-            y_time_index=int(os.environ.get("KINEMATICS_PRIOR_Y_TIME_INDEX", "0")),
+            y_time_index=int(KINEMATICS_PRIOR_Y_TIME_INDEX),
         )
         if refreshed:
             prior_max = kinematics_uv_prior_max(data.x)
@@ -101,9 +113,9 @@ def _load_graph_pt(path: Path, device: torch.device, *, phase_hint: str):
 
 
 def _should_refresh_kinematics_node_x(data, *, path: Path, phase_hint: str) -> bool:
-    if os.environ.get("KINEMATICS_SKIP_PRIOR_REFRESH", "0").strip() in ("1", "true", "yes"):
+    if KINEMATICS_SKIP_PRIOR_REFRESH.strip() in ("1", "true", "yes"):
         return False
-    if os.environ.get("KINEMATICS_FORCE_PRIOR_REFRESH", "0").strip() in ("1", "true", "yes"):
+    if KINEMATICS_FORCE_PRIOR_REFRESH.strip() in ("1", "true", "yes"):
         return True
     hint = (phase_hint or "").lower()
     is_anchor = "biochem" in hint or "biochem_anchors" in path.as_posix()
@@ -214,9 +226,9 @@ def _rel_l2_uvp(pred: np.ndarray, tgt: np.ndarray) -> float:
 
 
 def _run_model_once(model, data):
-    solver = os.environ.get("VIZ_KIN_SOLVER", "anderson").strip().lower() or "anderson"
-    beta = float(os.environ.get("VIZ_KIN_ANDERSON_BETA", "0.8"))
-    warmup = int(os.environ.get("VIZ_KIN_ANDERSON_WARMUP", "5"))
+    solver = VIZ_KIN_SOLVER.strip().lower() or "anderson"
+    beta = float(VIZ_KIN_ANDERSON_BETA)
+    warmup = int(VIZ_KIN_ANDERSON_WARMUP)
     pred = model(
         data,
         solver=solver,

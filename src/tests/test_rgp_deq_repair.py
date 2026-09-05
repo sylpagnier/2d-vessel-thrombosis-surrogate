@@ -925,22 +925,33 @@ def test_preflight_fails_a_cohort_with_a_leaked_prior_block():
     assert "return 1 if n_fail else 0" in src, "preflight does not fail the exit code"
 
 
+
+def _occurrences(text: str, needle: str) -> list[int]:
+    """Every index of `needle`, so a source-text assertion is not pinned to the first
+    hit.  These knobs now have a module-level constant definition as well as a use."""
+    out, i = [], text.find(needle)
+    while i >= 0:
+        out.append(i)
+        i = text.find(needle, i + 1)
+    return out
+
 def test_selection_metric_subset_is_capped_and_deterministic():
     """Each selection graph costs a full Anderson solve, and validation runs every other epoch.
     A cap keeps that affordable; sorting keeps it comparable across epochs."""
     src = (REPO / "src" / "training" / "train_kinematics_predictor.py").read_text(encoding="utf-8")
-    i = src.find("KINEMATICS_SELECT_MAX_GRAPHS")
-    assert i > 0, "selection metrics run over the full holdout every validation"
-    assert "sorted(subset" in src[i : i + 400], "the capped subset is not deterministic"
+    wins = [src[i : i + 400] for i in _occurrences(src, "KINEMATICS_SELECT_MAX_GRAPHS")]
+    assert wins, "selection metrics run over the full holdout every validation"
+    assert any("sorted(subset" in w for w in wins), "the capped subset is not deterministic"
 
 
 def test_early_abort_is_scored_on_the_selection_metric_not_rel_l2():
     """rel-L2 is a tie-break (s10.3); aborting on it would stop good runs and continue bad ones."""
     src = (REPO / "src" / "training" / "train_kinematics_predictor.py").read_text(encoding="utf-8")
-    i = src.find("KINEMATICS_SELECT_PATIENCE")
-    assert i > 0, "no early-abort path"
-    window = src[max(0, i - 900) : i + 300]
-    assert "selection_score" in window, "early abort is not scored on the selection metric"
+    wins = [src[max(0, i - 900) : i + 300]
+            for i in _occurrences(src, "KINEMATICS_SELECT_PATIENCE")]
+    assert wins, "no early-abort path"
+    assert any("selection_score" in w for w in wins), (
+        "early abort is not scored on the selection metric")
 
 
 # --- generation pipeline: guard, mix, and the channels it writes ------------------------------
@@ -1662,6 +1673,7 @@ def test_band_shear_terms_are_zero_at_the_labels_in_both_band_modes(monkeypatch)
     from src.core_physics.physics_kernels import PhysicsKernels
     from src.data_gen.lib.p2_elevation import elevate_to_p2
     from src.utils.anchor_mask import anchor_node_mask
+    from src.utils import kinematics_physics_terms as terms_mod
     from src.utils.kinematics_physics_terms import corner_view, wall_band_shear_losses
 
     monkeypatch.setenv("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1")
@@ -1675,7 +1687,7 @@ def test_band_shear_terms_are_zero_at_the_labels_in_both_band_modes(monkeypatch)
     assert corner_view(e) is not None, "an elevated graph must expose its P1 corner view"
 
     for mode in ("0", "1"):
-        monkeypatch.setenv("KINEMATICS_BAND_ON_CORNERS", mode)
+        monkeypatch.setattr(terms_mod, "KINEMATICS_BAND_ON_CORNERS", mode == "1")
         l_sr, l_dsrx, l_gate, _l_floor, _l_tail = wall_band_shear_losses(
             pred, e, kern, hops=3, node_is_anchor=nia
         )
@@ -1712,11 +1724,12 @@ def test_wall_shear_prior_floor_is_one_sided(monkeypatch):
     from src.data_gen.lib.legal_priors import apply_prior_source
     from src.data_gen.lib.p2_elevation import elevate_to_p2
     from src.utils.anchor_mask import anchor_node_mask
+    from src.utils import kinematics_physics_terms as terms_mod
     from src.utils.kinematics_physics_terms import wall_band_shear_losses
 
     monkeypatch.setenv("KINEMATICS_NORMALIZE_SHEAR_GRAD", "1")
-    monkeypatch.setenv("KINEMATICS_BAND_SHEAR_FLOOR", "1")
-    monkeypatch.setenv("KINEMATICS_BAND_ON_CORNERS", "0")
+    monkeypatch.setattr(terms_mod, "KINEMATICS_BAND_SHEAR_FLOOR", True)
+    monkeypatch.setattr(terms_mod, "KINEMATICS_BAND_ON_CORNERS", False)
     kern = PhysicsKernels(phys_cfg=PhysicsConfig(phase="kinematics"))
     e = apply_prior_source(elevate_to_p2(_load_first_kine_pack(), keep_wls=False), "analytic")
     nia = anchor_node_mask(e)
@@ -1732,7 +1745,7 @@ def test_wall_shear_prior_floor_is_one_sided(monkeypatch):
     assert floor_at(e.x[:, 11:13]) == 0.0, "the prior sits exactly on its own floor"
     assert floor_at(0.5 * e.y[:, :2]) > 0.0, "a shrunk field must be penalised"
 
-    monkeypatch.setenv("KINEMATICS_BAND_SHEAR_FLOOR", "0")
+    monkeypatch.setattr(terms_mod, "KINEMATICS_BAND_SHEAR_FLOOR", False)
     assert floor_at(0.5 * e.y[:, :2]) == 0.0, "unset must be a no-op"
 
 
@@ -1752,11 +1765,12 @@ def test_deploy_training_packs_are_disjoint_from_selection_and_carry_no_chemistr
     from src.config import PhysicsConfig
     from src.core_physics.physics_kernels import PhysicsKernels
     from src.core_physics.wall_cohort_splits import SEALED, VIZ_RELEASED
+    from src.utils import kinematics_select_packs as packs_mod
     from src.utils.kinematics_select_packs import (
         load_deploy_training_packs, selection_subset_stems,
     )
 
-    monkeypatch.setenv("KINEMATICS_SELECT_MAX_GRAPHS", "8")
+    monkeypatch.setattr(packs_mod, "KINEMATICS_SELECT_MAX_GRAPHS", "8")
     monkeypatch.setenv("SPECIES_PRIOR_SOURCE", "analytic")
     packs = load_deploy_training_packs(verbose=False)
     if not packs:

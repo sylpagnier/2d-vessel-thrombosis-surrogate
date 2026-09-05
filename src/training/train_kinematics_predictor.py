@@ -51,6 +51,7 @@ from src.utils.kinematics_console import (
     kinematics_val_every,
 )
 from src.utils.kinematics_geometry import (
+
     GeometryCurriculumConfig,
     attach_geometry_metadata,
     cohort_level_counts,
@@ -61,6 +62,30 @@ from src.utils.kinematics_geometry import (
     train_pool_for_epoch,
     warn_if_single_level_cohort,
 )
+
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_BAND_FLOOR_WEIGHT = os.environ.get("KINEMATICS_BAND_FLOOR_WEIGHT", "")
+KINEMATICS_DEPLOY_PACKS_ONLY = os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", "")
+KINEMATICS_DEPLOY_PROBE_EVERY = ""
+KINEMATICS_ELEVATE_KEEP_WLS = ""
+KINEMATICS_ELEVATE_P2 = os.environ.get("KINEMATICS_ELEVATE_P2", "")
+KINEMATICS_GATE_WEIGHT = os.environ.get("KINEMATICS_GATE_WEIGHT", "")
+KINEMATICS_MAX_NODES = os.environ.get("KINEMATICS_MAX_NODES", "")
+KINEMATICS_MIN_GATE_JACCARD = ""
+KINEMATICS_PRIOR_FLOOR_WEIGHT = os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "")
+KINEMATICS_RING_WEIGHT = ""
+KINEMATICS_SELECT_GAIN = ""
+KINEMATICS_SELECT_MAX_GRAPHS = os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6")
+KINEMATICS_SELECT_ON_DEPLOY = "1"
+KINEMATICS_SELECT_PATIENCE = os.environ.get("KINEMATICS_SELECT_PATIENCE", "0")
+KINEMATICS_TAIL_WEIGHT = ""
+KINEMATICS_TRAIN_ON_DEPLOY_PACKS = ""
+KINEMATICS_TRAIN_SUBSAMPLE = ""
+KINEMATICS_WALL_SHEAR_WEIGHT = os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "")
+
 
 
 def compute_gt_shear_rate(data):
@@ -173,7 +198,7 @@ def _selection_gain_mode():
     """
     from src.utils.kinematics_selection import GAIN_STENCIL
 
-    raw = os.environ.get("KINEMATICS_SELECT_GAIN", "").strip().lower()
+    raw = KINEMATICS_SELECT_GAIN.strip().lower()
     if not raw or raw == GAIN_STENCIL:
         return GAIN_STENCIL
     if raw == "shipped":
@@ -205,7 +230,7 @@ def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | Non
     # Each graph here costs a full 25-iteration Anderson solve, and validation runs every other
     # epoch.  The metric is a cohort mean, so a capped, DETERMINISTIC subset gives the same
     # signal for a fraction of the wall clock; raise it for the final selection pass.
-    cap = int(os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6") or 0)
+    cap = int(KINEMATICS_SELECT_MAX_GRAPHS or 0)
     if cap > 0 and len(subset) > cap:
         # STRIDED, not the alphabetical prefix.  The first 8 deploy stems are the easy end of
         # the cohort -- the analytic prior scores 36.7% of ceiling on them against 16.6% over
@@ -325,7 +350,7 @@ def _kinematics_promotion_gates_pass(
         good = math.isfinite(dsrx_corr) and dsrx_corr >= float(min_corr)
         bits["dsrx_corr"] = good
         ok = ok and good
-    min_jac = _os.environ.get("KINEMATICS_MIN_GATE_JACCARD", "").strip()
+    min_jac = KINEMATICS_MIN_GATE_JACCARD.strip()
     if min_jac:
         good = math.isfinite(gate_jaccard) and gate_jaccard >= float(min_jac)
         bits["gate_jaccard"] = good
@@ -416,9 +441,7 @@ def load_dataset(
     # refuses it).  Mixing a FEM-prior pack with an analytic-prior one in the same run is not an
     # acceptable fallback either: the prior is the hard BC's base point, so the two would be
     # different functions sharing one decoder.
-    deploy_only = os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
+    deploy_only = KINEMATICS_DEPLOY_PACKS_ONLY.strip().lower() in ("1", "true", "yes", "on")
     if not deploy_only and not data_dir.exists():
         raise FileNotFoundError(
             f"Dataset directory not found: {data_dir}. "
@@ -477,9 +500,11 @@ def load_dataset(
     # deployment is decided in, and four arms of loss reweighting could not manufacture it.  The
     # deploy packs ARE that regime, they are fully labelled by COMSOL, and Stage-A has never
     # trained on them.  Disjoint from the selection set by construction.
-    if deploy_only or os.environ.get("KINEMATICS_TRAIN_ON_DEPLOY_PACKS", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    ):
+    # `KINEMATICS_TRAIN_ON_DEPLOY_PACKS` used to widen this to "synthetic corpus PLUS deploy
+    # packs"; no arm has asked for that mixture since the FEM prior arrived, because the two
+    # halves would carry different prior blocks under one decoder.  Deploy-only is the only
+    # surviving caller, so the condition is just that.
+    if deploy_only:
         from src.utils.kinematics_select_packs import (
             load_deploy_training_packs, selection_pack_dir,
         )
@@ -550,14 +575,14 @@ def _prepare_dataset(dataset, data_dir=None):
     if cache_dir:
         sig = "|".join(str(x) for x in (
             "v1",
-            _os.environ.get("KINEMATICS_ELEVATE_P2", ""),
-            _os.environ.get("KINEMATICS_ELEVATE_KEEP_WLS", ""),
+            KINEMATICS_ELEVATE_P2,
+            KINEMATICS_ELEVATE_KEEP_WLS,
             resolve_prior_source(),
-            _os.environ.get("KINEMATICS_MAX_NODES", ""),
+            KINEMATICS_MAX_NODES,
             _os.environ.get("KINEMATICS_PDE_FLOOR", "1"),
-            _os.environ.get("KINEMATICS_TRAIN_ON_DEPLOY_PACKS", ""),
-            _os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", ""),
-            _os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", ""),
+            KINEMATICS_TRAIN_ON_DEPLOY_PACKS,
+            KINEMATICS_DEPLOY_PACKS_ONLY,
+            KINEMATICS_SELECT_MAX_GRAPHS,
             _os.environ.get("KINEMATICS_GRAPH_CAP", ""),
             len(dataset),
             # The stem list alone is NOT unique: `vessel_0.pt` exists under both rheologies.
@@ -601,7 +626,7 @@ def _subsample_prepared(dataset):
     import os as _os
     import random as _random
 
-    raw = _os.environ.get("KINEMATICS_TRAIN_SUBSAMPLE", "").strip()
+    raw = KINEMATICS_TRAIN_SUBSAMPLE.strip()
     if not raw:
         return dataset
     n = int(raw)
@@ -661,7 +686,7 @@ def _cap_graph_size(dataset):
     """
     import os as _os
 
-    raw = _os.environ.get("KINEMATICS_MAX_NODES", "").strip()
+    raw = KINEMATICS_MAX_NODES.strip()
     if not raw:
         return dataset
     cap = int(raw)
@@ -741,7 +766,7 @@ def _elevate_dataset_to_p2(dataset):
     """
     import os as _os
 
-    if _os.environ.get("KINEMATICS_ELEVATE_P2", "").strip().lower() not in ("1", "true", "yes", "on"):
+    if KINEMATICS_ELEVATE_P2.strip().lower() not in ("1", "true", "yes", "on"):
         return dataset
     from src.data_gen.lib.p1_corner_graph import identify_midside_nodes
     from src.data_gen.lib.p2_elevation import elevate_to_p2
@@ -749,9 +774,7 @@ def _elevate_dataset_to_p2(dataset):
     # `V`/`W`/`M_inv` are 47% of an elevated graph's memory and nothing in training reads them
     # (`graph_gradient_operators` defaults to MLS and rebuilds from positions).  Dropping them
     # takes this cohort from ~8.4 GB of host RAM to ~4.4 GB.
-    keep_wls = _os.environ.get("KINEMATICS_ELEVATE_KEEP_WLS", "").strip().lower() in (
-        "1", "true", "yes", "on"
-    )
+    keep_wls = False
     # Elevation is memory-bound in its TRANSIENT, not its result: all 250 elevated graphs are
     # 0.88 GB, but building them while the caller still holds every P1 original -- plus the
     # intermediates of the graph in flight -- was enough to have the process killed outright
@@ -1109,33 +1132,33 @@ def compute_step_loss(
     # matters because every measured `sr`/`dsrx` scale is < 1 against COMSOL.  Off by default:
     # set KINEMATICS_WALL_SHEAR_WEIGHT to enable, so an unset environment reproduces the
     # historical loss exactly.
-    w_band = float(os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "") or
+    w_band = float(KINEMATICS_WALL_SHEAR_WEIGHT or
                    (_rel["l_band_sr"] * _s))
     l_band_sr = terms.get("l_band_sr", torch.tensor(0.0, device=device))
     l_band_dsrx = terms.get("l_band_dsrx", torch.tensor(0.0, device=device))
     # The ONLY Stage-A metric measured to predict the clot outcome (+0.918).  Optimise it
     # directly rather than hoping the continuous sr/dsrx terms imply it.
-    w_gate = float(os.environ.get("KINEMATICS_GATE_WEIGHT", "") or
+    w_gate = float(KINEMATICS_GATE_WEIGHT or
                    (_rel["l_band_gate"] * _s))
     l_band_gate = terms.get("l_band_gate", torch.tensor(0.0, device=device))
     # The measured root cause of the deploy-flow collapse: the surrogate compresses the wall
     # shear distribution and never reaches the gate's cut, so on 7 of 30 deploy packs the wall
     # gate is EMPTY and thirteen physics channels go to zero.  Off unless weighted.
-    w_tail = float(os.environ.get("KINEMATICS_TAIL_WEIGHT", "") or 0.0)
+    w_tail = float(KINEMATICS_TAIL_WEIGHT or 0.0)
     l_band_tail = terms.get("l_band_tail", torch.tensor(0.0, device=device))
     # The first interior ring sets `du/dn`, i.e. wall shear, on its own -- the wall nodes
     # themselves are pinned by the hard BC and cost nothing.  Its weight IS the term's scale.
-    w_ring = float(os.environ.get("KINEMATICS_RING_WEIGHT", "") or 0.0)
+    w_ring = float(KINEMATICS_RING_WEIGHT or 0.0)
     l_ring = terms.get("l_ring", torch.tensor(0.0, device=device))
     # T6: make the analytic prior a performance FLOOR.  Zero wherever the model beats the
     # prior it was handed, positive only where it is worse -- which today is 45 of 52 packs.
-    w_floor = float(os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "") or
+    w_floor = float(KINEMATICS_PRIOR_FLOOR_WEIGHT or
                     (_rel["l_prior_floor"] * _s))
     l_prior_floor = terms.get("l_prior_floor", torch.tensor(0.0, device=device))
     # The same one-sided hinge, in the WALL SHEAR channel.  T6's floor watches velocity, which
     # the surrogate clears while still landing 8 points of gate Jaccard BEHIND the closed-form
     # prior it was handed (s16.4).  Off unless weighted.
-    w_bfloor = float(os.environ.get("KINEMATICS_BAND_FLOOR_WEIGHT", "") or
+    w_bfloor = float(KINEMATICS_BAND_FLOOR_WEIGHT or
                      (_rel["l_band_floor"] * _s))
     l_band_floor = terms.get("l_band_floor", torch.tensor(0.0, device=device))
 
@@ -1497,7 +1520,7 @@ def train_kinematics(
     # the loop between the training run and the acceptance test.  Empty is allowed and falls
     # back to synthetic val -- loudly.
     select_graphs = []
-    if os.environ.get("KINEMATICS_SELECT_ON_DEPLOY", "1").strip().lower() not in (
+    if KINEMATICS_SELECT_ON_DEPLOY.strip().lower() not in (
         "0", "false", "no", "off"
     ):
         from src.utils.kinematics_select_packs import load_selection_packs
@@ -1953,7 +1976,7 @@ def train_kinematics(
                 # F1, every Stage-A diagnostic is weak or unrelated (gate Jaccard +0.613 is the
                 # best; rel-L2 is -0.030), so a run can improve everything it prints and still
                 # lose what it exists for.  ~33 s per vessel; off unless the interval is set.
-                _dp_every = int(os.environ.get("KINEMATICS_DEPLOY_PROBE_EVERY", "") or 0)
+                _dp_every = int(KINEMATICS_DEPLOY_PROBE_EVERY or 0)
                 if _dp_every > 0 and epoch % _dp_every == 0:
                     from src.utils.kinematics_deploy_probe import deploy_f1_probe
 
@@ -1984,7 +2007,7 @@ def train_kinematics(
                     best_select, n_since_improve = cur_sel, 0
                 else:
                     n_since_improve += 1
-                patience = int(os.environ.get("KINEMATICS_SELECT_PATIENCE", "0") or 0)
+                patience = int(KINEMATICS_SELECT_PATIENCE or 0)
                 if patience > 0 and n_since_improve >= patience:
                     print(f"[kin] ABORT: selection score has not improved in {n_since_improve} "
                           f"validations (best {best_select:.4f}). Set KINEMATICS_SELECT_PATIENCE=0 "

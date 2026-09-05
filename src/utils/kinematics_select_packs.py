@@ -25,6 +25,23 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_SELECT_MAX_GRAPHS = os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6")
+KINEMATICS_SELECT_PACK_STEMS = ""
+
+#: Comma list restricting the deploy TRAINING pool to a subset of the legal one, for
+#: cross-fitting the flow model against the deploy score.  19 of the 27 vessels the biochem
+#: deploy score is computed on are in that pool, so an arm trained on all of them and then
+#: asked to supply their `t=0` flow is scoring itself on its own training data.  Splitting the
+#: pool in halves and precaching each half with the arm that never saw it removes the leak
+#: without touching the biochem CV.  It INTERSECTS the legal pool -- it can only ever remove
+#: vessels, never add a sealed or selection one -- so a typo cannot widen the pool.
+KINEMATICS_DEPLOY_TRAIN_STEMS = os.environ.get("KINEMATICS_DEPLOY_TRAIN_STEMS", "")
+
+
 #: Deploy packs from an older extractor revision -- dead ``node_type`` and anomalous prior
 #: blocks (``comsol002`` is the bit-identical s17 Z2 leak; the ``*_mirror_y`` copies read
 #: 0.06-0.45).  Excluded from selection so a stale pack cannot move a checkpoint choice.
@@ -48,7 +65,7 @@ def selection_pack_stems() -> list[str]:
     ``KINEMATICS_SELECT_PACK_STEMS`` overrides with an explicit comma list -- and is honoured
     verbatim, seal policy included, because an override is a deliberate act.
     """
-    raw = os.environ.get("KINEMATICS_SELECT_PACK_STEMS", "").strip()
+    raw = KINEMATICS_SELECT_PACK_STEMS.strip()
     if raw:
         return [s.strip() for s in raw.split(",") if s.strip()]
     from src.core_physics.wall_cohort_splits import DEV, FIT, SEALED, VIZ_RELEASED
@@ -118,6 +135,27 @@ def load_selection_packs(*, limit: int = 0, prior_source: str | None = None, ver
     return out
 
 
+
+def use_stems(stems: list[str] | str) -> list[str]:
+    """Point ``load_selection_packs`` at an explicit vessel list, for the rest of the process.
+
+    The Stage-A selection subset and the vessels the biochem deploy score is decided on barely
+    overlap -- four of the six selection packs are short-timeline vessels the clot cache drops
+    entirely -- so "how does this arm score" and "does it help where deployment is lost" are
+    different questions over different stems.  Every diagnostic that wants the second one needs
+    the same override, so it lives here rather than being re-implemented per probe (and one
+    probe re-implementing it WRONG is how an audit silently scored the default six).
+    """
+    names = ([x.strip() for x in stems.split(",")] if isinstance(stems, str) else list(stems))
+    names = [n for n in names if n]
+    if not names:
+        raise ValueError("use_stems() needs at least one stem")
+    globals()["KINEMATICS_SELECT_PACK_STEMS"] = ",".join(names)
+    globals()["KINEMATICS_SELECT_MAX_GRAPHS"] = str(len(names))
+    os.environ["KINEMATICS_SELECT_PACK_STEMS"] = ",".join(names)
+    os.environ["KINEMATICS_SELECT_MAX_GRAPHS"] = str(len(names))
+    return names
+
 def selection_subset_stems(cap: int = 0) -> list[str]:
     """The stems a run actually selects on, i.e. what ``KINEMATICS_SELECT_MAX_GRAPHS`` keeps.
 
@@ -130,7 +168,7 @@ def selection_subset_stems(cap: int = 0) -> list[str]:
 
     ordered = selection_pack_stems()
     if cap <= 0:
-        cap = int(_os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6") or 0)
+        cap = int(KINEMATICS_SELECT_MAX_GRAPHS or 0)
     if cap <= 0 or len(ordered) <= cap:
         return ordered
     step = max(1, len(ordered) // cap)
@@ -165,6 +203,23 @@ def load_deploy_training_packs(*, prior_source: str | None = None, verbose: bool
     banned = (set(SEALED) | set(VIZ_RELEASED) | set(STALE_EXTRACTOR_STEMS)
               | set(KNOWN_BAD_STEMS) | set(selection_subset_stems()))
     stems = sorted((set(FIT) | set(DEV)) - banned)
+    restrict = [x.strip() for x in KINEMATICS_DEPLOY_TRAIN_STEMS.split(",") if x.strip()]
+    if restrict:
+        keep = set(restrict) & set(stems)
+        dropped = sorted(set(restrict) - keep)
+        if dropped:
+            # Naming a sealed / selection / nonexistent stem is a mistake worth hearing about,
+            # but it must not be able to widen the pool, so it is reported and discarded.
+            print("[kin] WARN KINEMATICS_DEPLOY_TRAIN_STEMS names %d stem(s) outside the legal "
+                  "deploy training pool; ignored: %s" % (len(dropped), ", ".join(dropped)))
+        if not keep:
+            raise RuntimeError(
+                "KINEMATICS_DEPLOY_TRAIN_STEMS was set but selects no legal deploy pack; "
+                "the run would train on nothing.  Legal pool: " + ", ".join(stems))
+        stems = sorted(keep)
+        if verbose:
+            print("[kin] deploy training pool RESTRICTED to %d/%d packs (cross-fit): %s"
+                  % (len(stems), len(restrict), ", ".join(stems)))
     out = []
     for stem in stems:
         f = d / f"{stem}.pt"

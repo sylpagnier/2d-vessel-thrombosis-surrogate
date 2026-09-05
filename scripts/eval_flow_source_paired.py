@@ -74,10 +74,17 @@ def arm_scores(tag: str, cache_name: str) -> dict[str, dict[str, float]]:
     return out
 
 
-def paired(a: dict, b: dict, key: str, n_boot: int = 4000, seed: int = 0):
-    """Mean paired difference b - a over vessels scoring in both arms, with a bootstrap CI."""
+def paired(a: dict, b: dict, key: str, n_boot: int = 4000, seed: int = 0,
+           restrict: set[str] | None = None):
+    """Mean paired difference b - a over vessels scoring in both arms, with a bootstrap CI.
+
+    ``restrict`` keeps only the named stems, for the flow-holdout panel: when arm B's velocity
+    field comes from a TRAINED model, the vessels that model trained on are not a
+    generalisation read, and the FEM arm it is compared against has no training set at all.
+    """
     stems = [s for s in sorted(set(a) & set(b))
-             if s not in CLOT_FREE and a[s][key] == a[s][key] and b[s][key] == b[s][key]]
+             if s not in CLOT_FREE and a[s][key] == a[s][key] and b[s][key] == b[s][key]
+             and (restrict is None or s in restrict)]
     if not stems:
         return None
     d = np.array([b[s][key] - a[s][key] for s in stems], dtype=float)
@@ -100,6 +107,11 @@ def main() -> int:
     ap.add_argument("--b", required=True, help="comparison tag (e.g. the FEM-flow arm)")
     ap.add_argument("--b-cache", required=True)
     ap.add_argument("--out", default="outputs/deployclot/flow_source_paired.json")
+    ap.add_argument("--flow-holdout-panel", action="store_true",
+                    help="also report the panel restricted to vessels the FLOW model never "
+                         "trained on.  19 of the 27 wall vessels are in the RGP-DEQ deploy "
+                         "training pool, so the full-cohort delta of a surrogate-flow arm is "
+                         "an upper bound and this panel is the generalisation read.")
     args = ap.parse_args()
 
     print(f"[i] A = {args.a} on cache {args.a_cache}", flush=True)
@@ -107,17 +119,26 @@ def main() -> int:
     print(f"[i] B = {args.b} on cache {args.b_cache}", flush=True)
     B = arm_scores(args.b, args.b_cache)
 
-    res = {}
-    print()
-    print(f"{'domain':8s} {'A mean':>9s} {'B mean':>9s} {'B - A':>9s} "
-          f"{'95% CI':>20s} {'P':>7s}  n")
-    for key in ("wall", "off"):
-        r = paired(A, B, key)
-        if r is None:
-            continue
-        res[key] = r
-        print(f"{key:8s} {r['mean_a']:9.4f} {r['mean_b']:9.4f} {r['delta']:+9.4f} "
-              f"[{r['ci'][0]:+7.4f},{r['ci'][1]:+7.4f}] {r['p']:7.3f}  {r['n']}")
+    panels: dict[str, set[str] | None] = {"all": None}
+    if args.flow_holdout_panel:
+        from scripts.stage_a.crossfit_halves import legal_pool
+        pool = set(legal_pool())
+        panels["flow_holdout"] = {s for s in (set(A) & set(B)) if s not in pool}
+
+    res: dict[str, dict] = {}
+    for panel, restrict in panels.items():
+        print()
+        print(f"--- panel: {panel}" + ("" if restrict is None else
+              f"  (vessels the flow model never trained on: {len(restrict)})"))
+        print(f"{'domain':8s} {'A mean':>9s} {'B mean':>9s} {'B - A':>9s} "
+              f"{'95% CI':>20s} {'P':>7s}  n")
+        for key in ("wall", "off"):
+            r = paired(A, B, key, restrict=restrict)
+            if r is None:
+                continue
+            res[key if panel == "all" else f"{panel}_{key}"] = r
+            print(f"{key:8s} {r['mean_a']:9.4f} {r['mean_b']:9.4f} {r['delta']:+9.4f} "
+                  f"[{r['ci'][0]:+7.4f},{r['ci'][1]:+7.4f}] {r['p']:7.3f}  {r['n']}")
 
     print()
     print("per-vessel B - A (wall / off)")

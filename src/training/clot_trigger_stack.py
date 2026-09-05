@@ -32,6 +32,12 @@ from src.core_physics.clot_phi_simple import (
 )
 from src.utils.paths import get_project_root
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_PHI_TRIGGER_TBPTT_DETACH = "1"
+
+
 
 class ClotTriggerStar(str, Enum):
     T0_ORACLE = "t0"  # physics-only eval, no train
@@ -126,7 +132,7 @@ def clot_phi_trigger_rollout_enabled() -> bool:
 
 
 def clot_phi_trigger_rollout_detach_prev() -> bool:
-    raw = (os.environ.get("CLOT_PHI_TRIGGER_TBPTT_DETACH") or "1").strip().lower()
+    raw = CLOT_PHI_TRIGGER_TBPTT_DETACH.strip().lower()
     return raw not in ("0", "false", "no", "off")
 
 

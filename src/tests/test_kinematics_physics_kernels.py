@@ -41,6 +41,13 @@ from src.core_physics.physics_kernels import PhysicsKernels
 from src.utils.anchor_mask import anchor_node_mask, graph_has_anchor
 from src.utils.kinematics_physics_terms import attach_pde_floors, compute_kinematics_physics_terms
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINEMATICS_PHYSICS_MIN_ANCHORS = "1"
+KINEMATICS_PHYSICS_TEST_MAX_GRAPHS = ""
+
+
 
 # ---------------------------------------------------------------------------
 # Synthetic graph (no COMSOL)
@@ -246,7 +253,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _max_graphs_cap() -> Optional[int]:
-    raw = os.environ.get("KINEMATICS_PHYSICS_TEST_MAX_GRAPHS", "").strip().lower()
+    raw = KINEMATICS_PHYSICS_TEST_MAX_GRAPHS.strip().lower()
     if raw in ("", "all"):
         return None
     n = int(raw)
@@ -254,12 +261,7 @@ def _max_graphs_cap() -> Optional[int]:
 
 
 def _relax_shuffle() -> bool:
-    return os.environ.get("KINEMATICS_PHYSICS_RELAX_SHUFFLE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return False
 
 
 def _check_bc() -> bool:
@@ -378,7 +380,7 @@ class TestComsolAnchorPhysicsStrict(unittest.TestCase):
 
     @pytest.mark.slow
     def test_kinematics_comsol_training_physics_consistency(self):
-        min_n = max(1, int(os.environ.get("KINEMATICS_PHYSICS_MIN_ANCHORS", "1")))
+        min_n = max(1, int(KINEMATICS_PHYSICS_MIN_ANCHORS))
         paths = _collect_anchor_paths("kinematics")
         if len(paths) < min_n:
             self.skipTest(
@@ -514,7 +516,7 @@ class TestComsolAnchorPhysicsStrict(unittest.TestCase):
 
     @pytest.mark.slow
     def test_kinematics_comsol_training_physics_consistency_coupled(self):
-        min_n = max(1, int(os.environ.get("KINEMATICS_PHYSICS_MIN_ANCHORS", "1")))
+        min_n = max(1, int(KINEMATICS_PHYSICS_MIN_ANCHORS))
         paths = _collect_anchor_paths("kinematics")
         if len(paths) < min_n:
             self.skipTest(

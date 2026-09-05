@@ -11,6 +11,13 @@ from src.utils.nondim import time_ratio_global_to_convective
 from src.core_physics.mls_gradient import graph_gradient_operators, graph_laplacian_operator
 from src.utils.tensor_utils import as_tensor_like
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_ADHESION_GATE = "global_sigmoid"
+BIOCHEM_SEPARATION_GATE = "dx"
+
+
 
 def surface_time_gate_scalar(data, cfg, *, device, dtype, current_time_s: float | None = None) -> torch.Tensor:
     """Smooth COMSOL step2t(t) gate (adhesion active after ``cfg.surface_time_gate_s``).
@@ -37,7 +44,7 @@ def surface_time_gate_scalar(data, cfg, *, device, dtype, current_time_s: float 
 
 def _biochem_adhesion_gate_mode() -> str:
     """Dispatch env: ``global_sigmoid`` (default) | ``fourier_tau`` | ``spatial_mlp``."""
-    return (os.environ.get("BIOCHEM_ADHESION_GATE") or "global_sigmoid").strip().lower()
+    return BIOCHEM_ADHESION_GATE.strip().lower()
 
 
 def compute_adhesion_gate(
@@ -609,7 +616,7 @@ class BiochemPhysicsKernels:
         # comsol007: the repo's `dshear_ds` percentiles are exactly [0, 0, -0].
         # `BIOCHEM_SEPARATION_GATE=stream` restores the old behaviour.
         # See docs/PHASE3_RESULTS.md 1.
-        if (os.environ.get("BIOCHEM_SEPARATION_GATE") or "dx").strip().lower() == "stream":
+        if BIOCHEM_SEPARATION_GATE.strip().lower() == "stream":
             vel_mag = torch.sqrt(u ** 2 + v ** 2) + 1e-8
             dshear_ds = ((u / vel_mag) * dshear_dx) + ((v / vel_mag) * dshear_dy)
         else:

@@ -61,12 +61,12 @@ PACKS = anchor_packs_dir()
 #: the two halves must be built from the same velocity field -- `--flow pred` reads the
 #: predicted-flow v3 cache, which `scripts/build_clot_ml_cache.py --flow pred` writes.
 SRC_FOR_FLOW = {"gt": "outputs/clot_ml_cache_gt", "pred": "outputs/clot_ml_cache_pred",
-                "fem": "outputs/clot_ml_cache_fem"}
+                "fem": "outputs/clot_ml_cache_fem", "rgp": "outputs/clot_ml_cache_rgp"}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--flow", default="gt", choices=["gt", "pred", "fem"],
+    ap.add_argument("--flow", default="gt", choices=list(SRC_FOR_FLOW),
                     help="velocity field for BOTH the source v3 cache and the v4 block")
     ap.add_argument("--out", default="",
                     help="default: outputs/clot_ml_cache_v4 (gt) / _v4_pred (pred)")

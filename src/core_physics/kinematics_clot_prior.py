@@ -27,6 +27,13 @@ if TYPE_CHECKING:
     from src.core_physics.mls_gradient import graph_gradient_operators
 from src.config import BiochemConfig
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_PRIOR_MIN_FLOOR = "1e-4"
+BIOCHEM_PRIOR_THROMBUS_CORONA_HOPS = "0"
+
+
 
 def _max_neighbor_dilate_1d(v: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
     flat = v.reshape(-1).contiguous()
@@ -39,7 +46,7 @@ def _max_neighbor_dilate_1d(v: torch.Tensor, edge_index: torch.Tensor) -> torch.
 
 def _thrombus_corona_hop_count() -> int:
     try:
-        return max(0, min(12, int(os.environ.get("BIOCHEM_PRIOR_THROMBUS_CORONA_HOPS", "0"))))
+        return max(0, min(12, int(BIOCHEM_PRIOR_THROMBUS_CORONA_HOPS)))
     except ValueError:
         return 0
 
@@ -104,7 +111,7 @@ def clot_prior_features(
         cols.append(
             _normalize_field(dx_raw, fields.adjacent_band, mode=norm_mode).clamp(0.0, 1.0)
         )
-    min_floor = max(float(os.environ.get("BIOCHEM_PRIOR_MIN_FLOOR", "1e-4") or "1e-4"), 0.0)
+    min_floor = max(float(BIOCHEM_PRIOR_MIN_FLOOR or "1e-4"), 0.0)
     pad_template = (min_floor * fields.wall_proximity).clamp(0.0, 1.0)
     while len(cols) < n_features:
         cols.append(pad_template)

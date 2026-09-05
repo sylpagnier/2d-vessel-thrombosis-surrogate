@@ -172,9 +172,9 @@ def load_kinematics_predictor(
 
 
 def _kin_solver_kwargs() -> dict[str, object]:
-    solver = os.environ.get("VIZ_KIN_SOLVER", "anderson").strip().lower() or "anderson"
-    beta = float(os.environ.get("VIZ_KIN_ANDERSON_BETA", "0.8"))
-    warmup = int(os.environ.get("VIZ_KIN_ANDERSON_WARMUP", "5"))
+    solver = VIZ_KIN_SOLVER.strip().lower() or "anderson"
+    beta = float(VIZ_KIN_ANDERSON_BETA)
+    warmup = int(VIZ_KIN_ANDERSON_WARMUP)
     return {
         "solver": solver,
         "anderson_beta": beta,
@@ -205,6 +205,14 @@ def _store_joint_cache(model: RGP_DEQ, key: tuple[int, int, int], pred: torch.Te
 #: the 95th percentile of the per-vessel maximum over ``graphs_kinematics/carreau`` (n=40).
 #: Re-exported from `src.config` -- one definition, shared with the encoder's own clamp.
 from src.config import WIDTH_D1_MAX, WIDTH_D2_MAX  # noqa: E402,F401
+
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+VIZ_KIN_ANDERSON_BETA = "0.8"
+VIZ_KIN_ANDERSON_WARMUP = "5"
+VIZ_KIN_SOLVER = "anderson"
+
 
 
 @contextlib.contextmanager

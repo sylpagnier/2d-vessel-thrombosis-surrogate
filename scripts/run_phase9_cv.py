@@ -119,6 +119,12 @@ def main() -> int:
     ap.add_argument("--tag", required=True)
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--seed-offset", type=int, default=0,
+                    help="first ensemble seed (default 0, i.e. seeds 0..seeds-1).  Set it to "
+                         "`--seeds` to produce an INDEPENDENT replicate of the same arm: same "
+                         "cache, same folds, disjoint seeds.  Pairing two such runs measures "
+                         "the pipeline's own noise, which is the null every flow-source "
+                         "comparison is read against and which nothing had ever quantified.")
     # which feature cache to read: "gt" is the v3 55-channel one, "v4" adds the advective
     # transport + indicator-gate channels (scripts/build_clot_ml_cache_v4.py)
     ap.add_argument("--cache", default="gt")
@@ -169,7 +175,7 @@ def main() -> int:
     for k, held in enumerate(folds):
         tr = [a for a in pool if a not in held]
         acc, accr = {}, {}
-        for s in range(args.seeds):
+        for s in range(args.seed_offset, args.seed_offset + args.seeds):
             predict = train_one(tr, cache, cfg, dev_t, seed=s)
             if args.save_fold_models:
                 _save_fold_member(

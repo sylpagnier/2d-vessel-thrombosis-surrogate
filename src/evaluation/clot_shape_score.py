@@ -22,6 +22,12 @@ from src.config import PhysicsConfig, STATE_CHANNEL_MU_EFF_ND
 from src.core_physics.clot_phi_simple import clot_phi_thresh_si, mu_growth_clot_binary_mask
 from src.utils.metrics import rel_l2_uvp
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_SHAPE_MU_THRESH_SI = ""
+
+
 
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
@@ -45,7 +51,7 @@ def _env_int(name: str, default: int) -> int:
 
 def resolve_clot_shape_mu_thresh_si(phys_cfg: PhysicsConfig) -> float:
     """Threshold for binary growth clot on full mesh (Pa*s)."""
-    override = os.environ.get("CLOT_SHAPE_MU_THRESH_SI", "").strip()
+    override = CLOT_SHAPE_MU_THRESH_SI.strip()
     if override:
         return max(float(override), float(phys_cfg.mu_inf))
     return float(clot_phi_thresh_si(phys_cfg))

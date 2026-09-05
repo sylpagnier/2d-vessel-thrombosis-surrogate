@@ -11,6 +11,14 @@ import torch
 from src.config import NodeFeat, PhysicsConfig
 from src.utils.paths import get_project_root
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_PHI_CARRY_GT_FADE_EPOCHS = "0"
+CLOT_PHI_CARRY_GT_WARMUP_EPOCHS = "0"
+CLOT_PHI_CARRY_GT_WARMUP_STEPS = "0"
+
+
 VelSource = Literal["gt", "kinematics"]
 
 
@@ -33,7 +41,7 @@ def clot_phi_carry_log_mu_enabled() -> bool:
 
 def clot_phi_carry_gt_warmup_epochs() -> int:
     """Train-only: first N epochs feed log(GT mu @ ti) in carry slot (R1D-aligned)."""
-    raw = (os.environ.get("CLOT_PHI_CARRY_GT_WARMUP_EPOCHS") or "0").strip()
+    raw = CLOT_PHI_CARRY_GT_WARMUP_EPOCHS.strip()
     try:
         return max(int(raw), 0)
     except ValueError:
@@ -42,7 +50,7 @@ def clot_phi_carry_gt_warmup_epochs() -> int:
 
 def clot_phi_carry_gt_warmup_steps() -> int:
     """Train-only: first K macro indices per graph use GT log mu in carry slot (-1 = disabled)."""
-    raw = (os.environ.get("CLOT_PHI_CARRY_GT_WARMUP_STEPS") or "0").strip()
+    raw = CLOT_PHI_CARRY_GT_WARMUP_STEPS.strip()
     try:
         return int(raw)
     except ValueError:
@@ -51,7 +59,7 @@ def clot_phi_carry_gt_warmup_steps() -> int:
 
 def clot_phi_carry_gt_fade_epochs() -> int:
     """Train-only: linear blend GT -> pred carry over this many epochs after warmup_epochs."""
-    raw = (os.environ.get("CLOT_PHI_CARRY_GT_FADE_EPOCHS") or "0").strip()
+    raw = CLOT_PHI_CARRY_GT_FADE_EPOCHS.strip()
     try:
         return max(int(raw), 0)
     except ValueError:

@@ -9,6 +9,12 @@ import torch
 
 from src.utils import species_channels as sc
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_PUSHFORWARD_SPECIES_CHANNELS = ""
+
+
 # Indices within the 12-ch species block ``y[..., 4:16]`` (NOT full-y columns;
 # add 4 for the full-y column). Single-sourced from ``src.utils.species_channels``
 # so they cannot drift from the enums / channel schema.
@@ -76,7 +82,7 @@ def parse_channel_list(spec: str) -> list[int]:
 
 
 def pushforward_channels_from_env() -> list[int] | None:
-    raw = (os.environ.get("BIOCHEM_PUSHFORWARD_SPECIES_CHANNELS") or "").strip()
+    raw = BIOCHEM_PUSHFORWARD_SPECIES_CHANNELS.strip()
     if not raw:
         return None
     return parse_channel_list(raw)

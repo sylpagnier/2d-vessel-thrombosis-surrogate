@@ -158,6 +158,10 @@ def main() -> int:
         # Rewrite the prior block BEFORE the solve: the DEQ consumes UV_PRIOR/MU_PRIOR both in
         # its encoder and in the hard BC `u = uv_prior + sdf * uvp`, so applying this after the
         # solve would leave every output conditioned on the leaked field.
+        # `torch.load` restores no provenance, so a prior source that has to solve on the
+        # deployment mesh (`fem`) has nothing to resolve it by; the stem IS the anchor here.
+        if not str(getattr(data, "graph_stem", "") or ""):
+            data.graph_stem = anchor
         data_cuda = apply_prior_source(data, prior_source).to(device)
         with torch.no_grad():
             pred, z_kin = predict_kinematics_and_latent(kine, data_cuda)

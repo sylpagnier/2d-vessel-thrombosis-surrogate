@@ -21,6 +21,12 @@ from src.core_physics.clot_growth_masks import (
 )
 from src.core_physics.clot_phi_simple import _wall_mask_from_data
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_V2_CATALYTIC_BETA = "1.0"
+
+
 
 #: Fallback when neither a typed runtime nor the environment specifies a value.
 #: Every production recipe sets nucleation hops explicitly (see
@@ -69,7 +75,7 @@ def catalytic_hops_from_env() -> int:
 
 
 def catalytic_beta_from_env() -> float:
-    raw = (os.environ.get("CLOT_V2_CATALYTIC_BETA") or "1.0").strip()
+    raw = CLOT_V2_CATALYTIC_BETA.strip()
     try:
         return max(float(raw), 0.0)
     except ValueError:

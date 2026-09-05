@@ -223,7 +223,7 @@ def extract_transfer_zip_path(*, root: Path | None = None, transfer_dir: Path | 
 def default_downloads_dir() -> Path:
     """User Downloads folder (Windows ``~/Downloads``, with OneDrive fallback)."""
     candidates: list[Path] = [Path.home() / "Downloads"]
-    userprofile = os.environ.get("USERPROFILE")
+    userprofile = None
     if userprofile:
         candidates.append(Path(userprofile) / "Downloads")
     onedrive = os.environ.get("OneDrive")

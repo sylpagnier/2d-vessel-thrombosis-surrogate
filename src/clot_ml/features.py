@@ -48,6 +48,12 @@ from scipy.spatial import cKDTree
 
 from src.data_gen.lib.mesh_wls import solid_boundary_nodes
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_ML_ORACLE_BLOCKAGE = ""
+
+
 
 MAT_S = 7e10          # pack Mat_log1p_nd -> COMSOL model units
 BULK_S = 2.5e14
@@ -153,9 +159,11 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     d_bar = float(data.d_bar.reshape(-1)[0])
 
     from src.clot_ml.temporal import _flow_hops
+    from src.core_physics.flow_sources import RECONSTRUCTED
     hops = _flow_hops(flow)
-    u = (data.u0_pred if flow in ("pred", "fem") else data.y[0, :, 0]).reshape(-1).detach().cpu().numpy().astype(np.float64)
-    v = (data.v0_pred if flow in ("pred", "fem") else data.y[0, :, 1]).reshape(-1).detach().cpu().numpy().astype(np.float64)
+    _recon = flow in RECONSTRUCTED
+    u = (data.u0_pred if _recon else data.y[0, :, 0]).reshape(-1).detach().cpu().numpy().astype(np.float64)
+    v = (data.v0_pred if _recon else data.y[0, :, 1]).reshape(-1).detach().cpu().numpy().astype(np.float64)
 
     p = data.y[0, :, 2].detach().cpu().numpy().astype(np.float64)
 
@@ -219,7 +227,7 @@ def build_features(data, bio_cfg, phys_cfg, *, flow: str = "gt") -> dict:
     # t>0 and is therefore NOT deploy-legal -- it exists to size the corrector programme
     # before anything is built.  See `physics_wall_model.oracle_blockage`.
     _blk = None
-    _orc = (os.environ.get("CLOT_ML_ORACLE_BLOCKAGE") or "").strip()
+    _orc = CLOT_ML_ORACLE_BLOCKAGE.strip()
     if _orc not in ("", "0"):
         from src.core_physics.physics_wall_model import GELATION_SR_RATIO, oracle_blockage
 

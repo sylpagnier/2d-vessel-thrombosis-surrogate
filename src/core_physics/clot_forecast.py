@@ -15,6 +15,12 @@ from src.config import STATE_CHANNEL_MU_EFF_ND, BiochemConfig, PhysicsConfig
 from src.utils import species_channels as sc
 from src.core_physics.clot_growth_masks import resolve_ceiling_mask
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_FORECAST_MASK_MODE = "ceiling"
+
+
 
 @dataclass
 class ClotForecastPairStep:
@@ -49,7 +55,7 @@ def clot_forecast_one_step_enabled() -> bool:
 
 
 def clot_forecast_mask_mode() -> str:
-    return (os.environ.get("CLOT_FORECAST_MASK_MODE") or "ceiling").strip().lower()
+    return CLOT_FORECAST_MASK_MODE.strip().lower()
 
 
 def iter_forecast_pairs(

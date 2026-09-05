@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.data_gen.lib import boundary_snap as snap_mod
 from src.data_gen.lib.biochem_comsol_mesh_export import write_boundary_txt_from_mesh_snap_to_datasets
 from src.data_gen.lib.boundary_snap import (
     BOUNDARY_SNAP_EDGE_FRAC,
@@ -41,7 +42,7 @@ def test_mesh_snap_writes_volume_node_coords(tmp_path, monkeypatch):
         "src.data_gen.lib.biochem_comsol_mesh_export.resolve_boundary_datasets",
         lambda _m: {"inlet": "Inlet", "outlet": "Outlet", "wall": "Wall"},
     )
-    monkeypatch.setenv("BIOCHEM_BOUNDARY_SNAP_CM", "0.05")
+    monkeypatch.setattr(snap_mod, "BIOCHEM_BOUNDARY_SNAP_CM", "0.05")
 
     ok = write_boundary_txt_from_mesh_snap_to_datasets(
         None,
@@ -58,7 +59,7 @@ def test_mesh_snap_writes_volume_node_coords(tmp_path, monkeypatch):
 
 
 def test_boundary_snap_tol_scales_with_mesh_edge(monkeypatch):
-    monkeypatch.delenv("BIOCHEM_BOUNDARY_SNAP_CM", raising=False)
+    monkeypatch.setattr(snap_mod, "BIOCHEM_BOUNDARY_SNAP_CM", "")
     assert boundary_snap_tol_m(mesh_edge_scale_m=None) == pytest.approx(BOUNDARY_SNAP_FLOOR_M)
     edge = 3.54e-4  # comsol048 mesh_edge_scale_m
     tol = boundary_snap_tol_m(mesh_edge_scale_m=edge)
@@ -68,5 +69,5 @@ def test_boundary_snap_tol_scales_with_mesh_edge(monkeypatch):
 
 
 def test_boundary_snap_tol_env_override_cm(monkeypatch):
-    monkeypatch.setenv("BIOCHEM_BOUNDARY_SNAP_CM", "0.05")
+    monkeypatch.setattr(snap_mod, "BIOCHEM_BOUNDARY_SNAP_CM", "0.05")
     assert boundary_snap_tol_m(mesh_edge_scale_m=1e-3) == pytest.approx(5e-4)

@@ -30,6 +30,26 @@ from src.core_physics.clot_kinematics_fields import adjacent_band_mask, compute_
 from src.core_physics.kinematics_clot_prior import clot_prior_features, clot_prior_score_flat
 from src.utils.rheology import carreau_yasuda_viscosity
 
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+CLOT_PHI_DGAMMA_FEATURE_TIME = "ref"
+CLOT_PHI_DGAMMA_REF_TIME = "0"
+CLOT_PHI_HARD_SUPPORT_PROJECTION = ""
+CLOT_PHI_MASK_MODE = "neighbor"
+CLOT_PHI_PHYSICS_GELATION_ONSET_FRAC = "0"
+CLOT_PHI_PHYSICS_MU2_CAP = ""
+CLOT_PHI_PRIOR_N = "2"
+CLOT_PHI_PRIOR_RULE_MAX_HOP_WALL = ""
+CLOT_PHI_PRIOR_RULE_P = "0.80"
+CLOT_PHI_PRIOR_RULE_POST_GATE = ""
+CLOT_PHI_PRIOR_RULE_RANK_SDF_MAX = ""
+CLOT_PHI_PRIOR_RULE_SKIP_INLET_Q = ""
+CLOT_PHI_SHEAR_MAX_SCOPE = "global"
+CLOT_PHI_SHEAR_REF_TIME = "-1"
+CLOT_PHI_SUPPORT_BAND = "physics"
+
+
 
 def _env_float(name: str, default: float) -> float:
     raw = (os.environ.get(name) or "").strip()
@@ -97,7 +117,7 @@ def clot_phi_shear_wall_exempt() -> bool:
 
 def clot_phi_shear_ref_time_index(data) -> int:
     """Time index for GT ``u,v`` shear reference (default ``-1`` = final frame)."""
-    raw = (os.environ.get("CLOT_PHI_SHEAR_REF_TIME") or "-1").strip()
+    raw = CLOT_PHI_SHEAR_REF_TIME.strip()
     try:
         ti = int(raw)
     except ValueError:
@@ -112,7 +132,7 @@ def gt_gamma_dot_nd(data, time_index: int, device: torch.device) -> torch.Tensor
     """COMSOL GT shear rate ``gamma_dot`` [1/s] ND from ``y[ti]`` ``u,v`` and graph grads."""
     use_kine = False
     if (
-        os.environ.get("T0_R4_FLOW_SOURCE") == "kinematics"
+        None == "kinematics"
         or os.environ.get("CLOT_PHI_VEL_SOURCE") == "kinematics"
         or vel_source == "kinematics" or (vel_source is None and os.environ.get("CLOT_TEMPORAL_VEL_SOURCE") == "kinematics")
     ):
@@ -142,7 +162,7 @@ def clot_phi_dgamma_slice_enabled() -> bool:
 
 def clot_phi_dgamma_ref_time_index(data) -> int:
     """Reference time for GT ``u,v`` used in ``d(gamma)/dx`` slice (default ``0`` = SS / inlet)."""
-    raw = (os.environ.get("CLOT_PHI_DGAMMA_REF_TIME") or "0").strip()
+    raw = CLOT_PHI_DGAMMA_REF_TIME.strip()
     try:
         ti = int(raw)
     except ValueError:
@@ -155,7 +175,7 @@ def clot_phi_dgamma_ref_time_index(data) -> int:
 
 def clot_phi_dgamma_feature_time_index(data, time_index: int) -> int:
     """Time index for ``-dgamma/dx`` in node features (mask slice still uses ``DGAMMA_REF_TIME``)."""
-    raw = (os.environ.get("CLOT_PHI_DGAMMA_FEATURE_TIME") or "ref").strip().lower()
+    raw = CLOT_PHI_DGAMMA_FEATURE_TIME.strip().lower()
     if raw in ("current", "slice", "same", "match"):
         t_last = int(data.y.shape[0]) - 1
         return max(0, min(int(time_index), t_last))
@@ -182,7 +202,7 @@ def gt_neg_dgamma_dx_phys(
     """COMSOL-aligned ``max(0, -d(gamma)/dx)`` [1/(m*s)] from GT ``u,v`` (matches ``d(spf.sr,x)`` band)."""
     use_kine = False
     if (
-        os.environ.get("T0_R4_FLOW_SOURCE") == "kinematics"
+        None == "kinematics"
         or os.environ.get("CLOT_PHI_VEL_SOURCE") == "kinematics"
         or vel_source == "kinematics" or (vel_source is None and os.environ.get("CLOT_TEMPORAL_VEL_SOURCE") == "kinematics")
     ):
@@ -351,7 +371,7 @@ def neighbor_supervision_mask(
 
 
 def clot_phi_mask_mode() -> str:
-    raw = (os.environ.get("CLOT_PHI_MASK_MODE") or "neighbor").strip().lower()
+    raw = CLOT_PHI_MASK_MODE.strip().lower()
     if raw in ("sdf", "shell", "legacy"):
         return "sdf"
     return "neighbor"
@@ -472,7 +492,7 @@ def supervision_region_mask(
     elif clot_phi_shear_min_frac() > 0.0:
         n = int(data.num_nodes)
         wall = _wall_mask_from_data(data, device, n)
-        scope = (os.environ.get("CLOT_PHI_SHEAR_MAX_SCOPE") or "global").strip().lower()
+        scope = CLOT_PHI_SHEAR_MAX_SCOPE.strip().lower()
         pool = region if scope in ("region", "mask", "base") else None
         region = region & shear_activity_mask(data, device, wall, pool=pool)
     return region
@@ -880,7 +900,7 @@ def clot_phi_physics_wall_mat_only() -> bool:
 
 def clot_phi_physics_gelation_onset_frac() -> float:
     try:
-        return max(float(os.environ.get("CLOT_PHI_PHYSICS_GELATION_ONSET_FRAC", "0") or "0"), 0.0)
+        return max(float(CLOT_PHI_PHYSICS_GELATION_ONSET_FRAC or "0"), 0.0)
     except ValueError:
         return 0.0
 
@@ -1000,7 +1020,7 @@ def mu2_comsol_from_fi_si(fi_si: torch.Tensor, bio_cfg: BiochemConfig, mu_ratio_
 
 
 def clot_phi_physics_mu2_cap() -> float | None:
-    raw = (os.environ.get("CLOT_PHI_PHYSICS_MU2_CAP") or "").strip()
+    raw = CLOT_PHI_PHYSICS_MU2_CAP.strip()
     if not raw:
         return None
     return max(float(raw), 0.0)
@@ -1100,7 +1120,7 @@ def clot_phi_use_prior_features() -> bool:
 
 def clot_phi_prior_feature_count() -> int:
     try:
-        return max(0, min(4, int(os.environ.get("CLOT_PHI_PRIOR_N", "2"))))
+        return max(0, min(4, int(CLOT_PHI_PRIOR_N)))
     except ValueError:
         return 2
 
@@ -1132,7 +1152,7 @@ def clot_phi_mlp_depth() -> int:
 
 def clot_prior_rule_p_quantile() -> float:
     """Prior top-(1-p) fraction inside ceiling (default p80). Env: ``CLOT_PHI_PRIOR_RULE_P``."""
-    raw = (os.environ.get("CLOT_PHI_PRIOR_RULE_P") or "0.80").strip()
+    raw = CLOT_PHI_PRIOR_RULE_P.strip()
     try:
         p = float(raw)
     except ValueError:
@@ -1166,7 +1186,7 @@ def sweep_winner_prior_rule_config() -> ClotPriorRuleConfig:
 
 
 def _prior_rule_post_gate_from_env() -> str | None:
-    raw = (os.environ.get("CLOT_PHI_PRIOR_RULE_POST_GATE") or "").strip().lower()
+    raw = CLOT_PHI_PRIOR_RULE_POST_GATE.strip().lower()
     if not raw or raw in ("0", "none", "off", "false"):
         return None
     return raw
@@ -1191,7 +1211,7 @@ def prior_rule_config_from_env() -> ClotPriorRuleConfig:
         require_on_wall=_prior_rule_env_bool("CLOT_PHI_PRIOR_RULE_ON_WALL", False),
         max_hop_from_wall=(
             int(os.environ["CLOT_PHI_PRIOR_RULE_MAX_HOP_WALL"])
-            if (os.environ.get("CLOT_PHI_PRIOR_RULE_MAX_HOP_WALL") or "").strip()
+            if CLOT_PHI_PRIOR_RULE_MAX_HOP_WALL.strip()
             else None
         ),
         combine_legs=combine,
@@ -1205,14 +1225,14 @@ def prior_rule_config_from_env() -> ClotPriorRuleConfig:
         ),
         rank_sdf_max_nd=(
             float(os.environ["CLOT_PHI_PRIOR_RULE_RANK_SDF_MAX"])
-            if (os.environ.get("CLOT_PHI_PRIOR_RULE_RANK_SDF_MAX") or "").strip()
+            if CLOT_PHI_PRIOR_RULE_RANK_SDF_MAX.strip()
             else base.rank_sdf_max_nd
         ),
         flux_dx_raw_top_frac=_prior_rule_env_frac("CLOT_PHI_PRIOR_RULE_FLUX_DX_RAW_TOP")
         or base.flux_dx_raw_top_frac,
         skip_inlet_quantile=(
             float(os.environ["CLOT_PHI_PRIOR_RULE_SKIP_INLET_Q"])
-            if (os.environ.get("CLOT_PHI_PRIOR_RULE_SKIP_INLET_Q") or "").strip()
+            if CLOT_PHI_PRIOR_RULE_SKIP_INLET_Q.strip()
             else base.skip_inlet_quantile
         ),
     )
@@ -1344,7 +1364,7 @@ def predict_phi_prior_rule(
     cfg = rule or default_prior_rule_config()
     use_kine = False
     if (
-        os.environ.get("T0_R4_FLOW_SOURCE") == "kinematics"
+        None == "kinematics"
         or os.environ.get("CLOT_PHI_VEL_SOURCE") == "kinematics"
         or vel_source == "kinematics" or (vel_source is None and os.environ.get("CLOT_TEMPORAL_VEL_SOURCE") == "kinematics")
     ):
@@ -1621,7 +1641,7 @@ def mu_eff_from_carried_phi(
 
 def clot_phi_hard_support_projection_enabled() -> bool:
     """When true, deployed mu = Carreau bulk off support band B_t (CAVO step 3-4)."""
-    raw = (os.environ.get("CLOT_PHI_HARD_SUPPORT_PROJECTION") or "").strip().lower()
+    raw = CLOT_PHI_HARD_SUPPORT_PROJECTION.strip().lower()
     if not raw:
         try:
             from src.core_physics.clot_forecast import clot_forecast_one_step_enabled
@@ -1640,7 +1660,7 @@ def clot_support_band_mode() -> str:
     - ``ceiling_growth``: t0 dgamma growth seed + hop support capped by wall+K ceiling.
     - ``loss_mask``: use step loss_mask (legacy / debug only).
     """
-    raw = (os.environ.get("CLOT_PHI_SUPPORT_BAND") or "physics").strip().lower()
+    raw = CLOT_PHI_SUPPORT_BAND.strip().lower()
     if raw in ("frozen_t0", "t0", "deploy_band", "b0"):
         return "frozen_t0"
     if raw in ("ceiling_growth", "ceiling", "hop_growth", "growth"):
