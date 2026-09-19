@@ -571,7 +571,16 @@ def _get_pipeline() -> CustomerDeployPipeline:
 
 
 def _metrics_csv_path(job_id: str) -> Path:
-    return ROOT / "outputs" / "customer_predict" / f"web_scientific_metrics_{job_id}.csv"
+    """Path of one job's metrics CSV.
+
+    ``job_id`` reaches here from the request line, so it is rebuilt from its parsed UUID
+    rather than interpolated: `uuid.UUID` rejects anything that is not 32 hex digits in the
+    canonical layout, and `str()` of the result cannot contain a separator or a `..`.  The
+    route's own regex and the `JOBS` membership check already make traversal unreachable --
+    this is the belt that does not depend on either of them staying that way.
+    """
+    safe_id = str(uuid.UUID(str(job_id)))
+    return ROOT / "outputs" / "customer_predict" / f"web_scientific_metrics_{safe_id}.csv"
 
 
 def _set_job(job_id: str, **updates: Any) -> None:
@@ -1053,7 +1062,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "Unknown job."}, HTTPStatus.NOT_FOUND)
                 return
             if match.group(2):
-                csv_path = _metrics_csv_path(job_id)
+                try:
+                    csv_path = _metrics_csv_path(job_id)
+                except ValueError:
+                    # Not a UUID, so no job of this run owns it -- same answer as an unknown job.
+                    self._json({"error": "Unknown job."}, HTTPStatus.NOT_FOUND)
+                    return
                 if not csv_path.is_file():
                     self._json({"error": "CSV is not available for this job."}, HTTPStatus.NOT_FOUND)
                 else:

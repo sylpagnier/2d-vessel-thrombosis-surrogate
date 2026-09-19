@@ -233,19 +233,24 @@ def test_finished_jobs_are_pruned_without_evicting_recent_csv_jobs(tmp_path, mon
     monkeypatch.setattr(web, "JOBS", {})
     (tmp_path / "outputs" / "customer_predict").mkdir(parents=True)
 
-    for i in range(4):
-        job_id = f"csv-{i}"
+    # Real job ids are uuid4 and `_metrics_csv_path` now insists on that, so the fixture uses
+    # UUIDs whose last field counts, keeping the assertions readable.
+    csv_ids = [f"00000000-0000-4000-8000-00000000000{i}" for i in range(4)]
+    preview_ids = [f"00000000-0000-4000-8000-0000000001{i:02d}" for i in range(10)]
+    running_id = "00000000-0000-4000-8000-0000000000ff"
+
+    for i, job_id in enumerate(csv_ids):
         web._metrics_csv_path(job_id).write_text("t\n")
         web._set_job(job_id, status="done", finished_at=float(i), result={"csv_url": "x"})
-    web._set_job("running", status="running")
-    for i in range(10):
-        web._set_job(f"preview-{i}", status="done", finished_at=10.0 + i, result={"kind": "preview"})
+    web._set_job(running_id, status="running")
+    for i, job_id in enumerate(preview_ids):
+        web._set_job(job_id, status="done", finished_at=10.0 + i, result={"kind": "preview"})
 
-    assert {j for j in web.JOBS if j.startswith("csv-")} == {"csv-2", "csv-3"}
-    assert {j for j in web.JOBS if j.startswith("preview-")} == {"preview-7", "preview-8", "preview-9"}
-    assert "running" in web.JOBS
-    assert not web._metrics_csv_path("csv-0").exists()
-    assert web._metrics_csv_path("csv-3").exists()
+    assert {j for j in web.JOBS if j in csv_ids} == set(csv_ids[2:])
+    assert {j for j in web.JOBS if j in preview_ids} == set(preview_ids[7:])
+    assert running_id in web.JOBS
+    assert not web._metrics_csv_path(csv_ids[0]).exists()
+    assert web._metrics_csv_path(csv_ids[3]).exists()
 
 
 def test_controls_stay_inside_the_training_envelope():
@@ -364,3 +369,25 @@ def test_parametric_mesh_matches_the_trained_throat_and_spacing():
     assert abs(aneu.max() - 1.987) < 0.02
     for h in (sten_h, aneu_h):
         assert abs(h - 0.35e-3) < 0.02e-3
+
+
+def test_metrics_csv_path_refuses_a_non_uuid_job_id(tmp_path, monkeypatch):
+    """The CSV route's filename comes off the request line, so it may only be a UUID.
+
+    CodeQL reads `/api/job/<id>/csv` as a path expression fed by user input (py/path-injection).
+    The route's regex and the `JOBS` membership check already make traversal unreachable; this
+    pins the third guard, which does not depend on either of them staying that way.
+    """
+    import uuid
+
+    import pytest
+
+    import src.tools.customer_predict_web as web
+
+    monkeypatch.setattr(web, "ROOT", tmp_path)
+    good = str(uuid.uuid4())
+    assert web._metrics_csv_path(good).name == f"web_scientific_metrics_{good}.csv"
+
+    for bad in ("../../etc/passwd", "a/b", "..", "csv-0", "", "*"):
+        with pytest.raises(ValueError):
+            web._metrics_csv_path(bad)
