@@ -1,0 +1,13 @@
+{
+  "id": "05_bendiness",
+  "title": "Straight to max-bendy vessel vs research parameters",
+  "axis": "bendiness",
+  "description": "Progressive centerline bend: straight -> mild/strong arc -> s_curve -> hook.",
+  "arms": [
+    {"name": "straight", "axis_value": 0.0, "geometry": {"bend_preset": "straight"}},
+    {"name": "arc_mild", "axis_value": 1.0, "geometry": {"bend_preset": "arc_mild"}},
+    {"name": "arc_strong", "axis_value": 2.0, "geometry": {"bend_preset": "arc_strong"}},
+    {"name": "s_curve", "axis_value": 3.0, "geometry": {"bend_preset": "s_curve"}},
+    {"name": "hook", "axis_value": 4.0, "geometry": {"bend_preset": "hook"}}
+  ]
+}

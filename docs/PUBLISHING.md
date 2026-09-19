@@ -1,0 +1,74 @@
+# Publishing policy (2D Thrombosis Surrogate)
+
+This repository is meant to be **publicly pushable**: source, docs, and small reference manifests are versioned. Heavy data, checkpoints, and COMSOL models stay on the machine that trains.
+
+## Track in git
+
+| Path | Why |
+|------|-----|
+| `src/` | Library, training, tools, tests |
+| `scripts/` (active) + `scripts/README.md` | Supported launchers |
+| `docs/` | Design and validation docs |
+| `docs/assets/` | Small README figures (tracked) |
+| `configs/` | Parametric sweep definitions |
+| `data/reference/` | Small baseline / architecture JSON + README |
+| `customer_geometries/README.txt` | Inbox instructions only |
+| `README.md`, `CONTRIBUTING.md`, `LICENSE`, `requirements.txt`, `requirements-customer.txt`, `pytest.ini` | Project entry |
+
+## Keep local (never push)
+
+| Path | Why |
+|------|-----|
+| `data/raw/`, `data/processed/`, `data/benchmark/` | Large meshes / graphs / CFD extracts |
+| `data/reference_local/` | Sweep leftovers (gitignored) |
+| `outputs/` | Checkpoints, logs, viz |
+| `comsol_models/` | `.mph` sources |
+| `customer_geometries/*` (except README) | User uploads |
+| `*.pth`, `*.pt`, `*.ckpt` | Weights |
+| `.venv/`, `__pycache__/`, `.pytest_cache/`, `.idea/` | Environment / IDE |
+| `src/archive/`, `docs/archive/` | Retired code eras and archived notes |
+| `scripts/diag_*.py`, `scripts/diagnose_*.py` | One-off probes; the supported surface is `python -m src.tools.diagnostics` |
+| `AGENTS.md`, `.cursorrules`, `.cursorignore`, `scripts/git-hooks/` | Editor / assistant config |
+| `scripts/stage_a/`, `go_kinematics_stage_a_ladder.ps1`, `go_cv_seeds.sh`, `go_g_vs_fem.sh` | Architecture-exploration ladder: arm-by-arm experiments, not reproducible without local caches |
+| `src/tools/diagnostics/`, `scripts/diag.py`, `go_diag.ps1` | Forensic probes for specific past investigations. Live modules cite them in comments as provenance; the probes themselves stay local |
+| `scripts/archive/` | Catalogue of scripts deleted in earlier cleanups |
+
+## Do not re-add
+
+- Root dumps (`test_legend.png`, `check_nodes_out.txt`, probe logs)
+- One-off census / compare JSON under `outputs/`
+- Personal notes under `notes/`
+
+## After clone
+
+1. `pip install -r requirements.txt` then `pip install -e .` (venv recommended).
+   The editable install is required: scripts import `src`/`scripts` by name and
+   no longer patch `sys.path`.
+2. Place COMSOL / graph data under `data/` and `comsol_models/` as needed.
+3. Optional: copy promoted checkpoints into `outputs/clot_ml/locked/` and `outputs/kinematics/` from your private artifact store.
+4. Use `data/reference/*.json` to see which runs are canonical.
+
+## Distributing the customer app
+
+Researchers who just want to *run* the app should never `git clone` -- the checkpoints and
+demo geometry it needs are gitignored on purpose (see above) and cloning the source repo
+buys nothing without them. Instead they should get the self-contained bundle from the
+repo's [GitHub Releases](https://github.com/sylpagnier/2d-vessel-thrombosis-surrogate/releases)
+page (see the root README's "Try it").
+
+To cut a new release from a machine that has the checkpoints locally:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_bundle.ps1 -Version <Version>
+```
+
+This builds the zip (`scripts/build_customer_bundle.ps1`), then tags, pushes, and publishes
+it as a GitHub Release via the `gh` CLI -- one command, and none of the private artifacts it
+packages ever leave this machine or pass through CI. Full detail on what's in the bundle and
+why: [`CUSTOMER_INSTALLER.md`](CUSTOMER_INSTALLER.md).
+
+## Script surface
+
+- **Supported:** only what [`scripts/README.md`](../scripts/README.md) lists.
+- **Retired launchers** are not published; [`ARCHIVED_STACKS.md`](ARCHIVED_STACKS.md) records what existed.
+- Prefer not adding one-off `analyze_*.py` / `_print_*.py` to the active `scripts/` root unless documented in that README.

@@ -1,0 +1,2368 @@
+"""
+RGP-DEQ Stage-A flow trainer (canonical id: ``rgp_deq_kine``).
+
+mu-coupled physics-modulated GAT + Perceiver DEQ for steady [u,v,p,mu] on vessel graphs.
+Carreau curriculum, dynamic dataset swapping, and loss isolation.
+
+Model class: ``RGP_DEQ`` (legacy alias ``GINO_DEQ``; see ``docs/MODEL_NOMENCLATURE.md``).
+CLI: ``python -m src.bin.main train rgp-deq-kine`` (aliases: ``pmgp-deq-kine``, ``gino-deq-kine``).
+"""
+import argparse
+import json
+import math
+import os
+import random
+import re
+import sys
+import time
+import warnings
+from pathlib import Path
+
+import torch
+import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, LinearLR, SequentialLR
+from torch_geometric.loader import DataLoader
+from tqdm import tqdm
+
+from src.architecture.ginodeq import GINO_DEQ, RGP_DEQ
+from src.architecture.kinematics_model_config import (
+    build_gino_deq_from_ctor,
+    build_rgp_deq_from_ctor,
+    kinematics_checkpoint_tensors,
+    resolve_gino_deq_ctor_kwargs,
+    resolve_rgp_deq_ctor_kwargs,
+    save_kinematics_checkpoint_file,
+    snapshot_gino_deq_model_config,
+    snapshot_rgp_deq_model_config,
+    write_kinematics_architecture_manifest,
+)
+from src.config import VesselConfig, PhysicsConfig, PredChannels
+from src.core_physics.physics_kernels import PhysicsKernels
+from src.data_gen.lib.legal_priors import apply_prior_source, resolve_prior_source
+from src.utils.anchor_mask import graph_has_anchor, anchor_node_mask
+from src.utils.kinematics_physics_terms import compute_kinematics_physics_terms
+from src.utils.metrics import DynamicLossWeighter, quantify_performance
+from src.utils.paths import kinematics_dir
+from src.utils.training_diary import TrainingDiary
+from src.utils.channel_schema import KINE_Y_SCHEMA, assert_graph_schema, infer_missing_schema
+from src.utils.kinematics_console import (
+    kinematics_skip_lbfgs,
+    kinematics_tqdm_enabled,
+    kinematics_val_every,
+)
+from src.utils.kinematics_geometry import (
+
+    GeometryCurriculumConfig,
+    attach_geometry_metadata,
+    cohort_level_counts,
+    count_anchor_physics,
+    geometry_sample_weight,
+    split_anchor_physics_stratified,
+    split_comsol_anchor_train_val,
+    train_pool_for_epoch,
+    warn_if_single_level_cohort,
+)
+
+# Set by the Stage-A arm scripts (`scripts/stage_a/run_*.sh`), the only setter and one
+# outside the tree the knob sweep grepped -- so sweeping these to plain constants made
+# every E-series arm a silent no-op for them.  Read from the environment with the swept
+# value as the default: unset behaves exactly as the constant did.
+KINEMATICS_BAND_FLOOR_WEIGHT = os.environ.get("KINEMATICS_BAND_FLOOR_WEIGHT", "")
+KINEMATICS_DEPLOY_PACKS_ONLY = os.environ.get("KINEMATICS_DEPLOY_PACKS_ONLY", "")
+KINEMATICS_DEPLOY_PROBE_EVERY = ""
+KINEMATICS_ELEVATE_KEEP_WLS = ""
+KINEMATICS_ELEVATE_P2 = os.environ.get("KINEMATICS_ELEVATE_P2", "")
+KINEMATICS_GATE_WEIGHT = os.environ.get("KINEMATICS_GATE_WEIGHT", "")
+KINEMATICS_MAX_NODES = os.environ.get("KINEMATICS_MAX_NODES", "")
+KINEMATICS_MIN_GATE_JACCARD = ""
+KINEMATICS_PRIOR_FLOOR_WEIGHT = os.environ.get("KINEMATICS_PRIOR_FLOOR_WEIGHT", "")
+KINEMATICS_RING_WEIGHT = ""
+KINEMATICS_SELECT_GAIN = ""
+KINEMATICS_SELECT_MAX_GRAPHS = os.environ.get("KINEMATICS_SELECT_MAX_GRAPHS", "6")
+KINEMATICS_SELECT_ON_DEPLOY = "1"
+KINEMATICS_SELECT_PATIENCE = os.environ.get("KINEMATICS_SELECT_PATIENCE", "0")
+KINEMATICS_TAIL_WEIGHT = ""
+KINEMATICS_TRAIN_ON_DEPLOY_PACKS = ""
+KINEMATICS_TRAIN_SUBSAMPLE = ""
+KINEMATICS_WALL_SHEAR_WEIGHT = os.environ.get("KINEMATICS_WALL_SHEAR_WEIGHT", "")
+
+
+
+def compute_gt_shear_rate(data):
+    from src.utils.rheology import compute_shear_rate
+    from src.core_physics.mls_gradient import graph_gradient_operators
+    u_gt = data.y[:, 0]  # u_nd
+    v_gt = data.y[:, 1]  # v_nd
+    
+    G_x, G_y = graph_gradient_operators(data, device=u_gt.device, dtype=u_gt.dtype)
+    u_col = u_gt.unsqueeze(-1)
+    v_col = v_gt.unsqueeze(-1)
+    
+    u_x = torch.sparse.mm(G_x, u_col).squeeze(-1)
+    u_y = torch.sparse.mm(G_y, u_col).squeeze(-1)  
+    v_x = torch.sparse.mm(G_x, v_col).squeeze(-1)
+    v_y = torch.sparse.mm(G_y, v_col).squeeze(-1)
+    return compute_shear_rate(u_x, u_y, v_x, v_y)
+
+
+def resolve_kinematics_train_val_split(
+    dataset,
+    *,
+    geometry_enabled: bool,
+    seed: int = 42,
+    train_ratio: float = 0.9,
+):
+    """COMSOL holdout split when COMSOL anchor anchors merged; else stratified default."""
+    use_comsol = os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if use_comsol and any(getattr(d, "is_comsol_anchor", False) for d in dataset):
+        return split_comsol_anchor_train_val(dataset, seed=seed, train_ratio=train_ratio)
+    if geometry_enabled:
+        return split_anchor_physics_stratified(dataset, seed=seed, train_ratio=train_ratio)
+    return split_anchor_physics(dataset, seed=seed, train_ratio=train_ratio)
+
+
+def _mean_rel_l2_on_graphs(
+    model,
+    graphs,
+    kernels,
+    device,
+    *,
+    stems: set[str] | None = None,
+    comsol_only: bool = False,
+    synthetic_only: bool = False,
+    geometry_levels: set[int] | None = None,
+):
+    """Mean rel-L2 on a graph list with optional cohort filters."""
+    from src.utils.kinematics_geometry import graph_geometry_level
+
+    if not graphs:
+        return float("nan"), 0
+    subset = graphs
+    if stems is not None:
+        subset = [d for d in subset if getattr(d, "graph_stem", "") in stems]
+    if comsol_only:
+        subset = [d for d in subset if getattr(d, "is_comsol_anchor", False)]
+    if synthetic_only:
+        subset = [d for d in subset if not getattr(d, "is_comsol_anchor", False)]
+    if geometry_levels is not None:
+        subset = [
+            d for d in subset if graph_geometry_level(d, default=-1) in geometry_levels
+        ]
+    if not subset:
+        return float("nan"), 0
+    loader = DataLoader(subset, batch_size=1, shuffle=False)
+    scores = quantify_performance(model, loader, kernels, device, phase="kinematics")
+    return float(scores.get("rel_l2", float("nan"))), len(subset)
+
+
+def _kinematics_dual_promotion_gates_enabled() -> bool:
+    return os.environ.get("KINEMATICS_DUAL_PROMOTION_GATES", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _kinematics_promotion_gate_limits() -> dict[str, float]:
+    def _f(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return float(default)
+        try:
+            return float(raw)
+        except ValueError:
+            return float(default)
+
+    return {
+        "max_comsol": _f("KINEMATICS_GATE_MAX_COMSOL_REL_L2", 0.25),
+        "max_synthetic": _f("KINEMATICS_GATE_MAX_SYNTHETIC_REL_L2", 0.20),
+        "max_synthetic_l2": _f("KINEMATICS_GATE_MAX_SYNTHETIC_L2_REL_L2", 0.22),
+    }
+
+
+def _selection_gain_mode():
+    """``KINEMATICS_SELECT_GAIN``: ``stencil`` (default), ``shipped``, or a float.
+
+    The shipped ``PRED_DSRX_GAIN = 3.0`` was least-squares fitted against the OLD surrogate, so
+    it carries that surrogate's ~1.35x under-resolution on top of the ~2.2x stencil
+    attenuation.  Selecting a RETRAIN against it rewards a model that stays under-resolved --
+    measured, a perfect field reads gate Jaccard 0.835 on the deploy packs at gain 3.0 against
+    0.941 at the stencil-only gain.  The gain is refitted downstream after any Stage-A change,
+    so freezing the stale one inside the selection metric buys nothing and costs well-posedness.
+    """
+    from src.utils.kinematics_selection import GAIN_STENCIL
+
+    raw = KINEMATICS_SELECT_GAIN.strip().lower()
+    if not raw or raw == GAIN_STENCIL:
+        return GAIN_STENCIL
+    if raw == "shipped":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return GAIN_STENCIL
+
+
+def _selection_metrics_on_graphs(model, graphs, device, *, stems: set[str] | None = None):
+    """Mean wall `dsrx` correlation / gate Jaccard over a graph subset (T7).
+
+    These are what `clot_ml` consumes; rel-L2 is not.  Returns NaNs when no graph in the
+    subset carries the GT needed to compute them, so a missing metric can never look like a
+    passing one.
+
+    The reported ``jac_frac`` is each vessel's Jaccard divided by its own **ceiling** -- the
+    same quantity with ``pred := GT``.  The hops=6-vs-3 stencil asymmetry gives that ceiling a
+    per-vessel value of 0.53-1.00, so a raw cohort mean mixes model quality with the metric's
+    own defect; the fraction does not.  Selection reads the fraction.
+    """
+    from src.utils.kinematics_inference import clamped_width_priors
+    from src.utils.kinematics_selection import wall_shear_selection_metrics
+
+    subset = graphs if stems is None else [
+        g for g in graphs if getattr(g, "graph_stem", "") in stems
+    ]
+    # Each graph here costs a full 25-iteration Anderson solve, and validation runs every other
+    # epoch.  The metric is a cohort mean, so a capped, DETERMINISTIC subset gives the same
+    # signal for a fraction of the wall clock; raise it for the final selection pass.
+    cap = int(KINEMATICS_SELECT_MAX_GRAPHS or 0)
+    if cap > 0 and len(subset) > cap:
+        # STRIDED, not the alphabetical prefix.  The first 8 deploy stems are the easy end of
+        # the cohort -- the analytic prior scores 36.7% of ceiling on them against 16.6% over
+        # all 25 -- so a prefix would tune the run on a subset that is not the problem.
+        ordered = sorted(subset, key=lambda g: str(getattr(g, "graph_stem", "")))
+        step = max(1, len(ordered) // cap)
+        subset = ordered[::step][:cap]
+    gain = _selection_gain_mode()
+    corr, jac, frac, ceil, rl2, dsc, per_vessel = [], [], [], [], [], [], {}
+    model.eval()
+    # Selection runs straight after a training epoch, so the allocator is fragmented and a
+    # 14.8k-node deploy pack OOMs at 4 GB even under `no_grad`.  Release before starting, and
+    # between graphs, rather than letting the biggest vessel decide whether selection happens.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    with torch.no_grad():
+        for g in subset:
+            for attr in ("_cache_key", "_cache_pred", "_cache_latent"):
+                if hasattr(model, attr):
+                    setattr(model, attr, None)
+            try:
+                gg = g.clone().to(device)
+                # The deploy packs' `width_d1/d2` come from a stale stored WLS operator (B13)
+                # and reach 1e5.  Inference clamps them; selection has to run the SAME input
+                # transform or it is scoring a field the deploy path never produces.
+                with clamped_width_priors(gg) as gc:
+                    out = model(gc, solver="anderson")
+                pred = out[0] if isinstance(out, tuple) else out
+                pcpu = pred[:, :2].detach().cpu()
+                m = wall_shear_selection_metrics(pcpu, g, gain=gain)
+                # DEPLOY rel-L2 -- the leading indicator, and not the same number as the
+                # synthetic val rel-L2 printed beside it.  Measured by overfitting one deploy
+                # vessel, `gateJ%` is a near-THRESHOLD function of it: 10.7% at rel-L2 0.136,
+                # 45.5% at 0.099, 97.8% at 0.051.  Every arm so far has sat at 0.36-0.50, i.e.
+                # on the flat side, where the gate cannot respond to anything.
+                _y = g.y[0] if g.y.dim() == 3 else g.y
+                _yv = _y[:, :2].double()
+                m["rel_l2"] = float((pcpu.double() - _yv).norm() / _yv.norm().clamp(min=1e-30))
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                print(f"[kin] WARN selection OOM on {getattr(g, 'graph_stem', '?')}; skipped")
+                continue
+            except Exception as exc:
+                print(f"[kin] WARN selection failed on {getattr(g, 'graph_stem', '?')}: "
+                      f"{type(exc).__name__}: {exc}")
+                continue
+            if math.isfinite(m.get("dsrx_corr", float("nan"))):
+                corr.append(m["dsrx_corr"])
+            if math.isfinite(m.get("gate_jaccard", float("nan"))):
+                jac.append(m["gate_jaccard"])
+            if math.isfinite(m.get("gate_jaccard_ceiling", float("nan"))):
+                ceil.append(m["gate_jaccard_ceiling"])
+            if math.isfinite(m.get("gate_jaccard_frac", float("nan"))):
+                frac.append(m["gate_jaccard_frac"])
+            if math.isfinite(m.get("rel_l2", float("nan"))):
+                rl2.append(m["rel_l2"])
+            if math.isfinite(m.get("dsrx_scale", float("nan"))):
+                dsc.append(m["dsrx_scale"])
+            per_vessel[str(getattr(g, "graph_stem", "?"))] = m
+            del gg, pred, out
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    model.train()
+    mean = lambda v: float(sum(v) / len(v)) if v else float("nan")
+    return {
+        "dsrx_corr": mean(corr),
+        "gate_jaccard": mean(jac),
+        "gate_jaccard_ceiling": mean(ceil),
+        "gate_jaccard_frac": mean(frac),
+        "deploy_rel_l2": mean(rl2),
+        # THE quantity that separates the prior from a useful model.  Structure (dsrxR) the
+        # prior already has; amplitude it does not: prior 0.07, overfit-on-one-vessel 0.955.
+        "dsrx_scale": mean(dsc),
+        "n": len(jac),
+        "n_attempted": len(subset),
+        "per_vessel": per_vessel,
+    }
+
+
+def _kinematics_promotion_gates_pass(
+    *,
+    comsol_rel: float,
+    comsol_n: int,
+    synthetic_rel: float,
+    synthetic_n: int,
+    synthetic_l2_rel: float,
+    synthetic_l2_n: int,
+    dsrx_corr: float = float("nan"),
+    gate_jaccard: float = float("nan"),
+) -> tuple[bool, dict[str, bool]]:
+    limits = _kinematics_promotion_gate_limits()
+    comsol_ok = (
+        comsol_n > 0
+        and math.isfinite(comsol_rel)
+        and comsol_rel <= limits["max_comsol"]
+    )
+    synth_ok = (
+        synthetic_n > 0
+        and math.isfinite(synthetic_rel)
+        and synthetic_rel <= limits["max_synthetic"]
+    )
+    synth_l2_ok = (
+        synthetic_l2_n > 0
+        and math.isfinite(synthetic_l2_rel)
+        and synthetic_l2_rel <= limits["max_synthetic_l2"]
+    )
+    # T7: optional gates on what the clot stack actually consumes.  Unset means "not checked",
+    # which keeps historical runs identical; a set threshold that cannot be evaluated FAILS
+    # rather than passes, so a missing metric never looks like a passing one.
+    import os as _os
+
+    bits = {"comsol_anchor": comsol_ok, "synthetic": synth_ok, "synthetic_l2": synth_l2_ok}
+    ok = comsol_ok and synth_ok and synth_l2_ok
+
+    min_corr = _os.environ.get("KINEMATICS_MIN_DSRX_CORR", "").strip()
+    if min_corr:
+        good = math.isfinite(dsrx_corr) and dsrx_corr >= float(min_corr)
+        bits["dsrx_corr"] = good
+        ok = ok and good
+    min_jac = KINEMATICS_MIN_GATE_JACCARD.strip()
+    if min_jac:
+        good = math.isfinite(gate_jaccard) and gate_jaccard >= float(min_jac)
+        bits["gate_jaccard"] = good
+        ok = ok and good
+    return ok, bits
+
+# Ignore known PyTorch scheduler deprecation noise in training logs.
+warnings.filterwarnings("ignore", category=UserWarning, message="The epoch parameter.*")
+
+# -------------------------------------------------------------------------
+# Curriculum Definitions
+# -------------------------------------------------------------------------
+STAGE1_END_EPOCH = 40
+STAGE2_END_EPOCH = 60
+
+
+def _prune_kine_training_artifacts(target_dir: Path, *, keep: int = 3) -> int:
+    """Keep only the newest numbered kinematics checkpoint/state files."""
+    if keep < 1:
+        return 0
+    target = Path(target_dir)
+    groups = {
+        "kinematics_ckpt": re.compile(r"^kinematics_ckpt_(\d+)\.pth$"),
+        "kinematics_state": re.compile(r"^kinematics_state_(\d+)\.pth$"),
+    }
+    removed = 0
+    for pattern in groups.values():
+        matches = []
+        for path in target.glob("*.pth"):
+            found = pattern.match(path.name)
+            if found:
+                matches.append((int(found.group(1)), path))
+        matches.sort(key=lambda item: item[0], reverse=True)
+        for _, old_path in matches[keep:]:
+            try:
+                old_path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
+def get_stage_physics(epoch: int, s1_end: int, s2_end: int):
+    """
+    Returns (stage, n, mu_0, target_rheology) based on the training epoch.
+    Stage 1: Newtonian Anchor
+    Stage 2: Soft Transition (Linear Ramp)
+    Stage 3: Target State (Full Carreau-Yasuda)
+    """
+    if epoch < s1_end:
+        return 1, 1.0, 0.0035, "newtonian"
+    elif epoch < s2_end:
+        alpha = (epoch - s1_end) / float(s2_end - s1_end)
+        n = 1.0 - alpha * (1.0 - 0.6)
+        mu_0 = 0.0035 + alpha * (0.035 - 0.0035)
+        # Stage-2 keeps Newtonian labels while physics ramps internally.
+        return 2, n, mu_0, "newtonian"
+    else:
+        return 3, 0.3568, 0.056, "carreau"
+
+
+# -------------------------------------------------------------------------
+# Data Loading & Management
+# -------------------------------------------------------------------------
+def load_dataset(
+    phase: str,
+    rheology: str | None = None,
+    limit: int | None = None,
+    *,
+    attach_geometry: bool = True,
+    shuffle_graphs: bool = False,
+    graph_load_seed: int = 42,
+):
+    cfg = VesselConfig(phase=phase)
+    if phase == "kinematics" and rheology:
+        from src.utils.kinematics_paths import kinematics_graph_rheology_dir
+
+        data_dir = kinematics_graph_rheology_dir(rheology)
+    else:
+        data_dir = cfg.graph_output_dir
+        if rheology:
+            data_dir = data_dir / str(rheology).lower()
+
+    # Train on the deploy packs ALONE, with no synthetic corpus underneath.  This exists for
+    # `prior_source="fem"`: the FEM prior needs a mesh per vessel, and the 250-vessel synthetic
+    # corpus has none (`data/raw/kinematics/meshes/` is empty, and the same-named
+    # `biochem_anchors/vessel_N.msh` is a DIFFERENT vessel -- the solver's registration guard
+    # refuses it).  Mixing a FEM-prior pack with an analytic-prior one in the same run is not an
+    # acceptable fallback either: the prior is the hard BC's base point, so the two would be
+    # different functions sharing one decoder.
+    deploy_only = KINEMATICS_DEPLOY_PACKS_ONLY.strip().lower() in ("1", "true", "yes", "on")
+    if not deploy_only and not data_dir.exists():
+        raise FileNotFoundError(
+            f"Dataset directory not found: {data_dir}. "
+            "Expected rheology-split graphs under graphs_kinematics/<newtonian|carreau>."
+        )
+
+    paths = [] if deploy_only else sorted(data_dir.glob("vessel_*.pt"))
+    if shuffle_graphs:
+        paths = list(paths)
+        rng = random.Random(int(graph_load_seed))
+        rng.shuffle(paths)
+        print(f"[kin] Shuffled graph load order (seed={int(graph_load_seed)}).")
+    if limit is not None:
+        paths = paths[:limit]
+        print(f"[kin] WARN limit-data active: only loading {limit} graphs.")
+    cap_raw = os.environ.get("KINEMATICS_GRAPH_CAP", "").strip()
+    if cap_raw:
+        n_cap = int(cap_raw)
+        n_total = len(paths)
+        if n_total > n_cap:
+            rng = random.Random(int(graph_load_seed))
+            paths = rng.sample(list(paths), n_cap)
+            print(
+                f"[kin] KINEMATICS_GRAPH_CAP={n_cap}: sampled {n_cap}/{n_total} graphs "
+                f"(seed={int(graph_load_seed)})."
+            )
+    if not paths and not deploy_only:
+        raise RuntimeError(
+            f"No graph files found in dataset directory: {data_dir}. "
+            "Expected at least one vessel_*.pt file."
+        )
+    dataset = []
+    if deploy_only:
+        print("[kin] KINEMATICS_DEPLOY_PACKS_ONLY=1: skipping the synthetic corpus entirely.")
+    else:
+        print(f"[kin] Loading {len(paths)} graphs from {data_dir}...")
+    file_iter = paths
+    if kinematics_tqdm_enabled():
+        file_iter = tqdm(paths, leave=False, ascii=sys.platform == "win32")
+    for i, f in enumerate(file_iter):
+        data = torch.load(f, weights_only=False)
+        data = infer_missing_schema(data, phase_hint=phase)
+        assert_graph_schema(data, expected_y_schema=(KINE_Y_SCHEMA,))
+        if attach_geometry:
+            data.graph_stem = f.stem
+            attach_geometry_metadata(data, mesh_input_dir=cfg.mesh_input_dir, stem=f.stem)
+        dataset.append(data)
+        if not kinematics_tqdm_enabled() and (i + 1) % 500 == 0:
+            print(f"[kin]   loaded {i + 1}/{len(paths)} graphs")
+    counts = cohort_level_counts(dataset)
+    print(
+        f"   Geometry levels: L0={counts.get(0, 0)}, L1={counts.get(1, 0)}, "
+        f"L2={counts.get(2, 0)}, unknown={counts.get(-1, 0)}"
+    )
+    # RGP_DEQ_REPAIR_PLAN.md s16.  The synthetic corpus does not contain the wall-shear regime
+    # deployment is decided in, and four arms of loss reweighting could not manufacture it.  The
+    # deploy packs ARE that regime, they are fully labelled by COMSOL, and Stage-A has never
+    # trained on them.  Disjoint from the selection set by construction.
+    # `KINEMATICS_TRAIN_ON_DEPLOY_PACKS` used to widen this to "synthetic corpus PLUS deploy
+    # packs"; no arm has asked for that mixture since the FEM prior arrived, because the two
+    # halves would carry different prior blocks under one decoder.  Deploy-only is the only
+    # surviving caller, so the condition is just that.
+    if deploy_only:
+        from src.utils.kinematics_select_packs import (
+            load_deploy_training_packs, selection_pack_dir,
+        )
+
+        deploy_graphs = load_deploy_training_packs()
+        if deploy_graphs:
+            for g in deploy_graphs:
+                attach_geometry_metadata(g, mesh_input_dir=cfg.mesh_input_dir,
+                                         stem=str(getattr(g, "graph_stem", "")))
+            dataset.extend(deploy_graphs)
+            print(f"[kin] Merged {len(deploy_graphs)} DEPLOY packs into the training pool "
+                  f"(KINEMATICS_TRAIN_ON_DEPLOY_PACKS=1).")
+        else:
+            if deploy_only:
+                raise RuntimeError(
+                    "KINEMATICS_DEPLOY_PACKS_ONLY=1 but no usable deploy packs were found "
+                    f"under {selection_pack_dir()}; there is nothing to train on."
+                )
+            print("[kin] WARN KINEMATICS_TRAIN_ON_DEPLOY_PACKS=1 but no usable deploy packs "
+                  "were found; training on synthetic vessels ONLY.")
+
+    if os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip() in ("1", "true", "yes"):
+        from src.utils.kinematics_paths import load_comsol_kine_anchor_graphs
+
+        comsol_anchor_graphs = load_comsol_kine_anchor_graphs(
+            rheology=rheology or "carreau",
+            attach_geometry=attach_geometry,
+        )
+        if comsol_anchor_graphs:
+            existing = {getattr(d, "graph_stem", "") for d in dataset}
+            added = [g for g in comsol_anchor_graphs if getattr(g, "graph_stem", "") not in existing]
+            dataset.extend(added)
+            print(
+                f"[kin] Merged {len(added)} comsol COMSOL anchor kine anchors "
+                f"(KINEMATICS_INCLUDE_COMSOL_ANCHORS=1)."
+            )
+        else:
+            # Asked for explicitly and silently absent is the worst combination: the run looks
+            # configured for comsol anchors and trains without a single one.
+            from src.utils.kinematics_paths import kinematics_anchor_graph_dir
+
+            _anchor_dir = kinematics_anchor_graph_dir(rheology=rheology or "carreau")
+            print(
+                f"[kin] WARN KINEMATICS_INCLUDE_COMSOL_ANCHORS=1 but NO comsol kine anchors "
+                f"were found under {_anchor_dir}"
+            )
+            print(
+                "[kin]      Training on synthetic vessels ONLY.  Regenerate them from the "
+                "biochem COMSOL exports with `biochem_extract_transfer.py`, or unset the flag."
+            )
+    return _prepare_dataset(dataset, data_dir)
+
+
+def _prepare_dataset(dataset, data_dir=None):
+    """P2 elevation -> prior rewrite -> size cap -> PDE floors, with a disk cache.
+
+    Every one of those steps is deterministic in the packs and the environment, and together
+    they cost ~20 minutes of CPU on a 250-vessel cohort -- paid again on every relaunch, which
+    is most of the turnaround when the point of the exercise is to iterate on the recipe.  The
+    cache key is the settings that change the result, so a recipe change invalidates it and a
+    rerun does not.
+    """
+    import hashlib as _hl
+    import os as _os
+
+    cache_dir = _os.environ.get("KINEMATICS_PREPARED_CACHE", "").strip()
+    key = None
+    if cache_dir:
+        sig = "|".join(str(x) for x in (
+            "v1",
+            KINEMATICS_ELEVATE_P2,
+            KINEMATICS_ELEVATE_KEEP_WLS,
+            resolve_prior_source(),
+            KINEMATICS_MAX_NODES,
+            _os.environ.get("KINEMATICS_PDE_FLOOR", "1"),
+            KINEMATICS_TRAIN_ON_DEPLOY_PACKS,
+            KINEMATICS_DEPLOY_PACKS_ONLY,
+            KINEMATICS_SELECT_MAX_GRAPHS,
+            _os.environ.get("KINEMATICS_GRAPH_CAP", ""),
+            len(dataset),
+            # The stem list alone is NOT unique: `vessel_0.pt` exists under both rheologies.
+            str(data_dir),
+            ",".join(sorted(str(getattr(d, "graph_stem", "?")) for d in dataset)),
+        ))
+        key = _hl.sha1(sig.encode()).hexdigest()[:16]
+        path = Path(cache_dir) / f"prepared_{key}.pt"
+        if path.is_file():
+            try:
+                got = torch.load(path, map_location="cpu", weights_only=False)
+                print(f"[kin] Prepared-dataset cache HIT: {path} ({len(got)} graphs)")
+                # The subsample is deliberately outside the cache key, so it has to be applied
+                # on BOTH paths -- a cache hit that silently ignored it trained on the full
+                # cohort while the banner said otherwise.
+                return _subsample_prepared(got)
+            except Exception as exc:
+                print(f"[kin] WARN prepared cache unreadable ({type(exc).__name__}); rebuilding")
+
+    out = _attach_pde_floors(_cap_graph_size(
+        _apply_prior_source_to_dataset(_elevate_dataset_to_p2(dataset))))
+
+    if cache_dir and key is not None:
+        path = Path(cache_dir) / f"prepared_{key}.pt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(out, path)
+            print(f"[kin] Prepared-dataset cache WRITE: {path}")
+        except Exception as exc:
+            print(f"[kin] WARN could not write prepared cache: {type(exc).__name__}: {exc}")
+    return _subsample_prepared(out)
+
+
+def _subsample_prepared(dataset):
+    """``KINEMATICS_TRAIN_SUBSAMPLE=N`` -- keep a deterministic N of the prepared graphs.
+
+    Deliberately applied AFTER the cache and left out of its key, so a sweep can trade cohort
+    size for turnaround without re-preparing anything.  Stratified by geometry level so the
+    L0/L1/L2 mix a smaller run sees is the mix the full cohort has.
+    """
+    import os as _os
+    import random as _random
+
+    raw = KINEMATICS_TRAIN_SUBSAMPLE.strip()
+    if not raw:
+        return dataset
+    n = int(raw)
+    if n <= 0 or n >= len(dataset):
+        return dataset
+    from src.utils.kinematics_geometry import graph_geometry_level
+
+    # Deploy packs are few and are the only graphs in the deployment regime; a subsample meant
+    # to trade SYNTHETIC cohort size for turnaround must not thin them out.
+    keep_always = [d for d in dataset if getattr(d, "is_comsol_anchor", False)]
+    dataset = [d for d in dataset if not getattr(d, "is_comsol_anchor", False)]
+    n = max(1, n - len(keep_always))
+    if n >= len(dataset):
+        return keep_always + dataset
+
+    by_level: dict[int, list] = {}
+    for d in dataset:
+        by_level.setdefault(graph_geometry_level(d, default=-1), []).append(d)
+    rng = _random.Random(1234)
+    keep, frac = [], n / float(len(dataset))
+    for lvl in sorted(by_level):
+        pool = sorted(by_level[lvl], key=lambda d: str(getattr(d, "graph_stem", "")))
+        rng.shuffle(pool)
+        keep.extend(pool[: max(1, int(round(frac * len(pool))))])
+    keep = keep_always + keep[:n]
+    counts = {}
+    for d in keep:
+        counts[graph_geometry_level(d, default=-1)] = counts.get(
+            graph_geometry_level(d, default=-1), 0) + 1
+    print(f"[kin] KINEMATICS_TRAIN_SUBSAMPLE={n}: {len(keep)}/{len(dataset)} graphs "
+          f"(levels {dict(sorted(counts.items()))}).")
+    return keep
+
+
+def _cap_graph_size(dataset):
+    """Drop graphs too large to backprop through, loudly.
+
+    The DEQ backward takes a VJP with ``create_graph=True``, so peak memory scales with node
+    count and blows up fast.  Measured on a 4 GB card with the shipped architecture:
+
+        P2 nodes    8800   12851   15993   19283   40484   56653
+        peak GB     0.87    1.83    2.40    2.92    OOM     OOM
+
+    Node count tracks ``d_bar`` at spearman **+0.930**, so a fixed physical ``mesh_lc`` made
+    the biggest VESSELS the biggest GRAPHS for no modelling reason.  ``mesh_h_nd_target``
+    removes the tail at generation time; this is for cohorts already built.
+
+    **The cap is in P2 nodes, measured AFTER elevation** -- which is where the memory is spent
+    and what the table above indexes.  On the transferred 250-vessel cohort the P2 counts are
+    p10 10.8k / median 15.9k / p90 22.0k / max 56.7k, so a threshold carried over from the
+    previous corpus (5500) drops all 250.  Set it from the table and this cohort's own
+    distribution, and read the printed severe-stenosis line: the point of a cap is to drop
+    LARGE vessels, not SEVERE ones, and those are only weakly related (nodes vs stenosis
+    +0.302).
+
+    Unset means no cap, so an existing recipe is unchanged.
+    """
+    import os as _os
+
+    raw = KINEMATICS_MAX_NODES.strip()
+    if not raw:
+        return dataset
+    cap = int(raw)
+    keep = [d for d in dataset if int(d.num_nodes) <= cap]
+    drop = [d for d in dataset if int(d.num_nodes) > cap]
+    if not drop:
+        print(f"[kin] KINEMATICS_MAX_NODES={cap}: nothing exceeds it ({len(keep)} graphs).")
+        return keep
+
+    def _sev(d):
+        w = d.x[:, 15]
+        r = (w * 0.5).clamp(min=1e-6)
+        return float(r.median() / r.min())
+
+    sev_keep = [_sev(d) for d in keep]
+    sev_all = sev_keep + [_sev(d) for d in drop]
+    frac = lambda v: 100.0 * sum(1 for x in v if x >= 2.0) / max(len(v), 1)
+    print(f"[kin] KINEMATICS_MAX_NODES={cap}: dropped {len(drop)}/{len(dataset)} graphs "
+          f"(largest {max(int(d.num_nodes) for d in drop)} nodes).")
+    print(f"[kin]   severe-stenosis coverage {frac(sev_all):.1f}% -> {frac(sev_keep):.1f}%  "
+          f"(dropped are large-diameter, not severe)")
+    print(f"[kin]   dropped: {', '.join(str(getattr(d, 'graph_stem', '?')) for d in drop[:12])}"
+          + (" ..." if len(drop) > 12 else ""))
+    return keep
+
+
+def _attach_pde_floors(dataset):
+    """Precompute the label PDE residual that ``l_cont`` / ``l_mom`` hinge against.
+
+    See :func:`src.utils.kinematics_physics_terms.compute_pde_floors` for why: on this corpus
+    the labels' own discrete continuity residual reaches 0.22 (times the training weight of 100:
+    **22**), concentrated in the first ring off the wall on exactly the severe-stenosis vessels
+    the cohort was generated to add.  Un-floored, the PDE terms fight the data there.
+
+    Runs **after** P2 elevation -- the floor is a property of the graph the model will actually
+    see.  Unsolved vessels carry no floor (their labels are an all-zero placeholder), so their
+    PDE terms are unchanged; that is the only supervision they can contribute.
+
+    ``KINEMATICS_PDE_FLOOR=0`` restores the un-floored terms.
+    """
+    import os as _os
+
+    if _os.environ.get("KINEMATICS_PDE_FLOOR", "1").strip().lower() in ("0", "false", "no", "off"):
+        print("[kin] KINEMATICS_PDE_FLOOR=0: l_cont / l_mom run un-floored.")
+        return dataset
+    from src.config import PhysicsConfig as _PhysCfg
+    from src.core_physics.physics_kernels import PhysicsKernels as _PK
+    from src.utils.kinematics_physics_terms import attach_pde_floors
+
+    kernels = _PK(_PhysCfg(phase="kinematics"))
+    n_ok = 0
+    for d in dataset:
+        try:
+            n_ok += bool(attach_pde_floors(d, kernels))
+        except Exception as exc:        # never let one malformed graph kill a run
+            print(f"[kin] WARN PDE floor failed on "
+                  f"{getattr(d, 'graph_stem', '?')}: {type(exc).__name__}: {exc}")
+    print(f"[kin] PDE label floors on {n_ok}/{len(dataset)} graphs "
+          f"({len(dataset) - n_ok} unsolved / unlabelled, left un-floored).")
+    return dataset
+
+
+def _elevate_dataset_to_p2(dataset):
+    """Match the deployment mesh order (RGP_DEQ_REPAIR_PLAN.md §8, A1).
+
+    COMSOL exports ``triangle6`` and the biochem anchor pipeline is expensive and fixed, so P2
+    is the deployment domain and training has to meet it there.  The synthetic corpus is P1 --
+    measured, **0.0% of its nodes are degree-2 against 74.5% of every deploy mesh**, and it is
+    5x smaller (N 2983 vs 14830).  Elevation inserts a mid-side node on every edge and rewires
+    to COMSOL's exact convention (corner-midside half-edges only, no corner-corner edge).
+
+    Interpolated mid-side labels cost 0.2-2.2% mean relative error against a true P2 solution,
+    an order of magnitude under the model's own ~15-20%, so no new CFD is required.
+
+    Off by default: an unset environment reproduces historical runs exactly.  The comsol
+    anchors are already P2 and are skipped.
+    """
+    import os as _os
+
+    if KINEMATICS_ELEVATE_P2.strip().lower() not in ("1", "true", "yes", "on"):
+        return dataset
+    from src.data_gen.lib.p1_corner_graph import identify_midside_nodes
+    from src.data_gen.lib.p2_elevation import elevate_to_p2
+
+    # `V`/`W`/`M_inv` are 47% of an elevated graph's memory and nothing in training reads them
+    # (`graph_gradient_operators` defaults to MLS and rebuilds from positions).  Dropping them
+    # takes this cohort from ~8.4 GB of host RAM to ~4.4 GB.
+    keep_wls = False
+    # Elevation is memory-bound in its TRANSIENT, not its result: all 250 elevated graphs are
+    # 0.88 GB, but building them while the caller still holds every P1 original -- plus the
+    # intermediates of the graph in flight -- was enough to have the process killed outright
+    # partway through a 250-graph cohort.  Consume the input list as we go so each original is
+    # freed the moment its P2 form exists, and collect periodically so the peak is one graph's
+    # worth of garbage rather than the whole cohort's.
+    import gc as _gc
+
+    n_total = len(dataset)
+    src = list(dataset)
+    src.reverse()                       # pop() from the end == original order
+    out, n_up = [], 0
+    while src:
+        d = src.pop()
+        try:
+            already, _ = identify_midside_nodes(d)
+            if bool(already.any()):     # comsol anchors are native P2
+                out.append(d)
+                continue
+            out.append(elevate_to_p2(d, keep_wls=keep_wls))
+            n_up += 1
+        except Exception as exc:        # never let one malformed graph kill a run
+            print(f"[kin] WARN P2 elevation failed on "
+                  f"{getattr(d, 'graph_stem', '?')}: {type(exc).__name__}: {exc}")
+            out.append(d)
+        finally:
+            del d
+            if len(out) % 25 == 0:
+                _gc.collect()
+    _gc.collect()
+    print(f"[kin] Elevated {n_up}/{n_total} graphs to the P2 deployment topology.")
+    return out
+
+
+def _apply_prior_source_to_dataset(dataset):
+    """Rewrite every graph's prior block to the configured source (RGP_DEQ_REPAIR_PLAN.md B2).
+
+    The RGP-DEQ consumes ``x[:, UV_PRIOR|MU_PRIOR]`` three times over -- encoder input, the
+    ``z_prior_proj`` warm start, and the hard BC ``u = uv_prior + sdf * uvp`` -- and on the
+    comsol anchor packs those columns are bit-identical to COMSOL's ``t=0`` velocity on 43 of
+    43 vessels.  Training against them teaches a near-identity map that no deploy-time input
+    can reproduce.  ``legal_priors`` has existed to fix this since the s17 Z2 decision; nothing
+    ever called it from here.
+
+    Default stays ``stored`` so an unset environment reproduces historical runs bit-for-bit.
+    """
+    source = resolve_prior_source()
+    if source == "stored":
+        print("[kin] prior_source=stored -- training on the LEAKED CFD prior block (s17 Z2). "
+              "Set SPECIES_PRIOR_SOURCE=analytic for a deployable model.")
+        return dataset
+    print(f"[kin] Rewriting prior block on {len(dataset)} graphs to prior_source={source} ...")
+    out = []
+    for i, d in enumerate(dataset):
+        rebuilt = apply_prior_source(d, source)
+        # `apply_prior_source` returns a fresh store over shared tensors; graph_stem and the
+        # geometry metadata ride along in `to_dict()`, so nothing needs re-attaching.
+        out.append(rebuilt)
+        if not kinematics_tqdm_enabled() and (i + 1) % 50 == 0:
+            print(f"[kin]   priors rewritten {i + 1}/{len(dataset)}")
+    return out
+
+
+def split_anchor_physics(dataset, seed=42, train_ratio=0.9):
+    anchors = [d for d in dataset if d.is_anchor.any().item()]
+    physics = [d for d in dataset if not d.is_anchor.any().item()]
+    rng = random.Random(seed)
+    rng.shuffle(anchors)
+    rng.shuffle(physics)
+    split_a = int(train_ratio * len(anchors))
+    split_p = int(train_ratio * len(physics))
+
+    return {
+        "train": anchors[:split_a] + physics[:split_p],
+        "val": anchors[split_a:] + physics[split_p:],
+        "n_anchors": len(anchors[:split_a]),
+        "n_physics": len(physics[:split_p]),
+    }
+
+
+def evaluate_mass_flow_health(model, dataset, device, max_graphs=12):
+    """Fallback physics diagnostic when anchor labels are unavailable.
+
+    Uses boundary velocity magnitudes as a proxy for volumetric flux:
+    - inlet_flux ≈ mean(|u| on inlet nodes)
+    - outlet_flux ≈ mean(|u| on outlet nodes)
+    Reports normalized inlet/outlet imbalance and a collapse score indicating
+    how close both boundary fluxes are to zero (trivial stagnant solution risk).
+    """
+    model.eval()
+    eps = 1e-8
+    in_means = []
+    out_means = []
+    n_used = 0
+    with torch.no_grad():
+        for d in dataset:
+            if n_used >= max_graphs:
+                break
+            if not hasattr(d, "mask_inlet") or not hasattr(d, "mask_outlet"):
+                continue
+            if int(d.mask_inlet.sum().item()) == 0 or int(d.mask_outlet.sum().item()) == 0:
+                continue
+            # A diagnostic must never be the thing that ends a run.
+            dd = None
+            try:
+                dd = d.clone().to(device)
+                out = model(dd, solver="anderson")
+                pred = out[0] if isinstance(out, tuple) else out
+                speed = torch.norm(pred[:, :2], dim=1)
+                in_means.append(float(speed[dd.mask_inlet].mean().item()))
+                out_means.append(float(speed[dd.mask_outlet].mean().item()))
+                n_used += 1
+            except torch.cuda.OutOfMemoryError:
+                pass
+            finally:
+                del dd
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+    model.train()
+
+    if n_used == 0:
+        return None
+
+    inlet_mean = sum(in_means) / n_used
+    outlet_mean = sum(out_means) / n_used
+    flow_ref = max(inlet_mean, outlet_mean, eps)
+    imbalance = abs(inlet_mean - outlet_mean) / (inlet_mean + outlet_mean + eps)
+    collapse_score = 1.0 - ((inlet_mean + outlet_mean) / (2.0 * flow_ref + eps))
+    return {
+        "n_graphs": n_used,
+        "inlet_flux": inlet_mean,
+        "outlet_flux": outlet_mean,
+        "imbalance": imbalance,
+        "collapse_score": max(0.0, min(1.0, collapse_score)),
+    }
+
+
+# -------------------------------------------------------------------------
+# Forward & Loss Computation
+# -------------------------------------------------------------------------
+#: Historical relative weights, expressed against ``weight_data`` = 1.0.  Reproduces the shipped
+#: recipe exactly when no calibration file is supplied.
+_DEFAULT_REL_WEIGHTS = {
+    "l_cont": 50.0 / 500.0,
+    "l_mom": 1.0 / 500.0,
+    "l_bc": 5.0 / 500.0,
+    "l_io": 5.0 / 500.0,
+    "l_wss": 10.0 / 500.0,
+    "l_shear_grad": 50.0 / 500.0,
+    "l_band_sr": 0.0,
+    "l_band_dsrx": 0.0,
+    "l_band_gate": 0.0,
+    "l_band_floor": 0.0,
+    "l_prior_floor": 0.0,
+}
+
+
+#: ``(path, weights)`` from the last resolve.  See ``_resolve_loss_weights``.
+_LOSS_WEIGHT_CACHE: tuple[str, dict] | None = None
+
+
+def _resolve_loss_weights() -> dict:
+    """Relative loss weights, from a calibration file when one is given.
+
+    RGP_DEQ_REPAIR_PLAN.md s12.  Every weight in one place, expressed relative to the
+    supervised data term, so the numbers are comparable to each other instead of being a mix of
+    unit conversions and priorities.  ``KINEMATICS_LOSS_WEIGHTS`` points at the JSON emitted by
+    ``scripts/calibrate_kine_loss_weights.py``; unset reproduces the historical recipe.
+
+    A term the calibration DROPPED as inert (gradient below 1e-4 of the reference term's) stays
+    dropped here -- it is given weight 0 rather than its historical value, because the
+    calibration measured that it has no gradient to contribute.
+
+    **Cached on the resolved path.**  ``compute_step_loss`` calls this once per training STEP,
+    so uncached it re-read the JSON from disk and printed the whole recipe on every graph --
+    250 file reads and 250 log lines per epoch, which is how the smoke run's log came back
+    seven-eighths loss-weight banner.
+    """
+    global _LOSS_WEIGHT_CACHE
+
+    import json as _json
+
+    rel = dict(_DEFAULT_REL_WEIGHTS)
+    path = os.environ.get("KINEMATICS_LOSS_WEIGHTS", "").strip()
+    if _LOSS_WEIGHT_CACHE is not None and _LOSS_WEIGHT_CACHE[0] == path:
+        return _LOSS_WEIGHT_CACHE[1]
+    if not path:
+        _LOSS_WEIGHT_CACHE = (path, rel)
+        return rel
+    try:
+        payload = _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[kin] WARN could not read KINEMATICS_LOSS_WEIGHTS={path!r}: {exc}; using defaults")
+        _LOSS_WEIGHT_CACHE = (path, rel)
+        return rel
+    got = payload.get("weights", payload)
+    if not isinstance(got, dict) or not got:
+        print(f"[kin] WARN {path} carries no weights; using defaults")
+        _LOSS_WEIGHT_CACHE = (path, rel)
+        return rel
+    for k in rel:
+        rel[k] = float(got[k]) if k in got and got[k] is not None else 0.0
+    print(f"[kin] loss weights from {path}: "
+          + " ".join(f"{k.replace('l_', '')}={v:.4g}" for k, v in sorted(rel.items())))
+    _LOSS_WEIGHT_CACHE = (path, rel)
+    return rel
+
+
+def compute_step_loss(
+    model,
+    data,
+    kernels,
+    loss_weighter,
+    solver,
+    device,
+    stage,
+    current_n,
+    current_mu_0,
+    weight_data_base: float,
+    weight_mu_base: float,
+    weight_wss_base: float,
+):
+    # 1. Inject dynamic physics parameters into the kernels
+    # Canonical ND viscosity scale (shared with biochem channel encoding).
+    mu_nd_scale = kernels.cfg.mu_viscosity_nd_scale
+    kernels.mu_0_nd = current_mu_0 / mu_nd_scale
+
+    # 2. Forward pass
+    out = model(
+        data,
+        solver=solver,
+        anderson_beta=0.8,
+        anderson_warmup_iters=5,
+        current_n=current_n,
+    )
+    pred, jac_loss = out if isinstance(out, tuple) else (out, torch.tensor(0.0, device=device))
+
+    # 3. Get generic terms
+    terms = compute_kinematics_physics_terms(
+        pred,
+        data,
+        kernels,
+        phase="kinematics",
+        distillation=False,
+        carreau_n=current_n,
+    )
+
+    # 4. Curriculum Biochem phaseranching
+    l_mom = terms["l_mom"]
+    l_cont = terms["l_cont"]
+    l_bc = terms["l_bc"]
+    l_io = terms["l_io"]
+    l_wss = terms.get("l_wss", torch.tensor(0.0, device=device))
+    l_data_kine = terms.get("l_data_kine", torch.tensor(0.0, device=device))
+    p_grad_loss = torch.tensor(0.0, device=device)
+
+    if stage in (1, 3):
+        props = kernels._get_geometric_props(data)
+        c_p_pred = kernels._compute_derivatives(pred[:, PredChannels.P:PredChannels.P + 1], props)
+        c_p_true = kernels._compute_derivatives(data.y[:, PredChannels.P:PredChannels.P + 1], props)
+        p_pred_grad = c_p_pred[:, 0:2, 0]
+        p_true_grad = c_p_true[:, 0:2, 0]
+        node_is_anchor = anchor_node_mask(data)
+        if node_is_anchor is not None and int(node_is_anchor.sum().item()) > 0:
+            # Non-dimensionalize physical gradients prior to squaring in MSE.
+            if hasattr(data, "d_bar"):
+                d_bar = data.d_bar
+                if torch.is_tensor(d_bar):
+                    d_bar_flat = d_bar.view(-1)
+                    if d_bar_flat.numel() == data.num_nodes:
+                        length_scale = d_bar_flat[node_is_anchor].view(-1, 1)
+                    else:
+                        length_scale = d_bar_flat[:1].reshape(1, 1)
+                else:
+                    length_scale = torch.tensor([[float(d_bar)]], device=device, dtype=p_pred_grad.dtype)
+            else:
+                length_scale = torch.tensor([[1e-4]], device=device, dtype=p_pred_grad.dtype)
+            p_pred_grad_nd = p_pred_grad[node_is_anchor] * length_scale
+            p_true_grad_nd = p_true_grad[node_is_anchor] * length_scale
+            p_grad_loss = torch.nn.functional.mse_loss(
+                p_pred_grad_nd,
+                p_true_grad_nd,
+            )
+
+    # Stage-specific loss manipulation
+    if stage in (1, 2):
+        # Constant-field preconditioning: supervise mu decoder toward the curriculum viscosity target.
+        target_mu_nd = torch.full_like(pred[:, PredChannels.MU_EFF_ND], current_mu_0 / mu_nd_scale)
+        l_data_mu = torch.nn.functional.mse_loss(
+            pred[:, PredChannels.MU_EFF_ND], target_mu_nd
+        )
+        if stage == 1:
+            weight_data = weight_data_base
+            weight_mu = weight_mu_base
+            weight_wss = weight_wss_base
+        else:
+            # Stage 2 keeps PDE-only kinematics but preserves rheology supervision while ramping.
+            l_data_kine = l_data_kine * 0.0
+            l_wss = l_wss * 0.0
+            weight_data = 0.0
+            weight_mu = weight_mu_base
+            weight_wss = 0.0
+    else:
+        # Stage 3: Target phase. Both data (now matching physics) and PDEs.
+        l_data_mu = terms.get("l_data_mu", torch.tensor(0.0, device=device))
+        weight_data = weight_data_base
+        weight_mu = weight_mu_base
+        weight_wss = weight_wss_base
+
+    # 5. Static PDE weights (Kendall weighter disabled — avoids negative weighted PDE collapse).
+    # All relative to `weight_data_base` so one calibration file can set the whole recipe.
+    _ = loss_weighter
+    _rel = _resolve_loss_weights()
+    _s = float(weight_data_base)
+    weighted_pdes = (_rel["l_mom"] * _s) * l_mom + (_rel["l_cont"] * _s) * l_cont
+
+    # Scale up IO/BC weight severely ONLY in Stage 2 when interior data supervision is removed.
+    io_weight = 100.0 if stage == 2 else _rel["l_io"] * _s
+    bc_weight = 50.0 if stage == 2 else _rel["l_bc"] * _s
+
+    l_shear_grad = terms.get("l_shear_grad", torch.tensor(0.0, device=device))
+
+    # 6. Final Composite Loss
+    # STRUCTURALLY INERT with the shipped architecture, and deliberately left that way.
+    # `RGP_DEQ` emits `out_channels=5` -- U 0, V 1, P 2, MU_EFF_ND 3, WSS 4 -- while
+    # `PredChannels.SHEAR_RATE` is 5, so the guard below is `5 > 5` and never fires.  Keeping
+    # the branch (rather than deleting it) costs nothing and documents the reason it should stay
+    # off if the head is ever added: the model's own shear channel reads wall correlation
+    # **-0.11** median against COMSOL, i.e. anti-correlated.  MLS-on-`u0` is the right route to
+    # shear and is what `l_band_sr` / `l_band_dsrx` use.  Reported as `C_shear` = 0.000.
+    l_shear = torch.tensor(0.0, device=device)
+    w_shear = 0.1
+    if pred.shape[1] > PredChannels.SHEAR_RATE and stage in (1, 3):
+        node_is_anchor = anchor_node_mask(data)
+        # RGP_DEQ_REPAIR_PLAN.md B18.  This used to require `hasattr(data, 'G_x')`, but
+        # `compute_gt_shear_rate` routes through `graph_gradient_operators`, which defaults to
+        # MLS mode and builds its operators from positions + connectivity -- it does not touch
+        # `data.G_x` unless BIOCHEM_GRAD_OPERATOR=legacy.  The guard therefore silently
+        # disabled this term on any graph that does not carry the packs' [N,N] operators,
+        # which is every P2-elevated graph.  Gate on what is actually needed instead.
+        from src.core_physics.mls_gradient import gradient_operator_mode
+
+        _shear_ok = gradient_operator_mode() != "legacy" or hasattr(data, "G_x")
+        if node_is_anchor is not None and node_is_anchor.any() and _shear_ok:
+            gt_shear = compute_gt_shear_rate(data)
+            pred_shear = pred[:, PredChannels.SHEAR_RATE]
+            l_shear = torch.nn.functional.smooth_l1_loss(
+                torch.log1p(pred_shear[node_is_anchor]),
+                torch.log1p(gt_shear[node_is_anchor])
+            )
+            
+    # RGP_DEQ_REPAIR_PLAN.md D2.  `clot_ml` reads `sr` and `dsrx` in the wall band and nothing
+    # else; these two terms are the only place training is scored on them.  Both are normalised
+    # by the GT's own spread on the band, so the model cannot reduce them by shrinking -- which
+    # matters because every measured `sr`/`dsrx` scale is < 1 against COMSOL.  Off by default:
+    # set KINEMATICS_WALL_SHEAR_WEIGHT to enable, so an unset environment reproduces the
+    # historical loss exactly.
+    w_band = float(KINEMATICS_WALL_SHEAR_WEIGHT or
+                   (_rel["l_band_sr"] * _s))
+    l_band_sr = terms.get("l_band_sr", torch.tensor(0.0, device=device))
+    l_band_dsrx = terms.get("l_band_dsrx", torch.tensor(0.0, device=device))
+    # The ONLY Stage-A metric measured to predict the clot outcome (+0.918).  Optimise it
+    # directly rather than hoping the continuous sr/dsrx terms imply it.
+    w_gate = float(KINEMATICS_GATE_WEIGHT or
+                   (_rel["l_band_gate"] * _s))
+    l_band_gate = terms.get("l_band_gate", torch.tensor(0.0, device=device))
+    # The measured root cause of the deploy-flow collapse: the surrogate compresses the wall
+    # shear distribution and never reaches the gate's cut, so on 7 of 30 deploy packs the wall
+    # gate is EMPTY and thirteen physics channels go to zero.  Off unless weighted.
+    w_tail = float(KINEMATICS_TAIL_WEIGHT or 0.0)
+    l_band_tail = terms.get("l_band_tail", torch.tensor(0.0, device=device))
+    # The first interior ring sets `du/dn`, i.e. wall shear, on its own -- the wall nodes
+    # themselves are pinned by the hard BC and cost nothing.  Its weight IS the term's scale.
+    w_ring = float(KINEMATICS_RING_WEIGHT or 0.0)
+    l_ring = terms.get("l_ring", torch.tensor(0.0, device=device))
+    # T6: make the analytic prior a performance FLOOR.  Zero wherever the model beats the
+    # prior it was handed, positive only where it is worse -- which today is 45 of 52 packs.
+    w_floor = float(KINEMATICS_PRIOR_FLOOR_WEIGHT or
+                    (_rel["l_prior_floor"] * _s))
+    l_prior_floor = terms.get("l_prior_floor", torch.tensor(0.0, device=device))
+    # The same one-sided hinge, in the WALL SHEAR channel.  T6's floor watches velocity, which
+    # the surrogate clears while still landing 8 points of gate Jaccard BEHIND the closed-form
+    # prior it was handed (s16.4).  Off unless weighted.
+    w_bfloor = float(KINEMATICS_BAND_FLOOR_WEIGHT or
+                     (_rel["l_band_floor"] * _s))
+    l_band_floor = terms.get("l_band_floor", torch.tensor(0.0, device=device))
+
+    loss = (
+        weighted_pdes
+        + (weight_data * l_data_kine)
+        + (weight_mu * l_data_mu)
+        + (bc_weight * l_bc)
+        + (io_weight * l_io)
+        + (1.0 * p_grad_loss)
+        + ((_rel['l_wss'] * _s) * l_wss)
+        + ((_rel['l_shear_grad'] * _s) * l_shear_grad)
+        + (w_band * (l_band_sr + l_band_dsrx))
+        + (w_gate * l_band_gate)
+        + (w_tail * l_band_tail)
+        + (w_ring * l_ring)
+        + (w_floor * l_prior_floor)
+        + (w_bfloor * l_band_floor)
+        + (w_shear * l_shear)
+        + (0.1 * jac_loss)
+    )
+
+    weighted_data_kine = weight_data * l_data_kine
+    weighted_data_mu = weight_mu * l_data_mu
+    weighted_bc = bc_weight * l_bc
+    weighted_io = io_weight * l_io
+    weighted_pgrad = 1.0 * p_grad_loss
+    weighted_wss = (_rel['l_wss'] * _s) * l_wss
+    weighted_shear_grad = (_rel['l_shear_grad'] * _s) * l_shear_grad
+    weighted_band = w_band * (l_band_sr + l_band_dsrx)
+    weighted_gate = w_gate * l_band_gate
+    weighted_tail = w_tail * l_band_tail
+    weighted_floor = w_floor * l_prior_floor + w_bfloor * l_band_floor
+    weighted_shear = w_shear * l_shear
+    weighted_jac = 0.1 * jac_loss
+    metrics = {
+        "L_mom": l_mom.item(),
+        "L_cont": l_cont.item(),
+        "L_band_sr": float(l_band_sr.item()),
+        "L_band_dsrx": float(l_band_dsrx.item()),
+        "L_band_gate": float(l_band_gate.item()),
+        "L_band_tail": float(l_band_tail.item()),
+        "L_ring": float(l_ring.item()),
+        "C_tail": float(weighted_tail.item()) if torch.is_tensor(weighted_tail) else float(weighted_tail),
+        "L_band_floor": float(l_band_floor.item()),
+        "L_prior_floor": float(l_prior_floor.item()),
+        "C_band_shear": float(weighted_band.item()) if torch.is_tensor(weighted_band) else float(weighted_band),
+        "L_data": l_data_kine.item(),
+        "L_mu": l_data_mu.item(),
+        "L_bc": l_bc.item(),
+        "L_io": l_io.item(),
+        "L_wss": l_wss.item(),
+        "L_sgrad": l_shear_grad.item(),
+        "L_shear": l_shear.item(),
+        "L_jac": jac_loss.item(),
+        "L_pgrad": p_grad_loss.item(),
+        "L_total": loss.item(),
+        "C_weighted_pde": weighted_pdes.item(),
+        "C_data_kine": weighted_data_kine.item(),
+        "C_data_mu": weighted_data_mu.item(),
+        "C_bc": weighted_bc.item(),
+        "C_io": weighted_io.item(),
+        "C_pgrad": weighted_pgrad.item(),
+        "C_wss": weighted_wss.item(),
+        "C_sgrad": weighted_shear_grad.item(),
+        "C_gate": float(weighted_gate.item()) if torch.is_tensor(weighted_gate) else float(weighted_gate),
+        "C_floor": float(weighted_floor.item()) if torch.is_tensor(weighted_floor) else float(weighted_floor),
+        "C_shear": weighted_shear.item(),
+        "C_jac": weighted_jac.item(),
+    }
+    return loss, metrics
+
+
+# -------------------------------------------------------------------------
+# Training Loop
+# -------------------------------------------------------------------------
+def resolve_kinematics_device(*, require_cuda: bool = True) -> str:
+    """Pick training device and refuse CPU-only runs when require_cuda is set."""
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        print(f"[kin] Training device: CUDA - {device_name}")
+        return "cuda"
+    print("[kin] Training device: CPU (CUDA not available)")
+    if require_cuda:
+        print(
+            "[kin] ERROR: kinematics training requires CUDA. "
+            "Use a CUDA-enabled PyTorch build with a visible GPU."
+        )
+        sys.exit(1)
+    print("[kin] WARN continuing on CPU (require_cuda=False).")
+    return "cpu"
+
+
+def train_kinematics(
+    *,
+    epochs: int = 100,
+    adam_epochs: int = 85,
+    stage1_end_epoch: int = STAGE1_END_EPOCH,
+    stage2_end_epoch: int = STAGE2_END_EPOCH,
+    resume_from: str | None = None,
+    accum_steps: int = 2,
+    weight_data: float = 500.0,
+    weight_mu: float = 10.0,
+    weight_wss: float = 10.0,
+    max_lbfgs_graphs: int = 4,
+    limit_data: int | None = None,
+    shuffle_graphs: bool = False,
+    graph_load_seed: int = 42,
+    geometry_curriculum: GeometryCurriculumConfig | None = None,
+    finetune_lr: float | None = None,
+    require_cuda: bool = True,
+):
+    geometry_cfg = geometry_curriculum or GeometryCurriculumConfig()
+    device = resolve_kinematics_device(require_cuda=require_cuda)
+    # Handoff to L-BFGS in late Stage 3 by default.
+
+    phys_cfg = PhysicsConfig(phase="kinematics")  # Kinematics supports Carreau
+    kernels = PhysicsKernels(phys_cfg=phys_cfg)
+    default_ctor = resolve_rgp_deq_ctor_kwargs(None, {})
+    model = build_rgp_deq_from_ctor(phys_cfg, default_ctor).to(device)
+    training_manifest = {
+        "epochs": int(epochs),
+        "adam_epochs": int(adam_epochs),
+        "stage1_end_epoch": int(stage1_end_epoch),
+        "stage2_end_epoch": int(stage2_end_epoch),
+        "accum_steps": int(accum_steps),
+        "weight_data": float(weight_data),
+        "weight_mu": float(weight_mu),
+        "weight_wss": float(weight_wss),
+        "max_lbfgs_graphs": int(max_lbfgs_graphs),
+        "limit_data": limit_data,
+        "shuffle_graphs": bool(shuffle_graphs),
+        "graph_load_seed": int(graph_load_seed),
+        "geometry_curriculum": {
+            "enabled": bool(geometry_cfg.enabled),
+            "phase": str(geometry_cfg.phase),
+            "foundation_mix": list(geometry_cfg.foundation_mix),
+            "ramp_end_mix": list(geometry_cfg.ramp_end_mix),
+            "l2_heavy_mix": list(geometry_cfg.l2_heavy_mix),
+            "hard_mining_start_epoch": int(geometry_cfg.hard_mining_start_epoch),
+            "l0l1_only_epochs": int(geometry_cfg.l0l1_only_epochs),
+        },
+        "finetune_lr": finetune_lr,
+        "model_config": snapshot_rgp_deq_model_config(model),
+    }
+
+    # Legacy checkpoint field only; PDE terms use fixed 1:1 weights in compute_step_loss.
+    loss_weighter = DynamicLossWeighter(num_losses=2).to(device)
+    opt_params = list(model.parameters())
+    optimizer = optim.AdamW(opt_params, lr=1e-4, weight_decay=1e-5)
+    warm_up_epochs = 5
+    decay_epochs = max(1, adam_epochs - warm_up_epochs)
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warm_up_epochs)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=decay_epochs, eta_min=1e-6)
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warm_up_epochs],
+    )
+
+    # State tracking
+    current_phase_loaded = None
+    train_data, val_data = [], []
+    hard_anchor_multiplier = {}
+    lbfgs_initialized = False
+    static_batches = []
+    n_anchors, n_physics = 0, 0
+    best_val_composite_loss = float("inf")
+    # Last validation actually observed.  Carried onto periodic checkpoints (B5) and used to
+    # detect a run that never validated at all (B6).
+    last_val_rel_l2 = float("nan")
+    last_val_continuity = float("nan")
+    last_val_composite = float("nan")
+    n_validations = 0
+    n_since_improve = 0
+    #: Best selection score SEEN -- drives the early-abort patience counter.
+    best_select = float("inf")
+    #: Best selection score actually PROMOTED -- drives which checkpoint is `kinematics_best`.
+    #: Kept separate so a promotion gate blocking a save cannot silently raise the bar and
+    #: leave the run holding a worse checkpoint than one it already computed.
+    best_promoted_select = float("inf")
+    train_prior_source = resolve_prior_source()
+    accum_steps = max(1, int(accum_steps))
+    max_lbfgs_graphs = max(1, int(max_lbfgs_graphs))
+    start_epoch = 0
+
+    if resume_from:
+        print(f"[kin] Resuming training from: {resume_from}")
+        ckpt = torch.load(resume_from, map_location=device, weights_only=False)
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            resume_meta, resume_state = kinematics_checkpoint_tensors(ckpt)
+            resume_ctor = resolve_rgp_deq_ctor_kwargs(resume_meta, resume_state)
+            if resume_meta.get("model_config"):
+                print("[kin] RGP_DEQ architecture from checkpoint model_config.")
+            model = build_rgp_deq_from_ctor(phys_cfg, resume_ctor).to(device)
+            opt_params = list(model.parameters())
+            optimizer = optim.AdamW(opt_params, lr=1e-4, weight_decay=1e-5)
+            warmup_scheduler = LinearLR(optimizer, start_factor=0.01, total_iters=warm_up_epochs)
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=decay_epochs, eta_min=1e-6)
+            scheduler = SequentialLR(
+                optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[warm_up_epochs],
+            )
+            model.load_state_dict(resume_state, strict=False)
+            if isinstance(ckpt.get("training_manifest"), dict):
+                # RGP_DEQ_REPAIR_PLAN.md B9.  This used to be
+                # `training_manifest.update(ckpt["training_manifest"])`, which let the RESUMED
+                # run's settings overwrite the CURRENT run's -- so the 2026-08-27 finetunes
+                # shipped a manifest reading `epochs: 40` on a checkpoint sitting at epoch 75.
+                # The parent's settings are history, not configuration: record them as such.
+                training_manifest["resumed_from"] = {
+                    "path": str(resume_from),
+                    "epoch": ckpt.get("epoch", ckpt.get("best_epoch")),
+                    "manifest": dict(ckpt["training_manifest"]),
+                }
+            if "loss_weighter_state_dict" in ckpt:
+                loss_weighter.load_state_dict(ckpt["loss_weighter_state_dict"])
+            if "optimizer_state_dict" in ckpt and ckpt.get("optimizer_name", "AdamW") == "AdamW":
+                try:
+                    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+                except (ValueError, RuntimeError):
+                    print("[kin] WARN could not restore AdamW optimizer state; fresh optimizer.")
+            if finetune_lr is None and "scheduler_state_dict" in ckpt:
+                try:
+                    scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+                except (ValueError, RuntimeError, KeyError):
+                    print("[kin] WARN could not restore scheduler state; fresh scheduler.")
+            start_epoch = int(ckpt.get("epoch", ckpt.get("best_epoch", -1))) + 1
+            best_val_composite_loss = float(ckpt.get("best_val_composite_loss", best_val_composite_loss))
+            ckpt_comp = float(ckpt.get("composite", float("nan")))
+            if math.isfinite(ckpt_comp):
+                best_val_composite_loss = min(best_val_composite_loss, ckpt_comp)
+            # Always re-enter LBFGS via normal handoff so static batches are rebuilt deterministically.
+            lbfgs_initialized = False
+            print(f"[kin] Loaded full training state (next epoch: {start_epoch})")
+        else:
+            model.load_state_dict(ckpt, strict=False)
+            m = re.search(r"kinematics_ckpt_(\d+)\.pth$", str(resume_from))
+            if m:
+                start_epoch = int(m.group(1))
+            print(f"[kin] Loaded model-only checkpoint (next epoch: {start_epoch})")
+
+    finetune_lr_pinned = False
+
+    def _pin_finetune_lr() -> None:
+        nonlocal finetune_lr_pinned
+        if finetune_lr is None or finetune_lr <= 0 or lbfgs_initialized:
+            return
+        for pg in optimizer.param_groups:
+            pg["lr"] = float(finetune_lr)
+        finetune_lr_pinned = True
+
+    if finetune_lr is not None and finetune_lr > 0:
+        _pin_finetune_lr()
+        # Do not step the production cosine schedule on finetune (ep 83+ LR ~1e-4 bug).
+        scheduler = LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
+        print(
+            f"[kin] Finetune LR fixed at {float(finetune_lr):.2e} "
+            "(constant scheduler; production schedule discarded)"
+        )
+
+    diary = TrainingDiary("kinematics")
+    diary.log_run_start(
+        epochs=int(epochs),
+        adam_epochs=int(adam_epochs),
+        stage1_end_epoch=int(stage1_end_epoch),
+        stage2_end_epoch=int(stage2_end_epoch),
+        device=str(device),
+        model_config=training_manifest.get("model_config"),
+    )
+    val_every = kinematics_val_every(int(epochs))
+    try:
+        arch_path = diary.run_dir / "kinematics_architecture.json"
+        with open(arch_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "run_id": diary.run_dir.name,
+                    "training_manifest": training_manifest,
+                },
+                f,
+                indent=2,
+            )
+            f.write("\n")
+        print(f"[kin] Architecture manifest: {arch_path}")
+    except OSError:
+        pass
+
+    def make_loader(data_split, n_anchors, n_physics, epoch: int, stage: int):
+        # 50/50 Weighted Random Sampler logic extracted from Kinematics
+        level_weights = geometry_cfg.level_weights(
+            epoch,
+            stage,
+            stage1_end=int(stage1_end_epoch),
+            stage2_end=int(stage2_end_epoch),
+        )
+        if n_anchors > 0 and n_physics > 0:
+            w_anchor = 0.5 / n_anchors
+            w_phys = 0.5 / n_physics
+            comsol_boost = float(os.environ.get("KINEMATICS_COMSOL_ANCHOR_BOOST", "1.0"))
+            weights = []
+            for d in data_split:
+                geo = geometry_sample_weight(d, level_weights) if geometry_cfg.enabled else 1.0
+                if graph_has_anchor(d):
+                    gkey = int(getattr(d, "config_id", 0))
+                    boost = comsol_boost if getattr(d, "is_comsol_anchor", False) else 1.0
+                    weights.append(w_anchor * geo * hard_anchor_multiplier.get(gkey, 1.0) * boost)
+                else:
+                    weights.append(w_phys * geo)
+            sampler = torch.utils.data.WeightedRandomSampler(weights, len(data_split), replacement=True)
+            return DataLoader(data_split, batch_size=1, sampler=sampler)
+        return DataLoader(data_split, batch_size=1, shuffle=True)
+
+    def refresh_hard_mining(epoch, dataset):
+        # This runs a full Anderson solve over EVERY training graph, once, at
+        # `hard_mining_start_epoch` (16) -- by which point the allocator is fragmented from
+        # sixteen epochs of backward passes.  Unguarded it killed a 20-epoch run at ep16 with
+        # `X = torch.stack(X_history)` OOMing inside the solver.  Hard mining is a sampling
+        # HEURISTIC: a graph it cannot score simply keeps weight 1.0.
+        _ = epoch  # reserved for parity with legacy hooks
+        model.eval()
+        rows, n_oom = [], 0
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        with torch.no_grad():
+            for d in dataset:
+                if not graph_has_anchor(d):
+                    continue
+                dd = None
+                try:
+                    dd = d.clone().to(device)
+                    out = model(dd, solver="anderson")
+                    pred = out[0] if isinstance(out, tuple) else out
+                    mask = anchor_node_mask(dd)
+                    if mask is not None and mask.sum() > 0:
+                        rel = torch.norm(pred[mask, :2] - dd.y[mask, :2]) / torch.clamp(
+                            torch.norm(dd.y[mask, :2]), min=1e-8
+                        )
+                        gkey = int(getattr(dd, "config_id", 0))
+                        rows.append((gkey, float(rel.item())))
+                except torch.cuda.OutOfMemoryError:
+                    n_oom += 1
+                finally:
+                    del dd
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+        if n_oom:
+            print(f"[kin] WARN hard mining skipped {n_oom} graph(s) on OOM; they keep weight 1.0")
+        if rows:
+            errs = torch.tensor([r[1] for r in rows], dtype=torch.float32)
+            q = float(torch.quantile(errs, torch.tensor(0.7)))
+            for gkey, err in rows:
+                hard_anchor_multiplier[gkey] = (1.0 + 0.8) if err >= q else 1.0  # hard_alpha = 0.8
+        model.train()
+
+    # The graphs the run is SELECTED on: real deployment packs, never in the training pool.
+    # Stage-A trains on synthetic vessels, so every non-sealed deploy pack is legal here, and
+    # scoring the checkpoint on the same meshes `eval_deploy_flow_acceptance.py` reads closes
+    # the loop between the training run and the acceptance test.  Empty is allowed and falls
+    # back to synthetic val -- loudly.
+    select_graphs = []
+    if KINEMATICS_SELECT_ON_DEPLOY.strip().lower() not in (
+        "0", "false", "no", "off"
+    ):
+        from src.utils.kinematics_select_packs import load_selection_packs
+
+        select_graphs = load_selection_packs()
+    if not select_graphs:
+        print("[kin] WARN no deploy selection packs -- selecting on SYNTHETIC val instead. "
+              "The synthetic meshes are not the deployment domain; treat gateJ accordingly.")
+
+    print("[kin] Starting unified kinematics training...")
+
+    for epoch in range(start_epoch, epochs):
+        stage, current_n, current_mu_0, target_rheology = get_stage_physics(
+            epoch, int(stage1_end_epoch), int(stage2_end_epoch)
+        )
+        target_phase = "kinematics"
+
+            # 1. Dynamic DataLoader Swapping
+        # 1. Dynamic DataLoader Swapping
+        if current_phase_loaded != target_rheology:
+            print(
+                f"\n[kin] Swapping dataset to {target_phase.upper()}/{target_rheology.upper()} "
+                f"for stage {stage} (n={current_n:.3f}, mu0={current_mu_0:.4f})"
+            )
+            dataset = load_dataset(
+                target_phase,
+                target_rheology,
+                limit=limit_data,
+                shuffle_graphs=shuffle_graphs,
+                graph_load_seed=graph_load_seed,
+            )
+            splits = resolve_kinematics_train_val_split(
+                dataset, geometry_enabled=geometry_cfg.enabled
+            )
+            train_data, val_data = splits["train"], splits["val"]
+            n_anchors, n_physics = splits["n_anchors"], splits["n_physics"]
+            # A vessel cannot be both trained on and selected on.  Asserted rather than
+            # documented: the two sets are built by different code paths.
+            _sel_stems = {str(getattr(g, "graph_stem", "")) for g in select_graphs}
+            _leak = sorted(_sel_stems & {str(getattr(d, "graph_stem", "")) for d in train_data})
+            if _leak:
+                raise RuntimeError(
+                    f"selection vessels are in the TRAIN pool: {_leak}. "
+                    "Selection would be measuring memorisation, not transfer."
+                )
+            current_phase_loaded = target_rheology
+            warn_if_single_level_cohort(
+                dataset,
+                curriculum=geometry_cfg,
+                epoch=epoch,
+                stage=stage,
+                stage1_end=int(stage1_end_epoch),
+                stage2_end=int(stage2_end_epoch),
+            )
+
+            # Reset hard mining when swapping datasets
+            hard_anchor_multiplier.clear()
+            if stage == 3 and not lbfgs_initialized:
+                print("[kin] Resetting AdamW momentum buffers for stage 3...")
+                optimizer.state.clear()
+                _pin_finetune_lr()
+
+        mining_interval = int(geometry_cfg.hard_mining_interval)
+        mining_start = (
+            int(geometry_cfg.hard_mining_start_epoch) if geometry_cfg.enabled else 4
+        )
+        train_epoch_data = train_pool_for_epoch(
+            train_data,
+            curriculum=geometry_cfg,
+            epoch=epoch,
+            stage=stage,
+            stage1_end=int(stage1_end_epoch),
+            stage2_end=int(stage2_end_epoch),
+        )
+        n_anchors_ep, n_physics_ep = count_anchor_physics(train_epoch_data)
+
+        if geometry_cfg.enabled:
+            geo_line = geometry_cfg.describe(
+                epoch, stage, stage1_end=int(stage1_end_epoch), stage2_end=int(stage2_end_epoch)
+            )
+            pool_counts = cohort_level_counts(train_epoch_data)
+            print(
+                f"[kin] {geo_line} | train_pool={len(train_epoch_data)} "
+                f"(L0={pool_counts.get(0, 0)}, L1={pool_counts.get(1, 0)}, L2={pool_counts.get(2, 0)})"
+            )
+
+        # 2. Hard Mining Management
+        if (
+            stage in (1, 3)
+            and epoch >= mining_start
+            and epoch % mining_interval == 0
+            and not lbfgs_initialized
+        ):
+            print("[kin] Refreshing hard-negative anchor weights...")
+            refresh_hard_mining(epoch, train_epoch_data)
+        elif epoch >= mining_start and epoch % mining_interval == 0 and not lbfgs_initialized:
+            # During ramp/no-anchor phases, anchor rel-L2 is not informative.
+            flow_diag = evaluate_mass_flow_health(model, train_data, device)
+            if flow_diag is None:
+                print("[kin] Flow diagnostic skipped (missing inlet/outlet masks).")
+            else:
+                print(
+                    "[kin] Flow diagnostic "
+                    f"(graphs={flow_diag['n_graphs']}): "
+                    f"flux_in={flow_diag['inlet_flux']:.3e}, "
+                    f"flux_out={flow_diag['outlet_flux']:.3e}, "
+                    f"imbalance={flow_diag['imbalance']:.3f}, "
+                    f"collapse={flow_diag['collapse_score']:.3f}"
+                )
+        loader = make_loader(train_epoch_data, n_anchors_ep, n_physics_ep, epoch, stage)
+
+        # 3. L-BFGS Handoff (Kinematics preservation)
+        if epoch >= adam_epochs and not lbfgs_initialized and not kinematics_skip_lbfgs():
+            print("\n[kin] Switching to L-BFGS optimizer for final refinement...")
+            lbfgs_params = [p for p in model.parameters() if p.requires_grad]
+            optimizer = optim.LBFGS(
+                lbfgs_params, lr=0.01, max_iter=20, history_size=30, line_search_fn="strong_wolfe"
+            )
+            static_batches = []
+            for d in list(loader)[:max_lbfgs_graphs]:
+                static_batches.append(d.clone().to(device))
+            if not static_batches:
+                raise RuntimeError("L-BFGS initialization failed: no batches available to cache.")
+            lbfgs_initialized = True
+
+        model.train()
+        total_loss = 0.0
+        # Every weighted term the objective actually contains.  The band / gate / prior-floor
+        # terms s11.4 added were absent here, so the one place a run reports where its gradient
+        # is going did not mention the term the whole alignment rests on.
+        component_sums = {
+            "C_weighted_pde": 0.0,
+            "C_data_kine": 0.0,
+            "C_data_mu": 0.0,
+            "C_bc": 0.0,
+            "C_io": 0.0,
+            "C_pgrad": 0.0,
+            "C_wss": 0.0,
+            "C_sgrad": 0.0,
+            "C_band_shear": 0.0,
+            "C_gate": 0.0,
+            "C_floor": 0.0,
+            "C_shear": 0.0,
+            "C_jac": 0.0,
+        }
+
+        if not lbfgs_initialized:
+            _pin_finetune_lr()
+            ema_metrics: dict[str, float] | None = None
+            ema_alpha = 0.1
+            use_bar = kinematics_tqdm_enabled()
+            step_iter = loader
+            if use_bar:
+                step_iter = tqdm(
+                    loader,
+                    desc=f"Ep {epoch:02d} [S{stage}: n={current_n:.3f}, mu0={current_mu_0:.4f}]",
+                    ascii=sys.platform == "win32",
+                )
+            elif epoch == 0 or (epoch + 1) % max(1, epochs // 5) == 0:
+                print(
+                    f"[kin] ep {epoch:02d} stage {stage} train "
+                    f"(n={current_n:.3f}, mu0={current_mu_0:.4f}, steps={len(loader)})"
+                )
+            optimizer.zero_grad()
+            accum_counter = 0
+            n_oom = 0
+            for idx, data in enumerate(step_iter):
+                # The DEQ backward takes a VJP with `create_graph=True`, so peak memory scales
+                # with node count.  This cohort's P2 graphs run 8.5k-56.7k nodes, and one
+                # oversized vessel used to kill an entire run on a 4 GB card several hours in.
+                # Skip it and keep going -- the graph is dropped from THIS epoch only, and the
+                # count is reported so a cohort that is systematically too large is visible.
+                try:
+                    loss, metrics = compute_step_loss(
+                        model,
+                        data.to(device),
+                        kernels,
+                        loss_weighter,
+                        "anderson" if epoch > 5 else "picard",
+                        device,
+                        stage,
+                        current_n,
+                        current_mu_0,
+                        weight_data,
+                        weight_mu,
+                        weight_wss,
+                    )
+                    if torch.isnan(loss):
+                        continue
+                    scaled_loss = loss / accum_steps
+                    scaled_loss.backward()
+                except torch.cuda.OutOfMemoryError:
+                    n_oom += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    accum_counter = 0
+                    del data
+                    torch.cuda.empty_cache()
+                    continue
+                accum_counter += 1
+                grad_norm = 0.0
+
+                if (idx + 1) % accum_steps == 0 or (idx + 1) == len(loader):
+                    if accum_counter == 0:
+                        continue
+                    grad_norm = float(torch.nn.utils.clip_grad_norm_(opt_params, 1.0))
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    accum_counter = 0
+
+                total_loss += loss.item()
+                for k in component_sums:
+                    component_sums[k] += metrics.get(k, 0.0)
+
+                if ema_metrics is None:
+                    ema_metrics = {k: float(v) for k, v in metrics.items()}
+                else:
+                    for k, v in metrics.items():
+                        ema_metrics[k] = (ema_alpha * float(v)) + ((1.0 - ema_alpha) * ema_metrics[k])
+
+                lr_val = (
+                    optimizer.param_groups[0]["lr"]
+                    if hasattr(optimizer, "param_groups") and len(optimizer.param_groups) > 0
+                    else float("nan")
+                )
+                if use_bar:
+                    step_iter.set_postfix(
+                        {
+                            "L_tot": f"{ema_metrics['L_total']:.3f}",
+                            "L_data": f"{ema_metrics['L_data']:.3f}",
+                            "L_mu": f"{ema_metrics['L_mu']:.3f}",
+                            "L_mom": f"{ema_metrics['L_mom']:.3f}",
+                            "L_cont": f"{ema_metrics['L_cont']:.3f}",
+                            "L_bc": f"{ema_metrics['L_bc']:.3f}",
+                            "L_io": f"{ema_metrics['L_io']:.3f}",
+                            "|g|": f"{grad_norm:.2f}",
+                            "LR": f"{lr_val:.2e}",
+                        }
+                    )
+            if n_oom:
+                print(f"[kin] WARN {n_oom}/{len(loader)} training graphs OOMed and were "
+                      f"skipped this epoch. Lower KINEMATICS_MAX_NODES to make this "
+                      f"deterministic rather than luck-of-the-sampler.")
+            scheduler.step()
+        else:
+            print(f"[kin] L-BFGS step (ep {epoch:02d}) [S{stage}: n={current_n:.3f}]")
+            # static_batches is frozen during LBFGS initialization and already on device.
+
+            def closure():
+                optimizer.zero_grad()
+                accumulated_loss = torch.tensor(0.0, device=device)
+                for c_data in static_batches:
+                    loss, _ = compute_step_loss(
+                        model,
+                        c_data,
+                        kernels,
+                        loss_weighter,
+                        "anderson",
+                        device,
+                        stage,
+                        current_n,
+                        current_mu_0,
+                        weight_data,
+                        weight_mu,
+                        weight_wss,
+                    )
+                    loss.backward()
+                    accumulated_loss += loss.detach() / len(static_batches)
+                return accumulated_loss
+
+            loss_tensor = optimizer.step(closure)
+            total_loss = loss_tensor.item()
+
+        # Simple save
+        if epoch % 5 == 0 or epoch == epochs - 1:
+            os.makedirs(kinematics_dir(), exist_ok=True)
+            ckpt_path = kinematics_dir() / f"kinematics_ckpt_{epoch + 1}.pth"
+            # RGP_DEQ_REPAIR_PLAN.md B5.  These two saves used to pass no metrics at all, so
+            # `rel_l2` / `continuity` / `composite` defaulted to NaN.  A periodic checkpoint is
+            # routinely copied over `kinematics_best.pth` by hand, and the result is a "best"
+            # that carries no selection evidence -- exactly what both 2026-08-27 artifacts are.
+            # Stamping the most recent validation makes such a copy self-describing instead.
+            save_kinematics_checkpoint_file(
+                ckpt_path,
+                model,
+                checkpoint_role=f"kinematics_ckpt_{epoch + 1}",
+                best_epoch=int(epoch),
+                rel_l2=last_val_rel_l2,
+                continuity=last_val_continuity,
+                composite=last_val_composite,
+                run_id=str(getattr(diary, "run_dir", Path(".")).name),
+                training_manifest=training_manifest,
+                prior_source=train_prior_source,
+            )
+            save_kinematics_checkpoint_file(
+                kinematics_dir() / "kinematics_ckpt_latest.pth",
+                model,
+                checkpoint_role="kinematics_ckpt_latest",
+                best_epoch=int(epoch),
+                rel_l2=last_val_rel_l2,
+                continuity=last_val_continuity,
+                composite=last_val_composite,
+                run_id=str(getattr(diary, "run_dir", Path(".")).name),
+                training_manifest=training_manifest,
+                prior_source=train_prior_source,
+            )
+            state_path = kinematics_dir() / f"kinematics_state_{epoch + 1}.pth"
+            state_payload = {
+                "epoch": int(epoch),
+                "model_state_dict": model.state_dict(),
+                "model_config": snapshot_rgp_deq_model_config(model),
+                "training_manifest": dict(training_manifest),
+                "optimizer_state_dict": (
+                    optimizer.state_dict()
+                    if hasattr(optimizer, "state_dict")
+                    else None
+                ),
+                "scheduler_state_dict": (
+                    scheduler.state_dict()
+                    if hasattr(scheduler, "state_dict")
+                    else None
+                ),
+                "loss_weighter_state_dict": loss_weighter.state_dict(),
+                "best_val_composite_loss": float(best_val_composite_loss),
+                "optimizer_name": optimizer.__class__.__name__,
+            }
+            torch.save(state_payload, state_path)
+            torch.save(state_payload, kinematics_dir() / "kinematics_state_latest.pth")
+            _prune_kine_training_artifacts(kinematics_dir(), keep=3)
+
+        run_val = len(val_data) > 0 and (
+            epoch % val_every == 0
+            or epoch == epochs - 1
+            or (epoch == adam_epochs - 1 and not lbfgs_initialized)
+        )
+        if run_val:
+            val_loader = DataLoader(val_data, batch_size=1, shuffle=False)
+            # A solve over the whole val split, unguarded, is the same OOM exposure as hard
+            # mining -- and rel-L2 is a REPORTED number, not the selection metric, so losing it
+            # must not take the run (or the gate reading) down with it.
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            try:
+                scores = quantify_performance(
+                    model, val_loader, kernels, device, phase="kinematics"
+                )
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                print("[kin] WARN validation rel-L2 pass OOMed; selection metrics still run.")
+                scores = {}
+            rel_l2 = float(scores.get("rel_l2", float("nan")))
+            continuity = float(scores.get("continuity", float("nan")))
+            val_comp = rel_l2 + 100.0 * continuity
+            n_validations += 1
+            if math.isfinite(rel_l2) and math.isfinite(continuity):
+                last_val_rel_l2, last_val_continuity, last_val_composite = (
+                    rel_l2, continuity, val_comp,
+                )
+            # TRAIN rel-L2 on a fixed handful of TRAINING graphs.  Without it, `relL2` (val) and
+            # `depL2` (deploy) cannot be told apart from underfitting: if the model cannot fit
+            # the data it was trained on, corpus quality is irrelevant and the problem is
+            # optimisation.  Fixed subset, so the number is comparable across epochs.
+            train_rel = float("nan")
+            if train_data:
+                _fixed = sorted(train_data, key=lambda d: str(getattr(d, "graph_stem", "")))[:4]
+                train_rel, _ = _mean_rel_l2_on_graphs(model, _fixed, kernels, device)
+            level_bits = []
+            for lvl in (0, 1, 2):
+                key = f"rel_l2_level_{lvl}"
+                val = scores.get(key)
+                if val is not None and val == val:
+                    level_bits.append(f"L{lvl}={float(val):.3f}")
+            level_msg = f" | {' '.join(level_bits)}" if level_bits else ""
+            holdout_raw = os.environ.get("KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS", "").strip()
+            comsol_msg = ""
+            p_rel, p_n = float("nan"), 0
+            s_rel, s_n = float("nan"), 0
+            s_l2_rel, s_l2_n = float("nan"), 0
+            dual_gates = _kinematics_dual_promotion_gates_enabled()
+            # T7: the metrics the downstream actually consumes.  Computed on the SAME holdout
+            # the promotion gates read, so selection and reporting cannot diverge.
+            sel_corr = sel_jac = sel_frac = sel_ceil = float("nan")
+            sel_n = 0
+            sel_where = "none"
+            # RGP_DEQ_REPAIR_PLAN.md s10.3.  Selection runs on EVERY validation, on real
+            # deployment packs when they are present.  It used to be gated behind
+            # `KINEMATICS_VAL_HOLDOUT_COMSOL_STEMS` AND comsol steady-kine sidecars that do
+            # not exist on this cohort -- so the block never ran and promotion silently fell
+            # back to `rel_l2 + 100*continuity`, which s10.3 measured as not predicting the
+            # clot outcome.  Synthetic val is the fallback, never the silent default.
+            if select_graphs:
+                sel = _selection_metrics_on_graphs(model, select_graphs, device)
+                sel_where = "deploy"
+            else:
+                sel = _selection_metrics_on_graphs(model, val_data, device)
+                sel_where = "synth-val"
+            sel_corr = sel["dsrx_corr"]
+            sel_rl2 = sel.get("deploy_rel_l2", float("nan"))
+            sel_dsc = sel.get("dsrx_scale", float("nan"))
+            sel_jac = sel["gate_jaccard"]
+            sel_ceil = sel["gate_jaccard_ceiling"]
+            sel_frac = sel["gate_jaccard_frac"]
+            sel_n = int(sel["n"])
+            if holdout_raw and os.environ.get("KINEMATICS_INCLUDE_COMSOL_ANCHORS", "").strip():
+                holdout = {s.strip() for s in holdout_raw.split(",") if s.strip()}
+                p_rel, p_n = _mean_rel_l2_on_graphs(
+                    model, val_data, kernels, device, stems=holdout
+                )
+                if p_n > 0 and math.isfinite(p_rel):
+                    comsol_msg = f" | comsol_holdout_rel_L2={p_rel:.3f} (n={p_n})"
+                if dual_gates:
+                    s_rel, s_n = _mean_rel_l2_on_graphs(
+                        model, val_data, kernels, device, synthetic_only=True
+                    )
+                    s_l2_rel, s_l2_n = _mean_rel_l2_on_graphs(
+                        model,
+                        val_data,
+                        kernels,
+                        device,
+                        synthetic_only=True,
+                        geometry_levels={2},
+                    )
+                    if s_n > 0 and math.isfinite(s_rel):
+                        comsol_msg += (
+                            f" | synthetic_val_rel_L2={s_rel:.3f} (n={s_n})"
+                        )
+                    if s_l2_n > 0 and math.isfinite(s_l2_rel):
+                        comsol_msg += (
+                            f" | synthetic_L2_val_rel_L2={s_l2_rel:.3f} (n={s_l2_n})"
+                        )
+            if sel_n > 0 and (math.isfinite(sel_corr) or math.isfinite(sel_jac)):
+                comsol_msg += (
+                    f" | SELECT[{sel_where}] dsrx_corr={sel_corr:.3f} gate_J={sel_jac:.3f} "
+                    f"ceil={sel_ceil:.3f} (n={sel_n})"
+                )
+            if math.isfinite(rel_l2) and math.isfinite(continuity):
+                shear_msg = ""
+                if "shear_rel_l2" in scores:
+                    shear_msg = f" | [i] shear_rel_l2: {scores['shear_rel_l2']:.4f}"
+                # One line, fixed field order, so a run log can be scanned or grepped.  The
+                # SELECT block is what promotion reads; rel_l2 is reported but is a tie-break
+                # only (s10.3), so it is deliberately not first.
+                # `gateJ%` is the headline: gate Jaccard as a fraction of the per-vessel
+                # ceiling a PERFECT flow field would read under the same stencils.
+                sel_txt = (f"gateJ%={100.0 * sel_frac:5.1f} gateJ={sel_jac:.3f} "
+                           f"dsrxR={sel_corr:+.3f} dsrxS={sel_dsc:.3f} depL2={sel_rl2:.3f}"
+                           if sel_n > 0 else "gateJ%=---- gateJ=--- dsrxR=--- depL2=---")
+                print(
+                    f"[kin] ep{epoch:<4d} SELECT {sel_txt} | trainL2={train_rel:.3f} "
+                    f"relL2={rel_l2:.4f} "
+                    f"div={continuity:.2e} comp={val_comp:.4f}{level_msg}{comsol_msg}{shear_msg}"
+                )
+                # The REAL metric, not a proxy.  Measured against 33 vessels of actual deploy
+                # F1, every Stage-A diagnostic is weak or unrelated (gate Jaccard +0.613 is the
+                # best; rel-L2 is -0.030), so a run can improve everything it prints and still
+                # lose what it exists for.  ~33 s per vessel; off unless the interval is set.
+                _dp_every = int(KINEMATICS_DEPLOY_PROBE_EVERY or 0)
+                if _dp_every > 0 and epoch % _dp_every == 0:
+                    from src.utils.kinematics_deploy_probe import deploy_f1_probe
+
+                    _dp = deploy_f1_probe(model, device)
+                    if _dp:
+                        _per = " ".join(f"{k[-3:]}={v:.3f}" for k, v in _dp.items()
+                                        if k.startswith("comsol") and not k.endswith("/off"))
+                        print(f"[kin] ep{epoch:<4d} DEPLOY-F1 "
+                              f"wall={_dp.get('mean_wall', float('nan')):.3f}"
+                              f"({_dp.get('wall_drop', float('nan')):+.3f}) "
+                              f"off={_dp.get('mean_off', float('nan')):.3f}"
+                              f"({_dp.get('off_drop', float('nan')):+.3f}) | {_per}")
+            else:
+                print(
+                    f"[kin] [Validation] non-finite metrics "
+                    f"(rel_l2={rel_l2}, continuity={continuity}); best ckpt unchanged"
+                )
+            # Stop a run that is going nowhere rather than burning the GPU to the last epoch.
+            # Scored on the SELECTION metric (gate Jaccard first), not on rel-L2.
+            cur_sel = float("nan")
+            sel_improved = False
+            if sel_n > 0 and math.isfinite(sel_frac):
+                from src.utils.kinematics_selection import selection_score
+
+                cur_sel = selection_score(sel_corr, sel_frac, rel_l2)
+                sel_improved = cur_sel < best_promoted_select - 1e-4
+                if cur_sel < best_select - 1e-4:
+                    best_select, n_since_improve = cur_sel, 0
+                else:
+                    n_since_improve += 1
+                patience = int(KINEMATICS_SELECT_PATIENCE or 0)
+                if patience > 0 and n_since_improve >= patience:
+                    print(f"[kin] ABORT: selection score has not improved in {n_since_improve} "
+                          f"validations (best {best_select:.4f}). Set KINEMATICS_SELECT_PATIENCE=0 "
+                          f"to disable.")
+                    break
+
+            # RGP_DEQ_REPAIR_PLAN.md s10.3.  The best checkpoint is ranked on the SELECTION
+            # score, not on `val_comp = rel_l2 + 100*continuity`.  Ranking on `val_comp` was
+            # not a small mismatch: a smoke run promoted an epoch whose rel-L2 went
+            # 0.578 -> 2.229 because continuity happened to fall, and gate Jaccard -- the one
+            # Stage-A metric measured to predict the clot model's oracle-F1 (+0.918) -- had no
+            # say at all.  `val_comp` remains the fallback for a run with no usable selection
+            # graphs, and is still recorded either way.
+            save_best = False
+            rank_on_selection = math.isfinite(cur_sel)
+            if stage == 3 and (rank_on_selection or math.isfinite(val_comp)):
+                improved = sel_improved if rank_on_selection else (
+                    val_comp < best_val_composite_loss
+                )
+                if dual_gates:
+                    gates_ok, gate_bits = _kinematics_promotion_gates_pass(
+                        comsol_rel=p_rel,
+                        comsol_n=p_n,
+                        synthetic_rel=s_rel,
+                        synthetic_n=s_n,
+                        synthetic_l2_rel=s_l2_rel,
+                        synthetic_l2_n=s_l2_n,
+                        dsrx_corr=sel_corr,
+                        gate_jaccard=sel_frac,
+                    )
+                    if gates_ok and improved:
+                        save_best = True
+                    elif not gates_ok:
+                        failed = [k for k, ok in gate_bits.items() if not ok]
+                        print(
+                            f"[kin] [Validation] dual promotion gates blocked best save "
+                            f"(failed: {','.join(failed)})"
+                        )
+                elif improved:
+                    save_best = True
+            if save_best and rank_on_selection:
+                best_promoted_select = cur_sel
+            if save_best:
+                best_val_composite_loss = val_comp
+                save_kinematics_checkpoint_file(
+                    kinematics_dir() / "kinematics_best.pth",
+                    model,
+                    checkpoint_role="kinematics_best",
+                    best_epoch=int(epoch),
+                    rel_l2=rel_l2,
+                    continuity=continuity,
+                    composite=val_comp,
+                    run_id=str(getattr(diary, "run_dir", Path(".")).name),
+                    training_manifest=training_manifest,
+                    # Both PERIODIC saves recorded this and the BEST one did not, so the only
+                    # checkpoint anyone promotes was the only one that could not say which
+                    # prior block it was trained against.  That is not metadata: the hard BC
+                    # reads the prior as its base point (`u = prior + envelope * r`), so a
+                    # model deployed on a different prior than it trained on is a different
+                    # function, and `assert_train_deploy_prior_parity` has nothing to check.
+                    prior_source=train_prior_source,
+                )
+                manifest_path = write_kinematics_architecture_manifest(
+                    snapshot_rgp_deq_model_config(model),
+                    best_epoch=int(epoch),
+                    rel_l2=rel_l2,
+                    continuity=continuity,
+                    composite=val_comp,
+                    run_id=str(getattr(diary, "run_dir", Path(".")).name),
+                    extra={"training_manifest": training_manifest},
+                )
+                if dual_gates:
+                    print("[kin] Saved new best kinematics model (dual promotion gates PASS)")
+                else:
+                    print("[kin] Saved new best kinematics model")
+                print(f"[kin] Updated {manifest_path.name} in {kinematics_dir()}")
+            try:
+                os.makedirs(kinematics_dir(), exist_ok=True)
+                val_record = {
+                    "epoch": int(epoch),
+                    "stage": int(stage),
+                    "rheology": str(target_rheology),
+                    "lr": float(
+                        optimizer.param_groups[0]["lr"]
+                        if hasattr(optimizer, "param_groups")
+                        and len(optimizer.param_groups) > 0
+                        else float("nan")
+                    ),
+                    "rel_l2": rel_l2,
+                    "continuity": continuity,
+                    "composite": val_comp,
+                    "best_so_far": float(best_val_composite_loss),
+                }
+                for lvl in (0, 1, 2):
+                    key = f"rel_l2_level_{lvl}"
+                    lvl_val = scores.get(key)
+                    if lvl_val is not None and lvl_val == lvl_val:
+                        val_record[key] = float(lvl_val)
+                if comsol_msg:
+                    val_record["comsol_holdout_rel_l2"] = float(p_rel)
+                if sel_n > 0:
+                    val_record["select_on"] = sel_where
+                    val_record["select_n"] = int(sel_n)
+                    val_record["select_dsrx_corr"] = float(sel_corr)
+                    val_record["select_gate_jaccard"] = float(sel_jac)
+                    val_record["select_gate_jaccard_ceiling"] = float(sel_ceil)
+                    val_record["select_gate_jaccard_frac"] = float(sel_frac)
+                    val_record["select_score"] = float(cur_sel)
+                    val_record["select_per_vessel"] = {
+                        k: {kk: float(vv) for kk, vv in v.items()}
+                        for k, v in sel.get("per_vessel", {}).items()
+                    }
+                    val_record["comsol_holdout_n"] = int(p_n)
+                if dual_gates and s_n > 0:
+                    val_record["synthetic_val_rel_l2"] = float(s_rel)
+                    val_record["synthetic_val_n"] = int(s_n)
+                if dual_gates and s_l2_n > 0:
+                    val_record["synthetic_l2_val_rel_l2"] = float(s_l2_rel)
+                    val_record["synthetic_l2_val_n"] = int(s_l2_n)
+                with open(kinematics_dir() / "kinematics_validation.jsonl", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(val_record) + "\n")
+            except OSError:
+                pass
+            diary.log_validation(
+                epoch,
+                {
+                    "rel_l2": rel_l2,
+                    "continuity": continuity,
+                    "composite": val_comp,
+                },
+                stage=int(stage),
+                lr=float(
+                    optimizer.param_groups[0]["lr"]
+                    if hasattr(optimizer, "param_groups") and len(optimizer.param_groups) > 0
+                    else float("nan")
+                ),
+                best_so_far=float(best_val_composite_loss),
+            )
+
+        num_steps = max(1, len(loader))
+        avg_epoch_loss = total_loss / num_steps
+        print(f"Epoch {epoch:03d} complete | stage={stage} | loss={avg_epoch_loss:.6f}")
+        avg_components = {k: v / num_steps for k, v in component_sums.items()}
+        component_total = sum(avg_components.values())
+        if component_total > 0.0:
+            print(
+                "   -> Loss breakdown (avg/step): "
+                f"PDE={avg_components['C_weighted_pde']:.3f} ({100.0 * avg_components['C_weighted_pde'] / component_total:5.1f}%), "
+                f"data_u={avg_components['C_data_kine']:.3f} ({100.0 * avg_components['C_data_kine'] / component_total:5.1f}%), "
+                f"data_mu={avg_components['C_data_mu']:.3f} ({100.0 * avg_components['C_data_mu'] / component_total:5.1f}%), "
+                f"bc={avg_components['C_bc']:.3f} ({100.0 * avg_components['C_bc'] / component_total:5.1f}%), "
+                f"io={avg_components['C_io']:.3f} ({100.0 * avg_components['C_io'] / component_total:5.1f}%), "
+                f"pgrad={avg_components['C_pgrad']:.3f} ({100.0 * avg_components['C_pgrad'] / component_total:5.1f}%), "
+                f"wss={avg_components['C_wss']:.3f} ({100.0 * avg_components['C_wss'] / component_total:5.1f}%), "
+                f"sgrad={avg_components['C_sgrad']:.3f} ({100.0 * avg_components['C_sgrad'] / component_total:5.1f}%), "
+                f"band={avg_components['C_band_shear']:.3f} ({100.0 * avg_components['C_band_shear'] / component_total:5.1f}%), "
+                f"GATE={avg_components['C_gate']:.3f} ({100.0 * avg_components['C_gate'] / component_total:5.1f}%), "
+                f"floor={avg_components['C_floor']:.3f} ({100.0 * avg_components['C_floor'] / component_total:5.1f}%), "
+                f"shear={avg_components['C_shear']:.3f} ({100.0 * avg_components['C_shear'] / component_total:5.1f}%), "
+                f"jac={avg_components['C_jac']:.3f} ({100.0 * avg_components['C_jac'] / component_total:5.1f}%)"
+            )
+        else:
+            print("   -> Loss breakdown skipped (non-positive total weighted contribution).")
+        diary.log_epoch_end(
+            epoch,
+            stage=int(stage),
+            train_loss=float(avg_epoch_loss),
+            lr=float(
+                optimizer.param_groups[0]["lr"]
+                if hasattr(optimizer, "param_groups") and len(optimizer.param_groups) > 0
+                else float("nan")
+            ),
+        )
+
+    # RGP_DEQ_REPAIR_PLAN.md B6.  This used to `shutil.copy2(latest, best_path)` whenever no
+    # best had been saved -- which is how BOTH 2026-08-27 artifacts came to sit at
+    # `kinematics_best.pth` carrying `checkpoint_role=kinematics_ckpt_latest` and NaN metrics.
+    # A run that never cleared a promotion gate has not produced a best model, and silently
+    # minting one erases the only signal that model selection did not happen.  Say so instead:
+    # the weights are still on disk as `kinematics_ckpt_latest.pth` for anyone who wants them.
+    best_path = kinematics_dir() / "kinematics_best.pth"
+    promoted = math.isfinite(best_val_composite_loss)
+    if not promoted:
+        reason = (
+            "validation never ran (empty val split, or val_every never hit)"
+            if n_validations == 0
+            else f"{n_validations} validation(s) ran but none passed the promotion gates"
+        )
+        print(
+            "\n[kin] " + "=" * 72 +
+            f"\n[kin] NO BEST CHECKPOINT PROMOTED: {reason}."
+            f"\n[kin] `{best_path.name}` was NOT written or updated by this run."
+            "\n[kin] The final weights are in `kinematics_ckpt_latest.pth`. Do NOT copy them"
+            "\n[kin] over kinematics_best.pth: they carry no selection evidence, and anything"
+            "\n[kin] downstream that resolves a 'best' checkpoint would silently consume them."
+            "\n[kin] " + "=" * 72
+        )
+    elif not best_path.exists():
+        print(f"[kin] WARN promotion recorded but {best_path} is missing; check KINEMATICS_OUTPUT_DIR")
+
+    if promoted and math.isfinite(best_promoted_select):
+        print(f"[kin] Promoted checkpoint selection score {best_promoted_select:.4f} "
+              f"(lower is better; gate-Jaccard fraction dominates -- s10.3).")
+    diary.log_run_end(best_val_composite_loss=float(best_val_composite_loss))
+    return {"promoted": bool(promoted), "n_validations": int(n_validations),
+            "best_val_composite_loss": float(best_val_composite_loss),
+            "best_select": float(best_promoted_select)}
+
+
+if __name__ == "__main__":
+    _ = (time, Path, quantify_performance)  # kept for API parity/future hooks
+    parser = argparse.ArgumentParser(description="Train kinematics predictor with optional resume UX.")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--adam-epochs", type=int, default=85)
+    parser.add_argument("--stage1-end-epoch", type=int, default=STAGE1_END_EPOCH)
+    parser.add_argument("--stage2-end-epoch", type=int, default=STAGE2_END_EPOCH)
+    parser.add_argument("--accum-steps", type=int, default=2, help="Gradient accumulation steps")
+    parser.add_argument("--weight-data", type=float, default=500.0, help="Supervised data weight")
+    parser.add_argument("--weight-mu", type=float, default=10.0, help="Viscosity supervision weight")
+    parser.add_argument("--weight-wss", type=float, default=10.0, help="Wall shear stress weight")
+    parser.add_argument(
+        "--limit-data",
+        type=int,
+        default=None,
+        help="Max graphs to load for fast debugging (not for production runs).",
+    )
+    parser.add_argument(
+        "--shuffle-graphs",
+        action="store_true",
+        help="Shuffle vessel_*.pt order before limit/split (avoids sorted-prefix bias).",
+    )
+    parser.add_argument(
+        "--graph-load-seed",
+        type=int,
+        default=42,
+        help="RNG seed for --shuffle-graphs.",
+    )
+    parser.add_argument(
+        "--no-geometry-curriculum",
+        action="store_true",
+        help="Disable L0/L1/L2 weighted sampling and stratified val split.",
+    )
+    parser.add_argument(
+        "--geometry-phase",
+        choices=("auto", "foundation", "ramp", "l2_heavy", "off"),
+        default="auto",
+        help="Geometry curriculum: auto=foundation->ramp->l2_heavy by stage; off=uniform.",
+    )
+    parser.add_argument(
+        "--hard-mining-start-epoch",
+        type=int,
+        default=16,
+        help="First epoch for hard-negative anchor mining (with geometry curriculum).",
+    )
+    parser.add_argument(
+        "--l0l1-only-epochs",
+        type=int,
+        default=6,
+        help="Stage-1 Newtonian epochs using only L0+L1 graphs (no L2 in train pool).",
+    )
+    parser.add_argument(
+        "--finetune-lr",
+        type=float,
+        default=None,
+        help="Override AdamW LR after resume (L2-heavy finetune, e.g. 1e-5).",
+    )
+    parser.add_argument(
+        "--max-lbfgs-graphs",
+        type=int,
+        default=4,
+        help="Number of cached graphs for L-BFGS closure.",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="latest",
+        default=None,
+        help="Resume from checkpoint path or use 'latest' (default when flag provided without value).",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Start a fresh run and disable interactive resume prompt.",
+    )
+    parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Disable interactive prompt; starts fresh unless --resume is explicitly set.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="No tqdm bars; epoch/validation lines only (copy-paste friendly logs).",
+    )
+    args = parser.parse_args()
+
+    if args.quiet:
+        os.environ["KINEMATICS_QUIET"] = "1"
+        os.environ["KINEMATICS_VAL_PROGRESS"] = "0"
+        os.environ["KINEMATICS_TQDM"] = "0"
+
+    if args.fresh and args.resume is not None:
+        raise ValueError("Cannot use --fresh together with --resume.")
+
+    ckpt_dir = kinematics_dir()
+    latest_state = ckpt_dir / "kinematics_state_latest.pth"
+    latest_model = ckpt_dir / "kinematics_ckpt_latest.pth"
+
+    resume_from = None
+    if args.resume is not None:
+        if args.resume == "latest":
+            if latest_state.exists():
+                resume_from = str(latest_state)
+            elif latest_model.exists():
+                resume_from = str(latest_model)
+            else:
+                print("[kin] No latest checkpoint found; starting fresh.")
+        else:
+            resume_path = Path(args.resume)
+            if not resume_path.exists():
+                raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+            resume_from = str(resume_path)
+    elif not args.fresh and not args.no_prompt:
+        latest = latest_state if latest_state.exists() else (latest_model if latest_model.exists() else None)
+        if latest is not None:
+            try:
+                choice = input(f"Found checkpoint '{latest}'. Resume? [Y/n]: ").strip().lower()
+            except EOFError:
+                choice = "n"
+            if choice in ("", "y", "yes"):
+                resume_from = str(latest)
+
+    geom_enabled = not args.no_geometry_curriculum
+    geom_phase = "off" if args.no_geometry_curriculum else str(args.geometry_phase)
+    geometry_curriculum = GeometryCurriculumConfig(
+        enabled=geom_enabled,
+        phase=geom_phase,
+        hard_mining_start_epoch=int(args.hard_mining_start_epoch),
+        l0l1_only_epochs=int(args.l0l1_only_epochs),
+    )
+
+    train_kinematics(
+        epochs=int(args.epochs),
+        adam_epochs=int(args.adam_epochs),
+        stage1_end_epoch=int(args.stage1_end_epoch),
+        stage2_end_epoch=int(args.stage2_end_epoch),
+        resume_from=resume_from,
+        accum_steps=int(args.accum_steps),
+        weight_data=float(args.weight_data),
+        weight_mu=float(args.weight_mu),
+        weight_wss=float(args.weight_wss),
+        max_lbfgs_graphs=int(args.max_lbfgs_graphs),
+        limit_data=args.limit_data,
+        shuffle_graphs=bool(args.shuffle_graphs),
+        graph_load_seed=int(args.graph_load_seed),
+        geometry_curriculum=geometry_curriculum,
+        finetune_lr=args.finetune_lr,
+    )

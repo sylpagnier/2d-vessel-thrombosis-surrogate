@@ -1,0 +1,13 @@
+{
+  "id": "18_wound_x_stenosis",
+  "title": "Wound in stenosis vs stenosis strength",
+  "axis": "stenosis_x_wound",
+  "description": "Wound centered on stenosis peak (wound_align_stenosis); vary occlusion 0 / 0.25 / 0.5 / 0.75.",
+  "control": {"geometry_preset": "wound_in_stenosis"},
+  "arms": [
+    {"name": "occ0_wound", "axis_value": 0.0, "geometry": {"stenosis_occlusion": 0.0}, "labels": {"stenosis_occlusion": 0.0, "wound_in_stenosis": true}},
+    {"name": "occ0.25_wound", "axis_value": 0.25, "geometry": {"stenosis_occlusion": 0.25}, "labels": {"stenosis_occlusion": 0.25, "wound_in_stenosis": true}},
+    {"name": "occ0.50_wound", "axis_value": 0.5, "geometry": {"stenosis_occlusion": 0.5}, "labels": {"stenosis_occlusion": 0.5, "wound_in_stenosis": true}},
+    {"name": "occ0.75_wound", "axis_value": 0.75, "geometry": {"stenosis_occlusion": 0.75}, "labels": {"stenosis_occlusion": 0.75, "wound_in_stenosis": true}}
+  ]
+}

@@ -1,0 +1,150 @@
+# Large / generated data (never push) — ignore contents, not the dir itself,
+# so we can carve out small public reference manifests.
+data/*
+!data/reference/
+!data/reference/**
+# Sweep / ablation leftovers stay local
+data/reference_local/
+
+# Generated training / eval artifacts (local runs)
+outputs/
+
+# Heavy COMSOL sources
+comsol_models/
+
+# Customer inbox uploads (keep README only)
+customer_geometries/*
+!customer_geometries/README.txt
+
+# Local notes scratchpad
+notes/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+env/
+venv/
+ENV/
+.venv/
+
+# Checkpoints / tensors if ever dropped outside outputs/
+*.pth
+*.pt
+*.ckpt
+!customer_geometries/README.txt
+
+# COMSOL / mesh binaries if ever outside comsol_models/
+*.mph
+*.nas
+*.msh
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.cursor/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Root junk / local dumps (never re-add)
+/test_legend.png
+/test_legend.json
+/check_nodes_out.txt
+/scratch/
+/scratch_b64.json
+*.log
+
+# Build output (large binaries, never push)
+/dist/
+
+# AI-assistant / editor config and history-hygiene tooling (local only)
+AGENTS.md
+.cursorrules
+.cursorignore
+scripts/git-hooks/
+scripts/strip_ai_coauthor_history.ps1
+
+# Retired code eras (local only)
+src/archive/
+docs/archive/
+
+# One-off diagnostic probes; the supported surface is `python -m src.tools.diagnostics`
+scripts/diag_*.py
+scripts/diagnose_*.py
+
+# Internal research journals -- working logs, not documentation (local only)
+docs/BIOCHEM_LEGACY_LESSONS.md
+docs/DEPLOYCLOT.md
+docs/DEPLOY_FLOW_PLAN.md
+docs/GENERALIZATION_PLAN.md
+docs/KINE_ADJUSTMENTS.md
+docs/LOCAL_KINEMATIC_CORRECTOR.md
+docs/MAT_GROWTH.md
+docs/MODEL_REVIEW_2026-08-22.md
+docs/PHASE10_V4.md
+docs/PHASE3_HANDOFF.md
+docs/PHASE3_RESULTS.md
+docs/PHASE6_HANDOFF.md
+docs/PHASE6_RESULTS.md
+docs/PHASE7_FINDINGS.md
+docs/PHASE9_ML.md
+docs/PILOT_COHORT_RUNBOOK.md
+docs/PUBLICATION_NOTES.md
+docs/PUBLICATION_PLAN.md
+docs/RGP_DEQ_REPAIR_PLAN.md
+docs/WALL_MODEL_PLAN.md
+docs/WOUND_PROGRESS.md
+
+# One-off analyses and dated run scripts: their findings are recorded in the docs,
+# and the scripts themselves are not reproducible surface for a reader (local only)
+scripts/go_overnight_*.sh
+scripts/eda_clot_physics.py
+scripts/probe_pocket_ranking.py
+scripts/validate_preflight.py
+
+# Architecture-exploration ladder: arm-by-arm Stage-A experiments and one-off
+# comparisons. Their conclusions are in the code and the docs; the runs themselves
+# need local caches and are not reproducible surface for a reader. (local only)
+scripts/stage_a/
+scripts/go_kinematics_stage_a_ladder.ps1
+scripts/go_cv_seeds.sh
+scripts/go_g_vs_fem.sh
+
+# Investigation forensics: probes written to answer one past question about one
+# cohort ("why does wound_comsol003 miss its clot"). Live modules still cite them
+# in comments as provenance for a design choice. (local only)
+src/tools/diagnostics/
+scripts/diag.py
+scripts/go_diag.ps1
+
+# Catalogue of scripts deleted in earlier cleanups (local only)
+scripts/archive/
+
+# Reference JSONs with no consumer: records of experiments whose stacks are gone
+data/reference/clot_baseline_lane_a.json
+data/reference/generalization_new_vessels.json
+data/reference/kine_loss_weights_20260828.json
+data/reference/mat_canonical_deploy.json
+data/reference/mat_compound_deploy.json
+data/reference/mat_wall_gen_baseline.json
+
+# Generators for figures dropped on review 2026-09-13 (docs/publication/FIGURES.md,
+# "Not in the paper's figure set"); nothing tracked imports them. (local only)
+scripts/publication/plot_amdahl_ceiling.py
+scripts/publication/plot_coupling_gate.py
+scripts/publication/plot_closed_loop.py
+scripts/publication/plot_biochem_detail.py
+scripts/publication/plot_rgp_architecture.py
+scripts/publication/plot_fig1_flow_landscape.py
+scripts/publication/diag_wall_clock.py
+
+# Pre-publication claim document -- kept local until the paper is out
+docs/publication/STORY.md

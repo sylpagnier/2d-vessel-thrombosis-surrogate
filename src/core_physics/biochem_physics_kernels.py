@@ -1,0 +1,823 @@
+import os
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from src.config import BULK_SPECIES_ORDER, SPECIES_GROUPS, BulkSpecies, BiochemNodeFeat, WallSpecies
+from src.utils.channel_schema import biochem_encoder_x
+from src.utils.rheology import compute_shear_rate
+from src.utils.nondim import time_ratio_global_to_convective
+from src.core_physics.mls_gradient import graph_gradient_operators, graph_laplacian_operator
+from src.utils.tensor_utils import as_tensor_like
+
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+BIOCHEM_ADHESION_GATE = "global_sigmoid"
+BIOCHEM_SEPARATION_GATE = "dx"
+
+
+
+def surface_time_gate_scalar(data, cfg, *, device, dtype, current_time_s: float | None = None) -> torch.Tensor:
+    """Smooth COMSOL step2t(t) gate (adhesion active after ``cfg.surface_time_gate_s``).
+
+    ``current_time_s``: override physical time in seconds (e.g. from macro-step tracker).
+    Falls back to ``data.t_global`` or ``cfg.t_final`` when None.
+    """
+    if current_time_s is not None:
+        t_val = float(current_time_s)
+    else:
+        t_raw = getattr(data, "t_global", None)
+        if t_raw is None:
+            t_val = float(cfg.t_final)
+        elif torch.is_tensor(t_raw):
+            t_val = float(t_raw.reshape(-1)[0].detach().cpu())
+        else:
+            t_val = float(t_raw)
+    gate_t = float(cfg.surface_time_gate_s)
+    gate_slope = float(cfg.surface_time_gate_slope)
+    return torch.sigmoid(
+        (torch.as_tensor(t_val, device=device, dtype=dtype) - gate_t) * gate_slope
+    )
+
+
+def _biochem_adhesion_gate_mode() -> str:
+    """Dispatch env: ``global_sigmoid`` (default) | ``fourier_tau`` | ``spatial_mlp``."""
+    return BIOCHEM_ADHESION_GATE.strip().lower()
+
+
+def compute_adhesion_gate(
+    data,
+    cfg,
+    *,
+    device: torch.Tensor,
+    dtype: torch.Tensor,
+    current_time_s: float | None = None,
+    node_features: torch.Tensor | None = None,
+    gate_module=None,
+) -> torch.Tensor:
+    """Unified adhesion gate dispatch.
+
+    Args:
+        gate_module: a ``FourierTauGate`` or ``SpatialConditionedGate`` instance
+            (from ``GNODE_Phase3``). When None falls back to global sigmoid.
+        node_features: node-level feature tensor [N, F]; required for spatial_mlp mode.
+        current_time_s: physical time in seconds at this macro step.
+    """
+    mode = _biochem_adhesion_gate_mode()
+    if mode in ("fourier_tau", "spatial_mlp") and gate_module is not None and current_time_s is not None:
+        return gate_module(node_features, current_time_s)
+    return surface_time_gate_scalar(data, cfg, device=device, dtype=dtype, current_time_s=current_time_s)
+
+
+class BiochemPhysicsKernels:
+    """
+    Biochem Biochemical Physics Kernels for Eulerian Thrombosis Modeling.
+    Translates COMSOL Phase 2 multiphysics equations into differentiable DEQ operations.
+    Includes full Fibrin/Fibrinogen coagulation cascade and Dual Viscosity Pseudo-Huber Regularization.
+    """
+
+    def __init__(self, biochem_cfg, core_physics_kernels):
+        self.cfg = biochem_cfg
+        self.core = core_physics_kernels
+        self._biochem_huber_delta = max(float(self.cfg.biochem_huber_delta), 1e-8)
+        self._availability_negative_slope = max(float(self.cfg.availability_negative_slope), 0.0)
+
+        # --- USE CENTRALIZED SCALES ---
+        self.species_scales = self.cfg.get_species_scales(device="cpu")
+        self.D_scale = self.cfg.d_scale
+        self.C_scale = self.cfg.bulk_scale
+
+        self.kinetics = self.BiochemKinetics(self.cfg, self.C_scale)
+        self.adr_norm_scales = self.cfg.get_adr_norm_scales(device="cpu")
+        self._species_scales_cache = {}
+        self._adr_norm_scales_cache = {}
+
+        self.D_coeff = {
+            'RP': self.cfg.D_RP * self.D_scale,
+            'AP': self.cfg.D_AP * self.D_scale,
+            'APR': self.cfg.D_APR * self.D_scale,
+            'APS': self.cfg.D_APS * self.D_scale,
+            'PT': self.cfg.D_PT * self.D_scale,
+            'T': self.cfg.D_T * self.D_scale,
+            'AT': self.cfg.D_AT * self.D_scale,
+            'FG': self.cfg.D_FG * self.D_scale,
+            'FI': self.cfg.D_FI * self.D_scale
+        }
+
+    def _get_species_scales(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        key = (device.type, device.index, str(dtype))
+        if key not in self._species_scales_cache:
+            self._species_scales_cache[key] = self.species_scales.to(device=device, dtype=dtype)
+        return self._species_scales_cache[key]
+
+    def _get_adr_norm_scales(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        key = (device.type, device.index, str(dtype))
+        if key not in self._adr_norm_scales_cache:
+            self._adr_norm_scales_cache[key] = self.adr_norm_scales.to(device=device, dtype=dtype)
+        return self._adr_norm_scales_cache[key]
+
+    @staticmethod
+    def _grad_ops(data, like: torch.Tensor):
+        """Gradient operators for ``data``, in the packs' non-dimensional length unit.
+
+        Routes through ``mls_gradient`` because the shipped ``data.G_x``/``G_y`` are
+        rank-deficient away from the wall and return ~0 for an interior derivative
+        (docs/PHASE3_RESULTS.md 1). ``BIOCHEM_GRAD_OPERATOR=legacy`` restores them.
+        """
+        return graph_gradient_operators(data, device=like.device, dtype=like.dtype)
+
+    @staticmethod
+    def _lap_op(data, like: torch.Tensor):
+        """Laplacian for ``data``, in the packs' non-dimensional length unit.
+
+        Same reason as :meth:`_grad_ops`: the shipped ``data.Laplacian`` is rank-deficient
+        and reads ``lap(x^2 + y^2)`` as 1.79 against an exact 4.0.
+        """
+        return graph_laplacian_operator(data, device=like.device, dtype=like.dtype)
+
+    def set_biochem_huber_delta(self, delta: float) -> None:
+        """Update shared residual Huber delta during curriculum annealing."""
+        self._biochem_huber_delta = max(float(delta), 1e-8)
+
+    class BiochemKinetics:
+        """
+        Differentiable implementation of the COMSOL biochemical kinetic rate equations.
+        Replaces rigid step functions with temperature-scaled sigmoids to ensure smooth gradients.
+        """
+
+        def __init__(self, cfg, C_scale):
+            self.cfg = cfg
+            self.C_scale = C_scale
+
+            self.T_omega = self.cfg.soft_step_T_omega
+            self.T_shear = self.cfg.soft_step_T_shear
+            self.T_grad = self.cfg.soft_step_T_grad
+            self.T_low_shear = self.cfg.soft_step_T_low_shear
+            self.T_scale = self.cfg.soft_step_T_scale
+
+            # --- COMSOL Biochemical Parameters (Mapped & Scaled) ---
+            self.APScrit = self.cfg.APScrit * self.C_scale
+            self.APRcrit = self.cfg.APRcrit * self.C_scale
+            self.Tcrit = self.cfg.Tcrit * self.C_scale
+            self.t_act = self.cfg.t_act
+            self.shear_crit = self.cfg.shear_crit
+
+            # Fibrin reaction parameters
+            self.kfi = self.cfg.kfi
+            self.kmfi = self.cfg.kmfi * self.C_scale
+
+            # Thrombin inhibition (Gamma) concentration constants in working concentration space
+            self.c_H = self.cfg.c_H * self.C_scale
+            self.K_at = self.cfg.K_at * self.C_scale
+            self.K_T = self.cfg.K_T * self.C_scale
+
+        def _soft_step(self, x, threshold, temperature, reverse=False):
+            """Smooth approximation of Heaviside step function using STE."""
+            sign = -1.0 if reverse else 1.0
+            scaled_temp = temperature * self.T_scale
+            # Implement Straight-Through Estimator to bypass vanishing gradients
+            return SoftStepSTE.apply(x, threshold, scaled_temp, sign)
+
+        def compute_omega(self, APR, APS, T):
+            """Analytic 1: Chemical activation function."""
+            return (APS / self.APScrit) + (APR / self.APRcrit) + (T / self.Tcrit)
+
+        def compute_k_pa(self, omega, shear_rate):
+            """
+            Analytic 7: Total Platelet Activation Rate (kpa_chem + kpa_mech)
+            Uses soft-logic for differentiable conditionals.
+            """
+            # kpa_chem (Analytic 2)
+            chem_active = self._soft_step(omega, 1.0, self.T_omega)
+            cap_mask = self._soft_step(omega, 500.0, self.T_omega, reverse=True)
+            kpa_chem = cap_mask * (omega / self.t_act) * chem_active + (1.0 - cap_mask) * 500.0
+
+            # kpa_mech (Analytic 6)
+            mech_active = self._soft_step(shear_rate, self.shear_crit, self.T_shear)
+            kpa_mech = mech_active * (shear_rate / self.shear_crit)
+
+            return kpa_chem + kpa_mech
+
+        # Update signature to include FI concentration
+        def compute_fibrin_kinetics(self, T, FG, FI):
+            # COMSOL reac1 (Reactions) does not apply a saturation limit for FI.
+            # Use the unbounded Michaelis-Menten-like form directly to match COMSOL.
+            eps = 1e-8
+            reaction_rate = (self.kfi * T * FG) / (self.kmfi + FG + eps)
+            R_FI = reaction_rate
+            R_FG = -reaction_rate  # Conservation of species mass
+            return R_FG, R_FI
+
+        def compute_gamma(self, T, AT):
+            """
+            Analytic 3: Thrombin inhibition by Antithrombin/Heparin complex.
+            Gamma = (k_1t * c_H * AT) / (K_at * K_T + T * K_at + AT * T)
+            """
+            numerator = self.cfg.k_1t * self.c_H * AT
+            denominator = (self.K_at * self.K_T) + (T * self.K_at) + (AT * T) + 1e-8
+            return numerator / denominator
+
+        def compute_species_reactions(self, species_dict, shear_rate):
+            """Computes net reaction source/sink terms for all bulk species using config params."""
+            RP = species_dict['RP']
+            AP = species_dict['AP']
+            APR = species_dict['APR']
+            APS = species_dict['APS']
+            PT = species_dict['PT']
+            T = species_dict['T']
+            AT = species_dict['AT']
+            FG = species_dict['FG']
+            FI = species_dict['FI']
+
+            omega = self.compute_omega(APR, APS, T)
+            k_pa = self.compute_k_pa(omega, shear_rate)
+
+            # Agonist Release (APR, APS)
+            lambda_apr = self.cfg.lambda_adp
+            s_t_aps = self.cfg.s_t
+
+            R_RP = -k_pa * RP
+            R_AP = k_pa * RP
+            R_APR = lambda_apr * R_AP
+            R_APS = (s_t_aps * AP) - (self.cfg.k_i * APS)
+
+            # Thrombin & Antithrombin
+            phi_at = self.cfg.phi_at * self.cfg.beta
+            phi_rt = self.cfg.phi_rt * self.cfg.beta
+
+            # PT and platelet terms are in C_scale working concentration; divide once to keep rate dimensions stable.
+            enzymatic_term = PT * (phi_at * AP + phi_rt * RP) / self.C_scale
+            R_PT = -enzymatic_term
+
+            Gamma_inhibit = self.compute_gamma(T, AT)
+            R_T = enzymatic_term - (Gamma_inhibit * T)
+            R_AT = - (Gamma_inhibit * T)
+
+            R_FG, R_FI = self.compute_fibrin_kinetics(T, FG, FI)
+            return {
+                'RP': R_RP, 'AP': R_AP, 'APR': R_APR, 'APS': R_APS,
+                'PT': R_PT, 'T': R_T, 'AT': R_AT, 'FG': R_FG, 'FI': R_FI
+            }
+
+    def compute_dual_viscosity_penalty(self, M_wall, FI_field, spatial_props, data, delta=1e-3):
+        """
+        Computes the Pseudo-Huber regularization loss for the spatial gradients
+        of the dual viscosity field. Stabilizes PINN training.
+        """
+        max_ratio = self.cfg.mu_ratio_max
+
+        # mu1 maxes out at (max_ratio - 1.0) so the base fluid remains 1.0x
+        mu1_mat = self.kinetics._soft_step(
+            M_wall, self.cfg.viscosity_mat_crit, self.cfg.viscosity_penalty_soft_temp_mat
+        ) * (max_ratio - 1.0) + 1.0
+        # COMSOL mu2(FI) steps at viscosity_fi_crit = 0.6 uM. Decode log1p(nd) -> working
+        # units (SI [mol/m^3] * bulk_scale), then convert to uM (1 mol/m^3 = 1e3 uM) so the
+        # threshold comparison is unit-consistent (working-unit compare was ~1e3x lenient).
+        fi_scale = float(self._get_species_scales(FI_field.device, FI_field.dtype)[8].item())
+        FI_working = torch.expm1(torch.clamp(FI_field, min=-10.0, max=8.0)) * fi_scale
+        FI_uM = FI_working * (1e3 / float(self.cfg.bulk_scale))
+        mu2_fi = self.kinetics._soft_step(
+            FI_uM, self.cfg.viscosity_fi_crit, self.cfg.viscosity_penalty_soft_temp_fi
+        ) * max_ratio
+
+        mu_total = mu1_mat + mu2_fi
+        if mu_total.dim() > 1:
+            mu_total = mu_total.view(-1)
+
+        # Sparse Matrix Gradient Calculation
+        mu_col = mu_total.unsqueeze(1)
+        _gx, _gy = self._grad_ops(data, mu_col)
+        dmu_dx = torch.sparse.mm(_gx, mu_col).squeeze(1)
+        dmu_dy = torch.sparse.mm(_gy, mu_col).squeeze(1)
+
+        grad_mu_sq = dmu_dx ** 2 + dmu_dy ** 2
+
+        pseudo_huber_loss = torch.mean((delta ** 2) * (torch.sqrt(1 + grad_mu_sq / (delta ** 2)) - 1))
+        return pseudo_huber_loss
+
+    def biochem_adr_residual(
+        self,
+        species_preds,
+        velocity_field,
+        spatial_props,
+        data,
+        d_pred_dt=None,
+        *,
+        node_mask: torch.Tensor | None = None,
+        fast_transient: bool = False,
+        residual_mode: str = "convective_nd",
+        species_scope: str = "all",
+    ):
+        """Computes Advection-Diffusion-Reaction (L_ADR) residuals with Transient Time Derivatives.
+
+        When ``node_mask`` is set (bool [N]), species losses use mean(residual^2) on masked nodes only.
+        ``fast_transient=True`` applies finite-difference dC/dt to fast species (COMSOL-like transient tds).
+
+        ``residual_mode`` (env ``BIOCHEM_ADR_RESIDUAL_MODE``):
+          - ``convective_nd``: default convective-time ND residual
+          - ``log``: residual on log1p-ND field (same coords as L_Data_Bio)
+          - ``relative_nd``: (residual / (|C_nd| + eps))^2 mean
+          - ``transport_only`` / ``reaction_only``: ablation terms
+        ``species_scope``: ``all`` | ``fi`` | ``fast`` | ``slow`` (``fi_mat`` alias -> ``fi``)
+        """
+        residual_mode = (residual_mode or "convective_nd").strip().lower()
+        species_scope = (species_scope or "all").strip().lower()
+        if species_scope == "fi_mat":
+            species_scope = "fi"
+        u, v = velocity_field[..., 0], velocity_field[..., 1]
+
+        # Pass `data` down into the shear computation
+        a_RBC_m = self.cfg.d_RBC / 2.0
+        # COMSOL Keller diffusion uses a global constant maximum shear rate (tau_max).
+        # Using local shear here would introduce spatially varying diffusion not present in COMSOL labels.
+        tau_max = 2000.0
+        D_s = 0.18 * (a_RBC_m ** 2) * tau_max
+
+        fast_species = SPECIES_GROUPS["fast"]
+        slow_species = SPECIES_GROUPS["slow"]
+
+        # Independent accumulators: keep both tied to ``species_preds`` for autograd, but
+        # ensure ``adr_losses_fast`` and ``adr_losses_slow`` are *separate* tensors. A
+        # shared reference combined with the in-place ``+=`` below would silently make
+        # both losses equal to the sum across all species (each accumulator mutates the
+        # same storage), which neutralises the fast/slow Kendall weighting downstream.
+        adr_losses_fast = species_preds.sum() * 0.0
+        adr_losses_slow = species_preds.sum() * 0.0
+
+        u_ref = spatial_props['u_ref'].to(device=species_preds.device, dtype=species_preds.dtype)
+        d_bar = spatial_props['d_bar'].to(device=species_preds.device, dtype=species_preds.dtype)
+        u_ref_safe = torch.clamp(u_ref, min=1e-8)
+        d_bar_safe = torch.clamp(d_bar, min=1e-8)
+
+        keys = BULK_SPECIES_ORDER
+        bulk_n = len(keys)
+        scales = self._get_species_scales(species_preds.device, species_preds.dtype)
+        species_preds_safe = torch.clamp(species_preds, min=-10.0, max=8.0)
+        nd_species_preds = torch.expm1(species_preds_safe)
+        linear_species_preds = nd_species_preds * scales[:bulk_n]
+
+        species_dict = {sp.name: linear_species_preds[..., sp.value] for sp in keys}
+        shear_rate = self._compute_shear_rate(u, v, spatial_props, data)
+        reaction_terms = self.kinetics.compute_species_reactions(species_dict, shear_rate)
+        keller_species = SPECIES_GROUPS["keller"]
+
+        rel_eps = 1e-3
+        use_log_field = residual_mode == "log"
+
+        for sp in fast_species + slow_species:
+            key = sp.name
+            is_fast_sp = sp in fast_species
+            if species_scope not in ("all", ""):
+                if species_scope == "fi" and key != "FI":
+                    continue
+                if species_scope == "fast" and not is_fast_sp:
+                    continue
+                if species_scope == "slow" and is_fast_sp:
+                    continue
+
+            scale_idx = sp.value
+            scale_c = scales[scale_idx]
+
+            # Global reference time for chain rule scaling
+            t_ref_global = self.cfg.t_final
+
+            # Default: fast species quasi-steady (no dC/dt). Set fast_transient=True to match COMSOL tds.
+            use_transient = d_pred_dt is not None and (
+                sp in slow_species or (fast_transient and sp in fast_species)
+            )
+            if use_log_field:
+                C_nd = species_preds_safe[:, scale_idx]
+                if use_transient:
+                    dC_dt_nd = d_pred_dt[:, scale_idx]
+                else:
+                    dC_dt_nd = C_nd * 0.0
+            elif use_transient:
+                exp_pred = torch.exp(species_preds_safe[:, scale_idx])
+                # d_pred_dt is now d(logC)/dt_nd
+                dC_dt_nd = exp_pred * d_pred_dt[:, scale_idx]
+                C_nd = nd_species_preds[:, scale_idx]
+            else:
+                dC_dt_nd = species_preds_safe[:, scale_idx] * 0.0
+                C_nd = nd_species_preds[:, scale_idx]
+
+            C = species_dict[key]
+            base_D = self.D_coeff[key]
+            D = base_D + D_s if sp in keller_species else base_D
+            R = reaction_terms[key]
+
+            # Sparse matrix gradients/Laplacian in normalized coordinates (x* = x / d_bar).
+            C_col_nd = C_nd.unsqueeze(1)
+            _gx, _gy = self._grad_ops(data, C_col_nd)
+            dC_dx_nd = torch.sparse.mm(_gx, C_col_nd).squeeze(1)
+            dC_dy_nd = torch.sparse.mm(_gy, C_col_nd).squeeze(1)
+            advection_nd = u * dC_dx_nd + v * dC_dy_nd
+
+            # Diffusion in dimensionless form: div((1/Pe) grad(C_nd)).
+            laplacian_C_nd = torch.sparse.mm(self._lap_op(data, C_col_nd), C_col_nd).squeeze(1)
+            inv_pe = as_tensor_like(D, like=u_ref_safe) / (u_ref_safe * d_bar_safe)
+            inv_pe_col = inv_pe.unsqueeze(1)
+            dinvpe_dx = torch.sparse.mm(_gx, inv_pe_col).squeeze(1)
+            dinvpe_dy = torch.sparse.mm(_gy, inv_pe_col).squeeze(1)
+            diffusion_nd = (inv_pe * laplacian_C_nd) + (dinvpe_dx * dC_dx_nd + dinvpe_dy * dC_dy_nd)
+
+            # Local convective-time reaction scale for all species.
+            reaction_nd = (d_bar_safe / u_ref_safe) * (R / torch.clamp(scale_c, min=1e-12))
+
+            if sp in SPECIES_GROUPS["solid"]:
+                advection_nd = torch.zeros_like(advection_nd)
+                diffusion_nd = torch.zeros_like(diffusion_nd)
+
+            time_ratio = time_ratio_global_to_convective(
+                t_ref_global=t_ref_global,
+                d_bar=d_bar_safe,
+                u_ref=u_ref_safe,
+            )
+
+            if residual_mode == "transport_only":
+                reaction_nd = reaction_nd * 0.0
+            elif residual_mode == "reaction_only":
+                advection_nd = advection_nd * 0.0
+                diffusion_nd = diffusion_nd * 0.0
+                dC_dt_nd = dC_dt_nd * 0.0
+
+            residual_nd = (dC_dt_nd / time_ratio) + advection_nd - diffusion_nd - reaction_nd
+            if residual_mode == "relative_nd":
+                denom = C_nd.abs() + rel_eps
+                residual_nd = residual_nd / denom
+
+            res_sq = residual_nd ** 2
+            if node_mask is not None:
+                m = node_mask.view(-1).bool()
+                if bool(m.any().item()):
+                    loss_c = res_sq[m].mean()
+                else:
+                    loss_c = species_preds.sum() * 0.0
+            else:
+                loss_c = res_sq.mean()
+
+            if sp in fast_species:
+                adr_losses_fast += loss_c
+            else:
+                adr_losses_slow += loss_c
+
+        return adr_losses_fast, adr_losses_slow
+
+    def biochem_inlet_outlet_residual(self, biochem_preds, spatial_props, data):
+        """
+        Enforces Danckwerts (Dirichlet-equivalent) concentration at the inlet
+        and Outflow (Zero normal gradient) conditions at the outlet.
+        """
+        mask_inlet = data.mask_inlet.view(-1).bool()
+        mask_outlet = data.mask_outlet.view(-1).bool()
+
+        z = biochem_preds.sum() * 0.0
+        loss_inlet = z
+        loss_outlet = z
+
+        # 1. Inlet: Force predictions to match the transformed baseline concentrations
+        if mask_inlet.any() and hasattr(data, 'bio_inlet_bc'):
+            bulk_n = len(BULK_SPECIES_ORDER)
+            preds_inlet = biochem_preds[mask_inlet, :bulk_n]
+            targs_inlet = data.bio_inlet_bc[mask_inlet, :bulk_n]
+            loss_inlet = F.mse_loss(preds_inlet, targs_inlet)
+
+        # 2. Outlet: zero normal gradient of physical concentration (same linear C as ADR / wall flux).
+        # Use ``data.outlet_normal`` when present (Gmsh outlet lines in mesh_to_graph). Slots x[:,3:5] are
+        # wall-distance / wall-segment features, not the outlet face normal — wrong n gave huge erroneous
+        # dC/dn on synthetic vessels; raw MSE could overflow float32 to inf.
+        if mask_outlet.any():
+            if hasattr(data, "outlet_normal") and data.outlet_normal is not None:
+                on = data.outlet_normal.to(device=biochem_preds.device, dtype=biochem_preds.dtype)
+                nx = on[mask_outlet, 0]
+                ny = on[mask_outlet, 1]
+                mag = torch.sqrt(nx * nx + ny * ny + 1e-12)
+                weak = mag < 1e-5
+                if weak.any():
+                    normals_fb = biochem_encoder_x(data)[mask_outlet, BiochemNodeFeat.WALL_NORMAL]
+                    nx_fb = normals_fb[:, 0]
+                    ny_fb = normals_fb[:, 1]
+                    nx = torch.where(weak, nx_fb, nx)
+                    ny = torch.where(weak, ny_fb, ny)
+            else:
+                normals_fb = biochem_encoder_x(data)[mask_outlet, BiochemNodeFeat.WALL_NORMAL]
+                nx = normals_fb[:, 0]
+                ny = normals_fb[:, 1]
+
+            nmag = torch.sqrt(nx * nx + ny * ny + 1e-12)
+            nx = nx / nmag
+            ny = ny / nmag
+
+            scales = self._get_species_scales(biochem_preds.device, biochem_preds.dtype)
+            biochem_safe = torch.clamp(biochem_preds, min=-10.0, max=8.0)
+            bulk_n = len(BULK_SPECIES_ORDER)
+            linear_bulk = torch.expm1(biochem_safe) * scales[:bulk_n]
+
+            d_bar = spatial_props['d_bar'].to(device=biochem_preds.device, dtype=biochem_preds.dtype)
+            d_bar_safe = torch.clamp(d_bar, min=1e-8)
+
+            flux_scale = self._get_adr_norm_scales(
+                biochem_preds.device, biochem_preds.dtype
+            )[:bulk_n].mean().clamp(min=1e-12)
+            loss_outlet_acc = torch.zeros((), device=biochem_preds.device, dtype=biochem_preds.dtype)
+            mobile_species = [sp for sp in BULK_SPECIES_ORDER if sp not in SPECIES_GROUPS["solid"]]
+            n_mobile = len(mobile_species)
+            for sp in mobile_species:
+                C_col = linear_bulk[:, sp.value].unsqueeze(1)
+                _gx, _gy = self._grad_ops(data, C_col)
+                dC_dx = torch.sparse.mm(_gx, C_col).squeeze(1) / d_bar_safe
+                dC_dy = torch.sparse.mm(_gy, C_col).squeeze(1) / d_bar_safe
+                dC_dn = dC_dx[mask_outlet] * nx + dC_dy[mask_outlet] * ny
+                dC_dn = torch.nan_to_num(dC_dn, nan=0.0, posinf=0.0, neginf=0.0)
+                d_nd = dC_dn / flux_scale
+                loss_outlet_acc = loss_outlet_acc + F.huber_loss(
+                    d_nd, torch.zeros_like(d_nd), delta=self._biochem_huber_delta
+                )
+
+            loss_outlet = loss_outlet_acc / float(n_mobile)
+
+        return loss_inlet, loss_outlet
+
+    def biochem_wall_residual(self, biochem_preds, wall_preds, velocity_field, spatial_props, data, dM_pred_dt=None):
+        """Enforces Surface Platelet Adhesion with Transient Surface ODEs."""
+        mask_wall = data.mask_wall.view(-1).bool()
+        if not mask_wall.any():
+            z = biochem_preds.sum() * 0.0
+            return z, z
+
+        scales = self._get_species_scales(biochem_preds.device, biochem_preds.dtype)
+        biochem_preds_safe = torch.clamp(biochem_preds, min=-10.0, max=8.0)
+        nd_biochem_preds = torch.expm1(biochem_preds_safe)
+        bulk_n = len(BULK_SPECIES_ORDER)
+        linear_biochem_preds = nd_biochem_preds * scales[:bulk_n]
+
+        RP_wall = linear_biochem_preds[mask_wall, BulkSpecies.RP.value]
+        AP_wall = linear_biochem_preds[mask_wall, BulkSpecies.AP.value]
+        APR_wall = linear_biochem_preds[mask_wall, BulkSpecies.APR.value]
+        APS_wall = linear_biochem_preds[mask_wall, BulkSpecies.APS.value]
+        PT_wall = linear_biochem_preds[mask_wall, BulkSpecies.PT.value]
+        T_wall = linear_biochem_preds[mask_wall, BulkSpecies.T.value]
+
+        wall_preds_safe = torch.clamp(wall_preds, min=-10.0, max=8.0)
+        nd_wall_preds = torch.expm1(wall_preds_safe)
+
+        # USE CENTRALIZED SCALE
+        Minf_scaled = self.cfg.Minf * self.cfg.surface_scale
+
+        M = nd_wall_preds[mask_wall, WallSpecies.M.value] * Minf_scaled
+        Mas = nd_wall_preds[mask_wall, WallSpecies.Mas.value] * Minf_scaled
+        Mat = nd_wall_preds[mask_wall, WallSpecies.Mat.value] * Minf_scaled
+
+        t_ref_global = self.cfg.t_final
+
+        if dM_pred_dt is not None:
+            exp_wall = torch.exp(wall_preds_safe[mask_wall])
+            # These derivatives are now dM/dt_nd
+            dM_dt_nd = exp_wall[:, WallSpecies.M.value] * dM_pred_dt[mask_wall, WallSpecies.M.value] * Minf_scaled
+            dMas_dt_nd = exp_wall[:, WallSpecies.Mas.value] * dM_pred_dt[mask_wall, WallSpecies.Mas.value] * Minf_scaled
+            dMat_dt_nd = exp_wall[:, WallSpecies.Mat.value] * dM_pred_dt[mask_wall, WallSpecies.Mat.value] * Minf_scaled
+        else:
+            z = M * 0.0
+            dM_dt_nd = z
+            dMas_dt_nd = z
+            dMat_dt_nd = z
+
+        M_tot = M + Mas + Mat
+        Minf = self.cfg.Minf * self.cfg.surface_scale
+
+        # 4. Compute Local Surface Activation & Spatial Gradients
+        u = velocity_field[..., 0]
+        v = velocity_field[..., 1]
+
+        global_shear = self._compute_shear_rate(u, v, spatial_props, data)
+        shear_wall = global_shear[mask_wall]
+
+        d_bar = spatial_props['d_bar'].to(biochem_preds.device)
+        d_bar_safe = torch.clamp(d_bar, min=1e-8)
+
+        # Local convective time at the wall (used by both the surface ODE residuals
+        # below and the Neumann flux normalization further down).
+        d_bar_wall = d_bar_safe[mask_wall]
+        u_ref_wall = spatial_props['u_ref'].to(biochem_preds.device)[mask_wall]
+        u_ref_wall_safe = torch.clamp(u_ref_wall, min=1e-8)
+        conv_time = d_bar_wall / u_ref_wall_safe
+
+        _gx, _gy = self._grad_ops(data, global_shear)
+        dshear_dx = torch.sparse.mm(_gx, global_shear.unsqueeze(1)).squeeze(1)
+        dshear_dy = torch.sparse.mm(_gy, global_shear.unsqueeze(1)).squeeze(1)
+
+        # COMSOL's separation gate is `d(spf.sr,x) < sgt` -- a GLOBAL-AXIS derivative.
+        # This kernel used a STREAMWISE derivative instead, which is identically zero at
+        # every wall node: no-slip makes u = v = 0 there, so `u_dir`/`v_dir` are 0/1e-8.
+        # With sgt < 0 the soft step then evaluates sigmoid(sgt/T) ~ 0 everywhere and the
+        # entire separation branch -- 21% of COMSOL's deposition mechanism, and the
+        # branch that carries the FAST vessels -- has never contributed. Measured on
+        # comsol007: the repo's `dshear_ds` percentiles are exactly [0, 0, -0].
+        # `BIOCHEM_SEPARATION_GATE=stream` restores the old behaviour.
+        # See docs/PHASE3_RESULTS.md 1.
+        if BIOCHEM_SEPARATION_GATE.strip().lower() == "stream":
+            vel_mag = torch.sqrt(u ** 2 + v ** 2) + 1e-8
+            dshear_ds = ((u / vel_mag) * dshear_dx) + ((v / vel_mag) * dshear_dy)
+        else:
+            dshear_ds = dshear_dx
+        dshear_ds_wall = (dshear_ds / d_bar_safe)[mask_wall]
+        dshear_abs = torch.abs(dshear_ds_wall) + 1e-6
+
+        raw_availability = 1.0 - (M_tot / Minf)
+        if self._availability_negative_slope > 0.0:
+            availability = torch.where(
+                raw_availability >= 0.0,
+                raw_availability,
+                raw_availability * self._availability_negative_slope,
+            )
+            availability = torch.clamp(availability, max=1.0)
+        else:
+            availability = torch.clamp(raw_availability, min=1e-8, max=1.0)
+
+        # COMSOL Pathological Conditionals (Soft-Logic)
+        is_separation = self.kinetics._soft_step(dshear_ds_wall, self.cfg.sgt, self.kinetics.T_grad, reverse=True)
+        is_low_shear = self.kinetics._soft_step(shear_wall, self.cfg.lss, self.kinetics.T_low_shear, reverse=True)
+
+        omega_wall = self.kinetics.compute_omega(APR_wall, APS_wall, T_wall)
+        k_pa_wall = self.kinetics.compute_k_pa(omega_wall, shear_wall)
+
+        # Unit-consistent SI convention (validated against COMSOL exports). The COMSOL
+        # phase-2 model runs in CGS/uM; this kernel works in SI throughout: rp/ap
+        # [plt/m^3] (linear_biochem_preds), Mas/Minf [plt/m^2], dshear_ds_wall [1/(s*m)]
+        # (graph WLS / d_bar), k_* [m/s], L_char [m], sgt [1/(s*m)]. With these, the
+        # dimensionless Da == surface_damkohler reconstructs the exported J0_Mat to
+        # machine precision -- see src/core_physics/comsol_surface_deposition.py and
+        # src/tests/test_comsol_wall_deposition_calibration.py (docs/COMSOL_PHYSICS_VALIDATION.md).
+        from src.core_physics.comsol_surface_deposition import DepositionConstants
+
+        _dep_k = DepositionConstants.si(self.cfg)
+        k_rs = _dep_k.k_rs
+        k_as = _dep_k.k_as
+        k_aa = _dep_k.k_aa
+        L_char = _dep_k.L
+
+        # 5. Adhesion Rates (Matching COMSOL Inward Flux Rules)
+        pathological_RP_adhesion = is_separation * (
+                    L_char / self.cfg.gamma_m) * dshear_abs * availability * k_rs * RP_wall
+        low_shear_RP_adhesion = is_low_shear * availability * k_rs * RP_wall
+
+        pathological_AP_adhesion = is_separation * (
+                    L_char / self.cfg.gamma_m) * dshear_abs * availability * k_as * AP_wall
+        low_shear_AP_adhesion = is_low_shear * availability * k_as * AP_wall
+
+        pathological_Mas_adhesion = is_separation * (L_char / self.cfg.gamma_m) * dshear_abs * (
+                    Mas / Minf) * k_aa * AP_wall
+        low_shear_Mas_adhesion = is_low_shear * (Mas / Minf) * k_aa * AP_wall
+
+        _gate_module = getattr(data, "_adhesion_gate_module", None)
+        _cur_t_s = getattr(data, "_current_time_s", None)
+        _gate_node_feat = biochem_preds if _gate_module is not None else None
+        _raw_gate = compute_adhesion_gate(
+            data,
+            self.cfg,
+            device=biochem_preds.device,
+            dtype=biochem_preds.dtype,
+            current_time_s=_cur_t_s,
+            node_features=_gate_node_feat,
+            gate_module=_gate_module,
+        )
+        # Collapse per-node gate [N,1] or scalar to the surface subset.
+        if _raw_gate.dim() == 2:
+            is_active_phase = _raw_gate[mask_wall, :]  # [N_wall, 1]
+            _gate_scalar = _raw_gate                    # full domain for Neumann fluxes
+        else:
+            is_active_phase = _raw_gate
+            _gate_scalar = _raw_gate
+        R_M = (
+            pathological_RP_adhesion
+            + low_shear_RP_adhesion
+            + pathological_AP_adhesion
+            + low_shear_AP_adhesion
+        ) * is_active_phase
+        R_Mas = R_M
+        R_Mat = (R_M + pathological_Mas_adhesion + low_shear_Mas_adhesion) * is_active_phase
+        Da = float(self.cfg.surface_damkohler)
+        res_M = conv_time * ((dM_dt_nd / t_ref_global) - (Da * R_M)) / Minf
+        res_Mas = conv_time * ((dMas_dt_nd / t_ref_global) - (Da * R_Mas)) / Minf
+        res_Mat = conv_time * ((dMat_dt_nd / t_ref_global) - (Da * R_Mat)) / Minf
+        # For Neumann flux coupling: wall-subset scalar gate [N_wall] or broadcastable.
+        if _raw_gate.dim() == 2:
+            adhesion_gate = _raw_gate[mask_wall, 0]  # [N_wall]
+        else:
+            adhesion_gate = _raw_gate
+
+        loss_surface = (
+            F.huber_loss(res_M, torch.zeros_like(res_M), delta=self._biochem_huber_delta)
+            + F.huber_loss(res_Mas, torch.zeros_like(res_Mas), delta=self._biochem_huber_delta)
+            + F.huber_loss(res_Mat, torch.zeros_like(res_Mat), delta=self._biochem_huber_delta)
+        ) / 3.0
+
+        # --- 6. NEUMANN BOUNDARY FLUX COUPLING (Bulk-to-Wall) ---
+        J_in_RP = - (pathological_RP_adhesion + low_shear_RP_adhesion) * adhesion_gate
+        J_in_AP = - (
+            pathological_AP_adhesion
+            + low_shear_AP_adhesion
+            + pathological_Mas_adhesion
+            + low_shear_Mas_adhesion
+        ) * adhesion_gate
+        J_in_APR = self.cfg.lambda_adp * (pathological_RP_adhesion + low_shear_RP_adhesion) * adhesion_gate
+        J_in_APS = self.cfg.s_t * Mat
+        J_in_PT = - self.cfg.beta * self.cfg.phi_at * Mat * PT_wall
+        J_in_T = self.cfg.beta * self.cfg.phi_at * Mat * PT_wall
+
+        flux_targets = {
+            BulkSpecies.RP: J_in_RP,
+            BulkSpecies.AP: J_in_AP,
+            BulkSpecies.APR: J_in_APR,
+            BulkSpecies.APS: J_in_APS,
+            BulkSpecies.PT: J_in_PT,
+            BulkSpecies.T: J_in_T,
+        }
+
+        wall_normals = biochem_encoder_x(data)[mask_wall, BiochemNodeFeat.WALL_NORMAL]
+        nx = wall_normals[:, 0]
+        ny = wall_normals[:, 1]
+        # ``u_ref_wall`` is hoisted above near ``conv_time`` so it can be shared by
+        # the surface ODE residuals and this Neumann flux normalization.
+
+        a_RBC_m_wall = self.cfg.d_RBC / 2.0
+        tau_max = 2000.0
+        D_s_wall = 0.18 * (a_RBC_m_wall ** 2) * tau_max
+        keller_species = SPECIES_GROUPS["keller"]
+
+        loss_flux = biochem_preds.sum() * 0.0
+
+        for sp, J_in in flux_targets.items():
+            idx = sp.value
+            C_field = linear_biochem_preds[:, idx].unsqueeze(1)
+
+            # Sparse Matrix Gradient Calculation
+            _fgx, _fgy = self._grad_ops(data, C_field)
+            dC_dx = torch.sparse.mm(_fgx, C_field).squeeze(1) / d_bar_safe
+            dC_dy = torch.sparse.mm(_fgy, C_field).squeeze(1) / d_bar_safe
+
+            # Dot with outward normal vector (D * grad(C) dot n)
+            dC_dn_wall = dC_dx[mask_wall] * nx + dC_dy[mask_wall] * ny
+
+            # Diffusion Coefficient at Wall
+            base_D = self.D_coeff[sp.name]
+            D_eff = base_D + D_s_wall if sp in keller_species else base_D
+
+            predicted_flux = -as_tensor_like(D_eff, like=dC_dn_wall) * dC_dn_wall
+            # J_in is signed inward (negative for sinks), while predicted_flux is outward.
+            # Enforce outward + inward = 0 for consistent wall coupling.
+            flux_residual = predicted_flux + J_in
+
+            # Use convective flux for stable normalization
+            char_flux = scales[idx] * u_ref_wall
+            flux_residual_nd = flux_residual / (char_flux + 1e-8)
+
+            loss_flux += F.huber_loss(
+                flux_residual_nd, torch.zeros_like(flux_residual_nd), delta=self._biochem_huber_delta
+            )
+
+        return loss_surface, loss_flux
+
+    def _compute_shear_rate(self, u, v, spatial_props, data):
+        # Sparse Matrix Gradient Calculation
+        _gx, _gy = self._grad_ops(data, u)
+        du_dx = torch.sparse.mm(_gx, u.unsqueeze(1)).squeeze(1)
+        du_dy = torch.sparse.mm(_gy, u.unsqueeze(1)).squeeze(1)
+        dv_dx = torch.sparse.mm(_gx, v.unsqueeze(1)).squeeze(1)
+        dv_dy = torch.sparse.mm(_gy, v.unsqueeze(1)).squeeze(1)
+
+        # This is non-dimensional.
+        gamma_dot_nd = compute_shear_rate(du_dx, du_dy, dv_dx, dv_dy, eps=1e-6)
+        
+        if hasattr(data, "dshear_pred") and data.dshear_pred is not None:
+            gamma_dot_nd = gamma_dot_nd + data.dshear_pred.to(device=gamma_dot_nd.device)
+
+        # Redimensionalize to physical 1/s
+        u_ref = spatial_props['u_ref'].to(u.device)
+        d_bar = spatial_props['d_bar'].to(u.device)
+        d_bar_safe = torch.clamp(d_bar, min=1e-8)
+
+        return gamma_dot_nd * (u_ref / d_bar_safe)
+
+
+class SoftStepSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, threshold, temperature, sign):
+        thresh_t = torch.tensor(threshold, dtype=x.dtype, device=x.device)
+        temp_t = torch.tensor(temperature, dtype=x.dtype, device=x.device)
+        sign_t = torch.tensor(sign, dtype=x.dtype, device=x.device)
+
+        ctx.save_for_backward(x, thresh_t, temp_t, sign_t)
+        return (sign_t * (x - thresh_t) > 0).float()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Unpack the saved tensors
+        x, threshold, temperature, sign = ctx.saved_tensors
+
+        # Backward pass: Smooth sigmoid derivative to keep gradients flowing
+        sig = torch.sigmoid(sign * (x - threshold) / temperature)
+        grad_x = grad_output * sign * (1.0 / temperature) * sig * (1.0 - sig)
+
+        return grad_x, None, None, None

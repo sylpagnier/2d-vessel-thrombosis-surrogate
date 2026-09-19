@@ -1,0 +1,299 @@
+"""Regression checks for mesh-to-graph ``Data`` contracts (aligned with ``process_file`` assemblers)."""
+
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+import torch
+
+from src.config import BiochemConfig
+from src.data_gen.lib.mesh_to_graph import assemble_kinematics_graph_data
+from src.data_gen.lib.mesh_to_graph_biochem import (
+    assemble_biochem_steady_graph_data,
+    assemble_biochem_transient_graph_data,
+    default_biochem_bio_inlet_bc,
+)
+
+
+def _base_context(num_nodes: int = 3):
+    edge_index = torch.tensor([[0, 1, 2, 1], [1, 0, 1, 2]], dtype=torch.long)
+    return {
+        "edge_index": edge_index,
+        "edge_attr": torch.zeros((edge_index.shape[1], 3), dtype=torch.float32),
+        "mask_inlet": torch.tensor([True, False, False], dtype=torch.bool),
+        "mask_outlet": torch.tensor([False, False, True], dtype=torch.bool),
+        "mask_wall": torch.tensor([False, True, False], dtype=torch.bool),
+        "d_bar": 1.0,
+        "u_ref": 1.0,
+        "V": torch.zeros((edge_index.shape[1], 5), dtype=torch.float32),
+        "W": torch.ones(edge_index.shape[1], dtype=torch.float32),
+        "M_inv": torch.eye(5, dtype=torch.float32).unsqueeze(0).repeat(num_nodes, 1, 1),
+        "outlet_normal": torch.zeros((num_nodes, 2), dtype=torch.float32),
+        "num_nodes": num_nodes,
+    }
+
+
+def _diag_sparse_grad(n: int) -> torch.Tensor:
+    """Minimal valid coalesced sparse N×N operator (structure-only for regression tests)."""
+    idx = torch.arange(n, dtype=torch.long)
+    ii = torch.stack([idx, idx], dim=0)
+    return torch.sparse_coo_tensor(ii, torch.ones(n, dtype=torch.float32), (n, n)).coalesce()
+
+
+def test_kinematics_saved_graph_includes_wls_and_sparse_gradients_without_laplacian(tmp_path):
+    """Kinematics/2 ``*.pt`` graphs carry the WLS blocks; ``G_x``/``G_y`` are NOT serialised.
+
+    RGP_DEQ_REPAIR_PLAN.md B25.  The two sparse ``(N, N)`` gradient operators are 98.4% of a
+    pack (64.6 MB each on a 4k-node vessel) and nothing reads them: `graph_gradient_operators`
+    defaults to MLS and rebuilds from positions + connectivity, touching the stored ones only
+    under ``BIOCHEM_GRAD_OPERATOR=legacy``.  Storing them made a 250-vessel cohort a 33 GB
+    transfer instead of 500 MB.  ``KINEMATICS_STORE_G_OPERATORS=1`` puts them back.
+    """
+    ctx = _base_context(num_nodes=3)
+    priors = {
+        "u_prior": torch.zeros(3, dtype=torch.float32),
+        "mu_prior": torch.ones(3, dtype=torch.float32),
+    }
+    x_tensor = torch.zeros((3, 18), dtype=torch.float32)
+    y_labels = torch.zeros((3, 5), dtype=torch.float32)
+    gx = _diag_sparse_grad(3)
+    gy = _diag_sparse_grad(3)
+
+    _kwargs = dict(
+        x_tensor=x_tensor,
+        edge_index=ctx["edge_index"],
+        edge_attr=ctx["edge_attr"],
+        y_labels=y_labels,
+        mask_inlet=ctx["mask_inlet"],
+        mask_outlet=ctx["mask_outlet"],
+        mask_wall=ctx["mask_wall"],
+        is_anchor=False,
+        d_bar=float(ctx["d_bar"]),
+        u_ref=float(ctx["u_ref"]),
+        u_prior=priors["u_prior"],
+        mu_prior=priors["mu_prior"],
+        V=ctx["V"],
+        W=ctx["W"],
+        M_inv=ctx["M_inv"],
+        G_x=gx,
+        G_y=gy,
+    )
+    data = assemble_kinematics_graph_data(**_kwargs)
+
+    assert data.V.shape == ctx["V"].shape
+    assert data.W.shape == ctx["W"].shape
+    assert data.M_inv.shape == ctx["M_inv"].shape
+    assert not hasattr(data, "G_x") and not hasattr(data, "G_y"), (
+        "the dead sparse operators are being serialised again"
+    )
+    assert not hasattr(data, "Laplacian")
+
+    # ... and the opt-in still restores them, for legacy reproduction.
+    import os as _os
+
+    _prev = _os.environ.get("KINEMATICS_STORE_G_OPERATORS")
+    _os.environ["KINEMATICS_STORE_G_OPERATORS"] = "1"
+    try:
+        kept = assemble_kinematics_graph_data(**_kwargs)
+    finally:
+        if _prev is None:
+            _os.environ.pop("KINEMATICS_STORE_G_OPERATORS", None)
+        else:
+            _os.environ["KINEMATICS_STORE_G_OPERATORS"] = _prev
+    assert kept.G_x.is_sparse and kept.G_y.is_sparse
+    assert kept.G_x.shape == (3, 3) and kept.G_y.shape == (3, 3)
+
+
+def test_biochem_non_anchor_transient_graph_matches_process_file_shape(tmp_path):
+    """Biochem non-anchor: transient ``y``, dual-x (18ch kine + 15ch biochem)."""
+    ctx = _base_context(num_nodes=3)
+    bio_cfg = BiochemConfig(phase="biochem")
+    num_times = bio_cfg.num_time_steps
+    tvec = torch.linspace(0.0, bio_cfg.t_final, num_times, dtype=torch.float32)
+    y_series = torch.zeros((num_times, 3, 16), dtype=torch.float32)
+    gx = _diag_sparse_grad(3)
+    gy = _diag_sparse_grad(3)
+    lap = _diag_sparse_grad(3)
+    u_prior = torch.tensor([1.0, 0.2, 0.0], dtype=torch.float32)
+    v_prior = torch.tensor([0.0, 0.1, 0.0], dtype=torch.float32)
+    mu_prior = torch.ones(3, dtype=torch.float32)
+    uv_inlet_bc = torch.cat([u_prior.view(-1, 1), v_prior.view(-1, 1)], dim=1)
+    x_kine = torch.zeros((3, 18), dtype=torch.float32)
+    x_biochem = torch.zeros((3, 15), dtype=torch.float32)
+    bio_inlet_bc = default_biochem_bio_inlet_bc(3)
+
+    data = assemble_biochem_transient_graph_data(
+        x_tensor=x_kine,
+        x_biochem=x_biochem,
+        y_tensor_series=y_series,
+        eval_times_tensor=tvec,
+        edge_index=ctx["edge_index"],
+        edge_attr=ctx["edge_attr"],
+        mask_inlet=ctx["mask_inlet"],
+        mask_outlet=ctx["mask_outlet"],
+        mask_wall=ctx["mask_wall"],
+        d_bar=float(ctx["d_bar"]),
+        u_ref=float(ctx["u_ref"]),
+        re_target=100.0,
+        G_x=gx,
+        G_y=gy,
+        Laplacian=lap,
+        V=ctx["V"],
+        W=ctx["W"],
+        M_inv=ctx["M_inv"],
+        uv_inlet_bc=uv_inlet_bc,
+        mu_prior=mu_prior,
+        bio_inlet_bc=bio_inlet_bc,
+        outlet_normal=ctx["outlet_normal"],
+    )
+
+    assert hasattr(data, "t")
+    assert data.y.dim() == 3
+    assert data.y.shape == (num_times, 3, 16)
+    assert data.t.numel() == num_times
+    assert data.y.shape[0] == data.t.shape[0]
+    assert data.x.shape[1] == 18
+    assert data.x_biochem.shape[1] == 15
+    assert data.x_schema == "kine_x_v1_18ch"
+    assert data.x_biochem_schema == "biochem_x_v1_15ch"
+    assert data.u_inlet_bc.shape[1] == 2
+    assert data.bio_inlet_bc.shape == (3, 9)
+    assert data.G_x.is_sparse and data.G_y.is_sparse and data.Laplacian.is_sparse
+    assert int(data.is_anchor.sum().item()) == 0
+
+
+def test_biochem_anchor_steady_graph_matches_steady_label_layout(tmp_path):
+    """Biochem anchor (COMSOL-labeled): steady ``[N,5]`` kinematics + scalar anchor flag."""
+    ctx = _base_context(num_nodes=3)
+    gx = _diag_sparse_grad(3)
+    gy = _diag_sparse_grad(3)
+    lap = _diag_sparse_grad(3)
+    u_prior = torch.zeros(3, dtype=torch.float32)
+    mu_prior = torch.ones(3, dtype=torch.float32)
+    x_tensor = torch.zeros((3, 15), dtype=torch.float32)
+    y_labels = torch.zeros((3, 5), dtype=torch.float32)
+
+    data = assemble_biochem_steady_graph_data(
+        x_tensor=x_tensor,
+        y_labels=y_labels,
+        edge_index=ctx["edge_index"],
+        edge_attr=ctx["edge_attr"],
+        mask_inlet=ctx["mask_inlet"],
+        mask_outlet=ctx["mask_outlet"],
+        mask_wall=ctx["mask_wall"],
+        is_anchor=True,
+        d_bar=float(ctx["d_bar"]),
+        u_ref=float(ctx["u_ref"]),
+        u_prior=u_prior,
+        mu_prior=mu_prior,
+        outlet_normal=ctx["outlet_normal"],
+        V=ctx["V"],
+        W=ctx["W"],
+        M_inv=ctx["M_inv"],
+        G_x=gx,
+        G_y=gy,
+        Laplacian=lap,
+    )
+
+    assert data.y.shape == (3, 5)
+    assert data.is_anchor.shape == (1,)
+    assert data.is_anchor.item() is True
+    assert data.u_inlet_bc.shape[1] == 1
+    assert data.G_x.is_sparse and data.Laplacian.is_sparse
+
+
+def test_smooth_width_nd_on_edges_constant_unchanged():
+    from src.data_gen.lib.graph_velocity_priors import smooth_width_nd_on_edges
+
+    edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
+    w = torch.full((2, 1), 3.0, dtype=torch.float32)
+    out = smooth_width_nd_on_edges(w, edge_index, num_nodes=2, alpha=0.45, iters=3)
+    assert torch.allclose(out, w)
+
+
+def test_smooth_width_nd_on_edges_damps_spike():
+    from src.data_gen.lib.graph_velocity_priors import smooth_width_nd_on_edges
+
+    edge_index = torch.tensor([[0, 1, 1, 2], [1, 0, 2, 1]], dtype=torch.long)
+    w = torch.tensor([[1.0], [10.0], [1.0]], dtype=torch.float32)
+    out = smooth_width_nd_on_edges(w, edge_index, num_nodes=3, alpha=0.5, iters=5)
+    assert out[1, 0] < w[1, 0]
+    assert out[0, 0] > w[0, 0]
+
+
+def test_gmsh_line_boundary_masks_raises_without_inlet():
+    import numpy as np
+    import pytest
+
+    from src.data_gen.lib.mesh_wls import gmsh_line_boundary_masks
+
+    class M:
+        cells_dict = {"line": np.array([[0, 1], [1, 2]], dtype=np.int64)}
+        cell_data_dict = {"gmsh:physical": {"line": np.array([2, 3], dtype=np.int32)}}
+
+    m = M()
+    tags = {"Inlet": 1, "Outlet_1": 2, "Walls": 3}
+    with pytest.raises(ValueError, match="no inlet nodes"):
+        gmsh_line_boundary_masks(m, num_nodes=3, tags=tags)
+
+
+def test_gmsh_line_boundary_masks_raises_without_wall():
+    import numpy as np
+    import pytest
+
+    from src.data_gen.lib.mesh_wls import gmsh_line_boundary_masks
+
+    class M:
+        cells_dict = {"line": np.array([[0, 1], [1, 2]], dtype=np.int64)}
+        cell_data_dict = {"gmsh:physical": {"line": np.array([1, 2], dtype=np.int32)}}
+
+    m = M()
+    tags = {"Inlet": 1, "Outlet_1": 2, "Walls": 99}
+    with pytest.raises(ValueError, match="no wall nodes"):
+        gmsh_line_boundary_masks(m, num_nodes=3, tags=tags)
+
+
+@pytest.mark.skipif(importlib.util.find_spec("gmsh") is None, reason="gmsh not installed")
+def test_process_mesh_returns_kinematics_contract(tmp_path):
+    """``process_mesh`` on a Gmsh-built vessel matches assembler width + sparse grads."""
+    import json
+
+    import meshio
+    import numpy as np
+
+    from src.config import NodeFeat, VesselConfig
+    from src.data_gen.lib.mesh_to_graph import MeshToGraph
+    from src.data_gen.lib.vessel_generator import build_vessel_mesh, make_vessel_params
+
+    cfg = VesselConfig(phase="kinematics")
+    gen_cfg = {
+        "num_ctrl_pts": cfg.num_ctrl_pts,
+        "base_length": cfg.base_length,
+        "mesh_lc": cfg.mesh_lc * 2.0,
+        "mesh_size_factor": cfg.mesh_size_factor,
+        "width_min": cfg.width_min,
+        "width_max": cfg.width_max,
+        "stenosis_factor_min": cfg.stenosis_factor_min,
+        "stenosis_factor_max": cfg.stenosis_factor_max,
+        "min_lumen_width_fraction": cfg.min_lumen_width_fraction,
+        "aneurysm_factor_min": cfg.aneurysm_factor_min,
+        "aneurysm_factor_max": cfg.aneurysm_factor_max,
+        "TAGS": dict(cfg.TAGS),
+        "unit": "m",
+    }
+    params = make_vessel_params(idx=0, level=0, cfg=cfg, rng=np.random.default_rng(3))
+    idx, ok, err = build_vessel_mesh(params, gen_cfg, tmp_path)
+    assert ok, err
+    mesh = meshio.read(tmp_path / f"vessel_{idx}.msh")
+    meta = json.loads((tmp_path / f"vessel_{idx}.json").read_text(encoding="utf-8"))
+    builder = MeshToGraph(phase="kinematics", rheology="carreau", proc_dir=tmp_path / "out")
+    data = builder.process_mesh(mesh, meta, stem="vessel_0")
+    assert data is not None
+    assert data.x.shape[1] == NodeFeat.WIDTH_D2.stop
+    # B25: G_x/G_y are no longer serialised (see the contract test above).
+    assert not hasattr(data, "G_x")
+    # B24: node_type must be a real one-hot, not the old `torch.zeros((N, 4))` placeholder.
+    assert float(data.x[:, 6:10].abs().max()) == 1.0, "node_type is dead"
+    assert torch.allclose(data.x[:, 6:10].sum(dim=1), torch.ones(data.x.shape[0]))
+    assert hasattr(data, "mask_inlet")

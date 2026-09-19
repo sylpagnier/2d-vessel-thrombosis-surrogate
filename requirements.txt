@@ -1,0 +1,20 @@
+numpy
+scipy
+pandas
+matplotlib
+tqdm
+pytest
+
+# >=2.6: earlier versions let a crafted file run code even with weights_only=True
+# (CVE-2025-32434), which src/utils/safe_load.py relies on for customer files.
+torch>=2.6
+torch-geometric
+
+meshio
+gmsh
+mph
+scikit-fem
+# outputs/clot_ml/locked/clot_ml_final/temporal.pkl unpickles sklearn estimators, and
+# scripts/eval_strict_temporal.py imports it. Pinned to the version the pickle was written
+# under; see requirements-customer.txt.
+scikit-learn==1.8.0

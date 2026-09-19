@@ -1,0 +1,12 @@
+{
+  "id": "06_stenosis_location",
+  "title": "Stenosis axial location vs research parameters",
+  "axis": "path_loc_frac",
+  "description": "Fixed 50% diameter stenosis; move pathology peak proximal / mid / distal.",
+  "control": {"geometry_preset": "stenosis_mid"},
+  "arms": [
+    {"name": "proximal", "axis_value": 0.2, "geometry": {"path_loc_frac": 0.2}},
+    {"name": "mid", "axis_value": 0.5, "geometry": {"path_loc_frac": 0.5}},
+    {"name": "distal", "axis_value": 0.8, "geometry": {"path_loc_frac": 0.8}}
+  ]
+}

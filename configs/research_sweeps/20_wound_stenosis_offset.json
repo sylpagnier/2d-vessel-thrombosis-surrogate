@@ -1,0 +1,12 @@
+{
+  "id": "20_wound_stenosis_offset",
+  "title": "Wound in stenosis vs wound away from stenosis",
+  "axis": "wound_stenosis_alignment",
+  "description": "Fixed 50% stenosis at mid; wound aligned to stenosis vs offset proximal/distal.",
+  "control": {"geometry_preset": "stenosis_mid_wound_standard"},
+  "arms": [
+    {"name": "wound_in_stenosis", "axis_value": 0.0, "geometry": {"wound_align_stenosis": true, "wound_position_frac": 0.5}, "labels": {"alignment": "in_stenosis"}},
+    {"name": "wound_proximal", "axis_value": 1.0, "geometry": {"wound_align_stenosis": false, "wound_position_frac": 0.2}, "labels": {"alignment": "proximal"}},
+    {"name": "wound_distal", "axis_value": 2.0, "geometry": {"wound_align_stenosis": false, "wound_position_frac": 0.8}, "labels": {"alignment": "distal"}}
+  ]
+}

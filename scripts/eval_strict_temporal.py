@@ -1,0 +1,1094 @@
+"""Strictly-nested evaluation of the time-conditioned head: mean-over-time AND final time.
+
+`scripts/train_time_conditioned.py` produced the numbers `docs/PHASE9_ML.md` 13.9 reports
+and that `clot_gnn_v3` ships.  It has three selection leaks, all removable without
+retraining the GNN:
+
+  1. the committed SET uses hard-coded cuts `score >= 0.73` / `>= 0.92`, chosen on the whole
+     pool;
+  2. the per-domain time thresholds are tuned on the fold's own training vessels using
+     **that fold's model**, whose scores on those vessels are in-sample;
+  3. the head itself is fitted on the same in-sample scores it is later applied to
+     out-of-fold, so its `score` feature has a different distribution at train and test
+     time -- a subtle one, and it always flatters training.
+
+Here every one of the four readout scalars and the head are selected inside a properly
+nested loop:
+
+    outer fold k          held-out vessels, never touched by anything below
+      selection set       the other 14-15 vessels, each carrying ITS OWN out-of-fold score
+      inner 3-fold        head fitted on inner-train, predicted on inner-val
+      thresholds          tuned on those inner out-of-fold predictions
+      final head          refitted on the whole selection set, applied to fold k
+
+So the `score` feature is out-of-fold at train time as well as at test time, and no vessel's
+reported number depends on a quantity fitted while it was visible.
+
+Two metrics are reported, because they answer different questions and the project has only
+ever quoted the first:
+
+    mean-over-time   the average severity score over the 11-point time grid, GT-empty
+                     timesteps skipped (`SeverityScorer` returns NaN there)
+    FINAL            the score at the last timestep -- the fully-formed clot, which is what
+                     a reader of the prediction actually acts on
+
+    python scripts/eval_strict_temporal.py --tags cv5a,cv5b,cv5c --cache gt
+"""
+from __future__ import annotations
+
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from src.clot_ml.temporal import ANCHOR_LEVEL, ODE_TIMING, OWNER_PRED, lag_features, node_features, ode_wall_series, offwall_by_learned_lag, series_masks, time_block  # noqa: E402
+from src.core_physics.flow_sources import FLOW_SOURCES
+from src.utils.paths import anchor_packs_dir, get_project_root
+
+REPO = get_project_root()
+
+from sklearn.ensemble import HistGradientBoostingClassifier  # noqa: E402
+
+from src.clot_ml.data import attach_physics, load_cache  # noqa: E402
+from src.clot_ml.geometry_splits import classes_for, is_priority  # noqa: E402
+from src.core_physics.wall_cohort_splits import CLOT_FREE, SEALED  # noqa: E402
+from src.clot_ml.data import off_domain, wall_domain  # noqa: E402
+
+# EVAL DOMAINS (roadmap item A3, `src/clot_ml/data.eval_domains`): off-wall is TRUE LUMEN,
+# `~solid`, not `~wall` -- on a wound pack the wound's nodes are 100% GT clot and belong to
+# neither global domain.  Every SCORING domain in this file goes through `off_domain`.
+#
+# A few mask-BUILDING helpers below still take a bare `wall` array as a parameter and use
+# `~wall` (`_lag_masks`, `_owner_lag_masks`).  They are correct as written because of two
+# facts, both pinned by `src/tests/test_eval_domains.py`: no cohort pack carries a wound, and
+# this script excludes the clot-free and wound packs outright.  If a wound ever enters the
+# cohort, that test fires and these are the call sites to fix.
+from src.clot_ml.severity_metric import DEFAULT, SeverityScorer  # noqa: E402
+from src.clot_ml.mirror_branch import eval_gt  # noqa: E402
+from src.clot_ml.temporal import ode_trajectory  # noqa: E402
+
+#: Close the flow loop when building the ODE clock features (src/core_physics/gelation_wake).
+#: OFF reproduces every shipped number bit-for-bit.  A head fitted with this ON is a NEW
+#: artifact generation -- the clock it learns against is a different object -- so it must be
+#: promoted under its own name and never mixed with wake-free members.
+#: Set by `--wake` / `--stall` on the promote/eval entry points; OFF is the shipped path.
+USE_WAKE_ODE: bool = False
+USE_STALL_ODE: bool = False
+from src.config import BiochemConfig, PhysicsConfig  # noqa: E402
+from src.core_physics.t0_mu_physics import gt_clot_phi_at_time  # noqa: E402
+
+
+PACKS = anchor_packs_dir()
+SET_GRID = np.array([0.30, 0.45, 0.60, 0.70, 0.80, 0.88, 0.94])
+TIME_GRID = np.array([0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95])
+HEAD = dict(max_iter=300, max_depth=5, learning_rate=0.07, l2_regularization=1.0,
+            class_weight="balanced", random_state=0)
+
+
+TT = REPO / "outputs/temporal_transport"
+
+#: t=0 flow source for the ODE clock and the per-time transport channels.  Set by the
+#: promotion / evaluation entry point BEFORE `precompute`, the same way `USE_WAKE_ODE` is:
+#: the head is fitted against one clock and deploy must replay that same clock.
+FLOW: str = "gt"
+
+
+def _tt_dir() -> Path:
+    from scripts.build_temporal_transport import OUT_FOR_FLOW
+    return OUT_FOR_FLOW.get(FLOW, TT)
+
+
+def load_temporal_transport(anchor, times, crit):
+    """Per-(node, time) physics channels; ``None`` when the cache has not been built.
+
+    ``scripts/build_temporal_transport.py`` writes these.  They are the only time-varying
+    inputs the head gets besides the query time and the ODE's fired/not-fired bit, and the
+    only time-varying input it has ever had OFF the wall.
+    """
+    p = _tt_dir() / f"{anchor}.npz"
+    if not p.exists():
+        return None
+    z = np.load(p)
+    if list(z["times"]) != list(times):
+        raise ValueError("%s: temporal_transport time grid does not match" % anchor)
+    return {k: np.log1p(np.maximum(z[k], 0.0) / crit).astype(np.float32)
+            for k in ("mat_adv_t", "mat_owner_t", "mat_self_t")}
+
+
+def precompute(pool, cache, n_times):
+    bio, phys = BiochemConfig(phase="biochem"), PhysicsConfig(phase="biochem")
+    crit = float(bio.viscosity_mat_crit)
+    V = {}
+    for a in pool:
+        S = cache[a]
+        d = torch.load(PACKS / f"{a}.pt", map_location="cpu", weights_only=False)
+        if FLOW == "fem":
+            from src.clot_ml.v0 import solve_fem_into_pack
+            if not str(getattr(d, "graph_stem", "") or ""):
+                d.graph_stem = a
+            solve_fem_into_pack(d)
+        T = int(d.y.shape[0])
+        times = [int(round(x)) for x in np.linspace(0, T - 1, n_times)]
+        gt = {ti: (gt_clot_phi_at_time(d, ti, phys, device=torch.device("cpu"))
+                   .reshape(-1).numpy() > 0.5) for ti in times}
+        go = np.full(len(S["wall"]), T, dtype=int)          # GT onset index
+        for ti in reversed(times):
+            go[gt[ti]] = ti
+        traj, t = ode_trajectory(d, bio, flow=FLOW, wake=USE_WAKE_ODE, stall=USE_STALL_ODE)
+        # The owner's crossing of c*crit, for several c.  Off-wall commits when
+        # att*Mat_owner >= crit, i.e. when the owner reaches crit/att -- PHASE9 12.2 found
+        # crit/att unreachable as a hard RULE because the ODE's Mat is biased low, but as
+        # the ANCHOR of a learned residual an unreachable level is just a shifted clock, and
+        # c=1 (the plain ODE crossing) is in the grid so this can only move if it pays.
+        oon_c = {}
+        for c in ANCHOR_C:
+            hc = traj >= c * crit
+            oon_c[c] = np.where(hc.any(0), hc.argmax(0), traj.shape[0])
+        r0 = traj[1] / max(t[1] - t[0], 1e-9)               # t=0 deposition rate
+        hot = traj >= crit
+        oon = np.where(hot.any(0), hot.argmax(0), T)        # ODE crossing index
+        tt = load_temporal_transport(a, times, crit)
+        # fraction of the ODE's eventually-igniting nodes that have fired by each grid time
+        fire = oon[oon < T]
+        clock = [np.array([float((fire <= t_).mean()) if fire.size else 0.0
+                           for t_ in times], dtype=np.float32)]
+        if tt is not None:
+            # same idea from the transport side: fraction of nodes the advected field has
+            # taken past `crit` (log1p(Mat/crit) >= log 2) by each grid time
+            hot_t = (tt["mat_adv_t"] >= np.log(2.0))
+            clock.append(hot_t.mean(axis=1).astype(np.float32))
+        # grid step at which the ADVECTED field crosses crit at this node -- the physics'
+        # own direct prediction of when an off-wall node clots, with no owner indirection.
+        if tt is not None:
+            hot_a = tt["mat_adv_t"] >= float(np.log(2.0))
+            t_adv = np.where(hot_a.any(0), hot_a.argmax(0), len(times)).astype(float)
+        else:
+            t_adv = np.full(len(S["wall"]), float(len(times)))
+        V[a] = dict(S=S, T=T, times=times, gt=gt, go=go, oon=oon, r0=r0, clock=clock,
+                    tt=tt, t_adv=t_adv, oon_c=oon_c,
+                    # the SCORER reads the evaluation label; `gt` above stays COMSOL's, it trains the head
+                    scorer={ti: SeverityScorer(S["edge_index"], eval_gt(a, gt[ti], S["pos"]),
+                                               len(S["wall"]),
+                                               DEFAULT) for ti in times})
+        print("   [prep] %s T=%d" % (a, T), flush=True)
+    return V
+
+
+#: filled in by the two-stage pass: per anchor, the stage-1 predicted commit fraction of
+#: each node's OWNER wall node at each grid time.  Empty -> single-stage behaviour.
+#: one-element box so the apply path can see the chosen lag anchor
+LAG_ANCHOR = ["pred"]
+#: WALL-clock source, added 2026-09-09.  `LAG_ANCHOR` does NOT control this and never did:
+#: every `ode_wall_series` call in this evaluator sits in off-wall lag scaffolding
+#: (`_lag_quality`, `tune_owner_cut`), where the wall series only dates the OWNER.  The wall
+#: score itself has always come from thresholding the LEARNED temporal head, while the shipped
+#: artifact dates wall commits with `readout.lag_anchor: "ode"` -- a different mechanism that
+#: consequently had no switch to ablate (docs/PAPER.md 5.3).  This is that switch.
+#:
+#: "head"  -- the evaluator's historical behaviour, and it is NOT one mechanism but two,
+#:            selected by the tuner: when it picks a `resid` family the wall clock is
+#:            `wall_by_residual` = the ODE's own onset `oon` PLUS a learned integer offset, so
+#:            the ODE is already the anchor; otherwise it is `series_masks`, a pure threshold on
+#:            the learned temporal head with no ODE anywhere.
+#: "ode"   -- date each wall node by its own integrated `Mat` crossing and nothing else. This
+#:            FORCES the pure-physics clock and deliberately overrides `wall_resid`, because a
+#:            residual on top of the ODE is not the deploy mechanism -- it is a learned
+#:            correction to it, and leaving it in place made this switch a no-op on exactly the
+#:            folds where the tuner selected that family.
+#:
+#: TWO DOCS DISAGREED ABOUT THIS AND BOTH WERE HALF RIGHT (resolved 2026-09-09).
+#: `docs/PAPER.md` 5.3 said `predict_masks` thresholds the learned head -- true only when
+#: `wall_resid is None`.  `verify_claims.temporal_ol` said the ODE is the wall clock in both
+#: owner-lag arms -- true only when it is not.  Which one holds is a per-fold tuner outcome, so
+#: neither sentence was safe as written.
+#:
+#: A pair of runs differing only in this value is the deploy-path ODE ablation.  Read the
+#: no-op guard in `score_vessel` before believing any null it produces.
+WALL_CLOCK = ["head"]
+#: owner-trajectory levels (multiples of crit) offered as the lag anchor; 1.0 = plain ODE
+ANCHOR_C = [1.0, 2.0, 4.0, 8.0]
+
+
+def fit_head(V, anchors, oofs, set_th, seeds=1):
+    """Fit P(clot at t) on the (node, time) table of ``anchors``.
+
+    ``seeds > 1`` returns a list of heads whose probabilities are averaged.  Seed averaging
+    is the one variance-reduction lever that has reliably paid on this cohort at every level
+    it has been tried (`docs/PHASE9_ML.md` 4 for the GNN); the temporal head was the last
+    place still fitting a single model.
+    """
+    # A MISSING AUXILIARY CACHE MUST NOT SURFACE AS A SHAPE ERROR.  `time_block` adds three
+    # columns only when `v["tt"]` is present, so one vessel without an
+    # `outputs/temporal_transport/*.npz` silently produces a 74-wide table next to 77-wide
+    # ones, and `np.concatenate` then fails with a bare dimension mismatch that names neither
+    # the vessel nor the cache.  That is exactly what happened when the 2026-08-22 cohort
+    # released four vessels the transport cache had never been built for.
+    have = [a for a in anchors if V[a]["tt"] is not None]
+    if have and len(have) != len(anchors):
+        raise SystemExit(
+            "temporal transport cache is incomplete: %d of %d vessels have it; missing %s. "
+            "Run `python scripts/build_temporal_transport.py --force` -- it must cover every "
+            "vessel in the pool, and it is stale whenever the packs or the feature cache "
+            "change." % (len(have), len(anchors), sorted(set(anchors) - set(have))))
+    Xs, ys = [], []
+    for a in anchors:
+        v, S = V[a], V[a]["S"]
+        Xn = node_features(V, a, oofs)
+        cand = candidate_mask(S, arm_scores(oofs, a), set_th, a) | (v["go"] < v["T"])
+        Xc = Xn[cand]
+        for j, ti in enumerate(v["times"]):
+            Xs.append(np.concatenate([Xc, time_block(V, a, j, cand)], axis=1))
+            ys.append(v["gt"][ti][cand])
+    X, y = np.concatenate(Xs), np.concatenate(ys)
+    out = []
+    for s in range(max(int(seeds), 1)):
+        cfg = dict(HEAD)
+        cfg["random_state"] = s
+        out.append(HistGradientBoostingClassifier(**cfg).fit(X, y))
+    return out
+
+
+def arm_scores(oofs, a):
+    """``{arm: score array}`` for one anchor -- candidate_mask works per vessel."""
+    return {arm: oofs[arm][a] for arm in oofs}
+
+
+#: optional externally-supplied committed set, keyed by anchor.  When present it REPLACES
+#: the family/threshold machinery below -- the set then comes from whichever readout won
+#: the per-domain in-fold selection in `scripts/eval_expected_score_readout.py`, including
+#: the expected-score readout, which this script cannot express as a family.
+EXTERNAL_SET: dict = {}
+
+
+def candidate_mask(S, sc_by_arm, set_th, anchor=None):
+    if anchor is not None and anchor in EXTERNAL_SET:
+        return EXTERNAL_SET[anchor]
+    return _candidate_mask_family(S, sc_by_arm, set_th)
+
+
+def _candidate_mask_family(S, sc_by_arm, set_th):
+    """The committed SET -- which nodes ever clot.  ``set_th`` is ``{domain: (family, th)}``.
+
+    The set is a statement about the FINAL mask, so it is tuned against final-time GT by
+    the same code `scripts/eval_strict.py` uses, and both readout families are offered.
+
+    The family is chosen **per domain**, which is legitimate because the metric is itself
+    domain-restricted (`docs/PHASE9_ML.md` 0 already reports a domain-specialised ensemble)
+    and necessary because the two domains disagree about it: measured strictly-nested, the
+    wall prefers a plain cut (FIN 0.9167 against 0.9046) and off-wall prefers the
+    physics-conditioned one (FIN 0.7075 against 0.6431).  On `comsol032` a plain cut
+    commits **nothing** off-wall (0.000 against 0.432) because its score is uniformly low
+    there and the physics mask is the only thing separating its 120 off-wall nodes.
+    """
+    from scripts.eval_strict import FAMILIES
+    w = S["wall"]
+    aw, fw, tw = set_th["wall"]
+    ao, fo, to = set_th["off"]
+    return (w & FAMILIES[fw][1](S, sc_by_arm[aw], tw)) | (~w & FAMILIES[fo][1](S, sc_by_arm[ao], to))
+
+
+def predict_series(V, a, m, oofs):
+    """Monotone-in-time probability field ``[n_times, N]``.
+
+    The cumulative maximum is the production law's own property: `J0_Mat >= 0` and there is
+    no sink (PHASE7 12.1 measured wall `Mat` to be the exact time-integral of its own nodal
+    derivative, rank 0.999), so clot does not un-clot.  A per-time classifier does not get
+    that for free the way the onset formulation did.
+    """
+    v = V[a]
+    ms = m if isinstance(m, list) else [m]
+    Xn = node_features(V, a, oofs)
+    P = np.zeros((len(v["times"]), Xn.shape[0]), dtype=np.float32)
+    for j in range(len(v["times"])):
+        row = np.concatenate([Xn, time_block(V, a, j)], axis=1)
+        P[j] = np.mean([mm.predict_proba(row)[:, 1] for mm in ms], axis=0)
+    return np.maximum.accumulate(P, axis=0)
+
+
+LAG_GRID = list(range(0, 9))
+#: predicted off-wall burden (committed nodes) above which the LEARNED lag is trusted.
+#: 0 = always, a large value = never; both ends are in the grid so the in-fold tuner can
+#: fall back to either pure rule.
+BURDEN_GRID = [0, 8, 15, 25, 40, 60, 90, 10 ** 9]
+#: committed WALL nodes above which the learned ODE-onset residual is trusted.  `None` is
+#: "never" -- i.e. keep the probability rule, which is the arm this must beat.
+WBURDEN_GRID = [None, 0, 40, 80, 150, 300]
+
+
+def fit_lag_model(V, anchors, oofs, seeds=3, anchor="pred"):
+    """Regress the per-node lag behind the owner, on off-wall GT nodes.
+
+    `scripts/diag_offwall_structure.py` measures the lag distribution (median +4 of 11 grid
+    steps, p25 +3, p75 +6, 88% >= 2) and a single cohort constant loses to the probability
+    rule because of that spread.  But the lag is a PER-NODE quantity with **584 labelled
+    examples** across the cohort -- two orders of magnitude more training signal than the 19
+    vessel-level samples every other schedule idea in this project has had to work with.
+    """
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    Xs, ys = [], []
+    for a in anchors:
+        v, S = V[a], V[a]["S"]
+        off = off_domain(S) & (v["go"] < v["T"])
+        if not off.any():
+            continue
+        # the GT lag in GRID steps: where each node sits relative to its owner
+        gi = np.searchsorted(np.asarray(v["times"]), v["go"], side="left")
+        lag = (gi - gi[S["owner"]])[off]
+        Xs.append(lag_features(V, a, oofs)[off])
+        ys.append(lag)
+    if not Xs:
+        return None
+    X, y = np.concatenate(Xs), np.concatenate(ys)
+    ms = [HistGradientBoostingRegressor(max_iter=200, max_depth=4, learning_rate=0.06,
+                                        l2_regularization=1.0,
+                                        random_state=s).fit(X, y)
+          for s in range(max(int(seeds), 1))]
+    return _LagEnsemble(ms)
+
+
+def fit_wall_residual(V, anchors, oofs, seeds=3):
+    """Regress GT wall onset MINUS the ODE's onset, in grid steps, on committed wall nodes.
+
+    The off-wall gain came from a residual on a physics anchor (the owner's predicted onset)
+    rather than from predicting an absolute time; this is the same construction on the wall,
+    where the anchor is the zero-parameter ODE's own crossing.  `PHASE9` 13.5 measured that
+    the ODE's contribution is its **per-vessel time calibration**, not its ordering, which is
+    exactly what a residual keeps and an absolute prediction throws away.
+    """
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    Xs, ys = [], []
+    for a in anchors:
+        v, S = V[a], V[a]["S"]
+        on = S["wall"] & (v["go"] < v["T"])
+        if not on.any():
+            continue
+        g = np.asarray(v["times"])
+        gi = np.searchsorted(g, v["go"], side="left")
+        oi = np.searchsorted(g, v["oon"], side="left")
+        Xs.append(lag_features(V, a, oofs)[on])
+        ys.append((gi - oi)[on])   # wall residual stays in grid steps (it is not de-quantised)
+    if not Xs:
+        return None
+    X, y = np.concatenate(Xs), np.concatenate(ys)
+    return _LagEnsemble([HistGradientBoostingRegressor(
+        max_iter=200, max_depth=4, learning_rate=0.06, l2_regularization=1.0,
+        random_state=s).fit(X, y) for s in range(max(int(seeds), 1))])
+
+
+def wall_by_residual(V, a, gm, resid, n_t):
+    """Wall mask series with onset = the ODE's grid onset + the learned residual."""
+    v, S = V[a], V[a]["S"]
+    oi = np.searchsorted(np.asarray(v["times"]), v["oon"], side="left")
+    on = np.clip(oi + np.rint(resid).astype(int), 0, n_t)
+    M = np.zeros((n_t, len(S["wall"])), dtype=bool)
+    for j in range(n_t):
+        M[j] = gm & S["wall"] & (on <= j)
+    M[-1] = gm & S["wall"]
+    return np.maximum.accumulate(M, axis=0)
+
+
+class _LagEnsemble:
+    """Seed-averaged lag regressor -- variance reduction is what this cohort rewards."""
+
+    def __init__(self, models):
+        self.models = models
+
+    def predict(self, X):
+        return np.mean([m.predict(X) for m in self.models], axis=0)
+
+
+def offwall_from_adv(V, a, gm, resid, n_t, commit_final=True):
+    """Off-wall onset = the advected field's own crossing + a learned residual.
+
+    The most direct physics anchor available: `mat_adv(t)` is COMSOL's transport operator
+    solved on the actual mesh, so its crossing of `crit` is the equation's own answer to
+    "when does this node clot".  Everything learned is the correction to it.
+    """
+    S = V[a]["S"]
+    on = V[a]["t_adv"] + np.rint(np.asarray(resid, float))
+    M = np.zeros((n_t, len(S["wall"])), dtype=bool)
+    for j in range(n_t):
+        M[j] = gm & off_domain(S) & (on <= j)
+    if commit_final:
+        M[-1] = gm & off_domain(S)
+    return np.maximum.accumulate(M, axis=0)
+
+
+def offwall_by_lag(M_wall, gm, owner, wall, lag, commit_final=True):
+    """Off-wall nodes commit `lag` grid steps after their OWNER wall node does.
+
+    `scripts/diag_offwall_structure.py` measures the actual structure and it is not subtle:
+    pooled over 584 off-wall GT nodes, the lag behind the owner has median **+4 grid steps
+    of 11**, p25 +3, p75 +6, and **88% lag by 2 or more**.  Only 8.4% commit at or before
+    their owner -- which is why the owner-precedence constraint is nearly vacuous (it binds
+    on 8% of nodes) while the LAG carries almost all the timing information.
+
+    Physically this is the boundary layer filling: the wall node accumulates `Mat` from its
+    own flux immediately, and the off-wall node has to wait for enough of it to be advected
+    and to build past `crit` at ~0.16 of the owner's level (PHASE7 3.2), which takes most of
+    the horizon.  Every previous off-wall timing arm tried to predict an absolute onset or a
+    threshold crossing; none of them expressed "later than my owner, by about this much".
+    """
+    T, N = M_wall.shape
+    won = np.full(N, T, dtype=int)
+    for j in range(T - 1, -1, -1):
+        won[M_wall[j]] = j
+    on = np.clip(won[owner] + int(lag), 0, T)
+    M = np.zeros((T, N), dtype=bool)
+    for j in range(T):
+        M[j] = gm & ~wall & (on <= j)
+    if commit_final:
+        M[-1] = gm & ~wall
+    return np.maximum.accumulate(M, axis=0)
+
+
+def predict_masks(V, a, P, oofs, set_th, time_th, lag=None, wall_resid=None,
+                  owner_cut=None):
+    """Return the strict fold's combined committed mask at every time-grid point.
+
+    This is the same model prediction that :func:`score_vessel` grades.  Keeping it lets a
+    visualization render a vessel with the outer-fold model that never trained on it, rather
+    than rerunning the promoted full-pool model after the fact.
+    """
+    v, S = V[a], V[a]["S"]
+    gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
+    if WALL_CLOCK[0] in ("ode", "ode_commit"):
+        # THE DEPLOY MECHANISM.  Node i switches on at the grid index where its integrated
+        # `Mat` trajectory first crosses `ANCHOR_LEVEL * crit`; nothing is learned.  Restricted
+        # to `S["wall"]` because `ode_wall_series` is defined on wall nodes only -- off-wall
+        # commit times still come from the lag rule below, exactly as they do in deploy.
+        M_wall = ode_wall_series(V, a, gm, len(v["times"])) & S["wall"][None, :]
+        if WALL_CLOCK[0] == "ode_commit":
+            # A CONFOUND THIS SEPARATES, found 2026-09-09.  `ode_wall_series` is the ONLY wall
+            # path with no forced final commit: `series_masks` and `wall_by_residual` both end
+            # with `M[-1] = gm & wall`, so every candidate node is committed by final time and
+            # the arms differ purely in WHEN.  The ODE has no such line, so a node whose
+            # integrated `Mat` never crosses inside the horizon is never committed at all --
+            # measured as a -0.0210 final-time drop on 24 of 27 vessels, which is a change in
+            # WHETHER, not a re-timing.  Comparing `ode` against `head` therefore mixes a clock
+            # effect with a set effect.  `ode_commit` restores the forced final commit so the
+            # two arms score the same final set and the delta is the clock alone.
+            #
+            # REPORT BOTH.  `ode` is the deploy path as it actually behaves and is the honest
+            # deployability number; `ode_commit` is the clean clock ablation.  Quoting either
+            # alone misstates something.
+            M_wall = M_wall.copy()
+            M_wall[-1] = gm & S["wall"]
+            M_wall = np.maximum.accumulate(M_wall, axis=0)
+    elif wall_resid is not None:
+        M_wall = wall_by_residual(V, a, gm, wall_resid, len(v["times"]))
+    else:
+        M_wall = series_masks(gm, P, time_th[0][0], time_th[0][1], S["owner"], S["wall"])
+    th, cf = time_th[1]
+    if lag is not None:
+        Mw = M_wall & S["wall"]
+        if isinstance(lag, tuple) and LAG_ANCHOR[0] == "adv":
+            M_off = offwall_from_adv(V, a, gm, lag[1], len(v["times"]), cf)
+        elif isinstance(lag, tuple):        # ("learned", per-node prediction)
+            M_off = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag[1], cf)
+        else:
+            M_off = offwall_by_lag(Mw, gm, S["owner"], S["wall"], lag, cf)
+    else:
+        M_off = series_masks(gm, P, th, cf, S["owner"], S["wall"])
+    return (M_wall & wall_domain(S)[None, :]) | (M_off & off_domain(S)[None, :])
+
+
+def score_vessel(V, a, P, oofs, set_th, time_th, prefix="", lag=None,
+                 wall_resid=None, owner_cut=None, masks=None):
+    """-> (mean-over-time, final) per domain."""
+    v, S = V[a], V[a]["S"]
+    M = (predict_masks(V, a, P, oofs, set_th, time_th, lag=lag,
+                       wall_resid=wall_resid, owner_cut=owner_cut)
+         if masks is None else masks)
+    out = {}
+    for key, dom in (("wall", wall_domain(S)), ("off", off_domain(S))):
+        vals = []
+        for j, ti in enumerate(v["times"]):
+            vals.append(v["scorer"][ti].score(M[j] & dom, dom))
+        vals = np.asarray(vals, dtype=float)
+        with np.errstate(invalid="ignore"):
+            out[prefix + key] = (float(np.nanmean(vals)) if np.any(~np.isnan(vals))
+                                 else float("nan"))
+        out[prefix + key + "_final"] = float(vals[-1])
+    # THE NO-OP GUARD (2026-09-09).  docs/PAPER.md 5.3: "If a temporal ablation returns exactly
+    # zero on every field, suspect the switch before believing the null."  An earlier attempt at
+    # this question WAS a no-op -- `--lag-anchor` is consumed only inside the `--owner-lag`
+    # branch and never reaches the wall series -- and it returned bit-identical fields on all 27
+    # vessels without anyone noticing.  These two integers fingerprint the SCHEDULE rather than
+    # the score, so a comparison across two runs can tell "the clock changed and the quality did
+    # not" (a real null) from "the switch did nothing" (a broken experiment).  They cost one
+    # sum each and travel into the JSON with every vessel.
+    out[prefix + "wall_on_sum"] = int((M & wall_domain(S)[None, :]).sum())
+    out[prefix + "off_on_sum"] = int((M & off_domain(S)[None, :]).sum())
+    return out
+
+
+def tune_set(cache, V, anchors, oofs):
+    """Pick the readout family + scalars for the committed SET, against FINAL-time GT.
+
+    Factorised from the time cut deliberately: the set answers *where* and is a property of
+    the final mask, the time cut answers *when*.  v3 tuned one joint grid over a plain cut
+    only, which could not express the physics-conditioned readout at all.
+    """
+    from scripts.eval_strict import FAMILIES, GRID
+
+    vs = {a: SeverityScorer(cache[a]["edge_index"], eval_gt(a, cache[a]["y"], cache[a]["pos"]),
+                            len(cache[a]["wall"]), DEFAULT) for a in anchors}
+    out = {}
+    for key, dom_of in (("wall", wall_domain), ("off", off_domain)):
+        best = None
+        for arm in sorted(oofs):
+            sub = {a: oofs[arm][a] for a in anchors}
+            for fam, (tune, apply_) in FAMILIES.items():
+                th = tune(cache, vs, anchors, sub, GRID)
+                vals = []
+                for a in anchors:
+                    S = cache[a]
+                    d = dom_of(S)
+                    x = vs[a].score(apply_(S, sub[a], th) & d, d)
+                    if x == x:
+                        vals.append(x)
+                q = float(np.mean(vals)) if vals else -1e9
+                if best is None or q > best[0]:
+                    best = (q, (arm, fam, th))
+        out[key] = best[1]
+    return out
+
+
+def offwall_burden(V, a, oofs, set_th):
+    """How many off-wall nodes this vessel's committed set holds -- label-free."""
+    S = V[a]["S"]
+    return int((candidate_mask(S, arm_scores(oofs, a), set_th, a)
+                & off_domain(S)).sum())
+
+
+def _lag_quality(V, anchors, Pin, oofs, set_th, time_th, lag_pred, lag):
+    """Mean off-wall score of a given (anchor level, lag rule) on the selection vessels."""
+    vals = []
+    for a in anchors:
+        v, S = V[a], V[a]["S"]
+        dom = off_domain(S)
+        gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
+        th, cf = time_th[1]
+        use = isinstance(lag, tuple) and a in lag_pred and             offwall_burden(V, a, oofs, set_th) >= lag[1]
+        if use:
+            Mw = ode_wall_series(V, a, gm, len(v["times"]))
+            M = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag_pred[a], cf)
+        else:
+            M = series_masks(gm, Pin[a], th, cf, S["owner"], S["wall"])
+        for j, ti in enumerate(v["times"]):
+            x = v["scorer"][ti].score(M[j] & dom, dom)
+            if x == x:
+                vals.append(x)
+    return float(np.mean(vals)) if vals else -1e9
+
+
+def tune_owner_cut(V, anchors, Pin, oofs, set_th, time_th, lag_pred):
+    """The wall cut used ONLY to date the owner for the off-wall lag rule.
+
+    The off-wall arm needs "when did my owner commit"; it has been reusing the wall cut that
+    maximises the WALL score, which is a different objective.  A cut that is slightly early
+    or late can be better for the wall's own mask and worse as a clock.  One scalar, chosen
+    in-fold against the OFF-WALL score.
+    """
+    best = None
+    for t_o in TIME_GRID:
+        vals = []
+        for a in anchors:
+            v, S = V[a], V[a]["S"]
+            dom = off_domain(S)
+            gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
+            Mw = series_masks(gm, Pin[a], t_o, time_th[0][1], S["owner"], S["wall"]) & S["wall"]
+            M = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"], lag_pred[a],
+                                       time_th[1][1])
+            for j, ti in enumerate(v["times"]):
+                x = v["scorer"][ti].score(M[j] & dom, dom)
+                if x == x:
+                    vals.append(x)
+        q = float(np.mean(vals)) if vals else -1e9
+        if best is None or q > best[0]:
+            best = (q, float(t_o))
+    return best[1]
+
+
+def tune_lag(V, anchors, Pin, oofs, set_th, time_th, lag_pred=None):
+    """Cohort / learned / burden-gated lag, on inner OOF predictions.
+
+    The learned per-node lag regression wins the in-fold selection every time and, held out,
+    gains **+0.056 on the priority class** while losing 0.023 on the low-burden baseline
+    vessels (docs/PHASE10_V4.md 12.2b).  That split is not mysterious: the stenoses carry 84
+    and 122 off-wall GT nodes and `comsol005` carries 4, so on a low-burden vessel the
+    regression is extrapolating and a single mistimed node is most of the score.
+
+    So the lag rule is GATED on the predicted off-wall burden, which needs no label -- it is
+    the size of the committed set.  Below the gate the probability rule is used instead.
+    """
+    best = None
+    opts = [None] + LAG_GRID
+    if lag_pred:
+        opts += [("learned", B) for B in BURDEN_GRID]
+    for lag in opts:
+        vals = []
+        for a in anchors:
+            v, S = V[a], V[a]["S"]
+            dom = off_domain(S)
+            gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
+            th, cf = time_th[1]
+            use_learned = (isinstance(lag, tuple)
+                           and offwall_burden(V, a, oofs, set_th) >= lag[1])
+            if lag is None or (isinstance(lag, tuple) and not use_learned):
+                M = series_masks(gm, Pin[a], th, cf, S["owner"], S["wall"])
+            else:
+                Mw = (ode_wall_series(V, a, gm, len(v["times"])) if LAG_ANCHOR[0] == "ode"
+                      else series_masks(gm, Pin[a], time_th[0][0], time_th[0][1],
+                                        S["owner"], S["wall"]) & S["wall"])
+                if use_learned and LAG_ANCHOR[0] == "adv":
+                    M = offwall_from_adv(V, a, gm, lag_pred[a], len(v["times"]), cf)
+                elif use_learned:
+                    M = offwall_by_learned_lag(Mw, gm, S["owner"], S["wall"],
+                                               lag_pred[a], cf)
+                else:
+                    M = offwall_by_lag(Mw, gm, S["owner"], S["wall"], lag, cf)
+            for j, ti in enumerate(v["times"]):
+                x = v["scorer"][ti].score(M[j] & dom, dom)
+                if x == x:
+                    vals.append(x)
+        q = float(np.mean(vals)) if vals else -1e9
+        if best is None or q > best[0]:
+            best = (q, lag)
+    return best[1]
+
+
+def tune_time(V, anchors, Pin, oofs, set_th):
+    """Per-domain (time cut, commit-final flag), given the set, on inner OOF predictions.
+
+    Selected against mean-over-time, which is the metric the temporal arm exists to move;
+    the final-time score is then whatever that choice implies, and is reported separately
+    rather than tuned for.
+    """
+    out = []
+    for di in (0, 1):
+        top, pick = -1e9, (0.5, True)
+        for t_th in TIME_GRID:
+            for cf in (True, False):
+                vals = []
+                for a in anchors:
+                    v, S = V[a], V[a]["S"]
+                    dom = wall_domain(S) if di == 0 else off_domain(S)
+                    M = series_masks(candidate_mask(S, arm_scores(oofs, a), set_th, a),
+                                     Pin[a], t_th, cf, S["owner"], S["wall"])
+                    for j, ti in enumerate(v["times"]):
+                        x = v["scorer"][ti].score(M[j] & dom, dom)
+                        if x == x:
+                            vals.append(x)
+                if vals and np.mean(vals) > top:
+                    top, pick = float(np.mean(vals)), (float(t_th), bool(cf))
+        out.append(pick)
+    return tuple(out)
+
+
+def _infer_flow(cache: str) -> str:
+    """Guess the t=0 flow source from a cache name, and say so when it is only a guess.
+
+    The rule used to be two substring tests -- `fem`, then `pred`, then fall through to `gt`.
+    That silently mislabels every source added since: `v5_split` and `v5_dc_rgpcal` contain
+    neither token, so both resolved to `gt`, and the archive would have carried GT-flow masks
+    under the deployed model's name.  That is the exact failure the surrounding comment warns
+    about, so the fallback now announces itself instead of being invisible.
+
+    Longest token first, so `split` is not shadowed by a shorter name inside it.
+    """
+    hay = str(cache).lower()
+    for name in sorted(FLOW_SOURCES, key=len, reverse=True):
+        if name in hay:
+            return name
+    print(f"[warn] cache {cache!r} names no known flow source; assuming 'gt'. Pass --flow "
+          f"explicitly if that is wrong -- the clock the head is fitted against must be the "
+          f"clock deploy replays.", flush=True)
+    return "gt"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arms", nargs="+", required=True,
+                    help="each arm is a comma-separated tag list")
+    ap.add_argument("--cache", default="gt")
+    ap.add_argument("--flow", default="", choices=[""] + list(FLOW_SOURCES),
+                    help="t=0 flow for the ODE clock and transport channels. Empty = infer "
+                         "from --cache, which is what you want: the clock the head is fitted "
+                         "against must be the clock deploy replays.")
+    ap.add_argument("--n-times", type=int, default=11)
+    ap.add_argument("--inner", type=int, default=3)
+    ap.add_argument("--save", default="")
+    ap.add_argument("--save-oof-series", default="",
+                    help=("write the held-out fold's committed masks and provenance as a "
+                          "compressed NPZ for a generalization-only visualization. This is "
+                          "not a deploy artifact and refuses FINAL_HALF vessels."))
+    ap.add_argument("--wall-resid", action="store_true",
+                    help="wall onset = the ODE's grid onset + a learned residual")
+    ap.add_argument("--lag-seeds", type=int, default=3,
+                    help="seed-average the lag regression")
+    ap.add_argument("--no-ode-timing", action="store_true",
+                    help="hold the ODE's onset information at a constant in the temporal "
+                         "head: the explicit `oon/T` input and the `onset_phys` / "
+                         "`onset_phys_ind` cached columns.  Asks whether the integrated ODE "
+                         "contributes to WHEN a node clots.  Bounds it from below -- the base "
+                         "GNN score still carries physics.")
+    ap.add_argument("--lag-anchor", default="pred", choices=["pred", "ode", "adv"],
+                    help="date the owner by the head's prediction, or by the ODE crossing")
+    ap.add_argument("--owner-cut", action="store_true",
+                    help="tune a separate wall cut used only to date the owner off-wall")
+    ap.add_argument("--oracle-lag", action="store_true",
+                    help="ORACLE per-node lag with the PREDICTED wall onset (a probe)")
+    ap.add_argument("--learn-lag", action="store_true",
+                    help="offer a PER-NODE learned lag alongside the cohort constants")
+    ap.add_argument("--wall-clock", default="head", choices=["head", "ode", "ode_commit"],
+                    help=("source of the WALL commit series. `head` thresholds the learned "
+                          "temporal head (this evaluator's historical behaviour); `ode` dates "
+                          "each node by its own integrated Mat crossing, which is what the "
+                          "shipped artifact does (readout.lag_anchor: 'ode'). A pair of runs "
+                          "differing only in this flag is the deploy-path ODE ablation that "
+                          "docs/PAPER.md 5.3 records as missing. NOTE: --lag-anchor does NOT "
+                          "control this and never did -- it only selects how the owner is "
+                          "dated for the OFF-WALL lag. `ode_commit` is `ode` plus the forced "
+                          "final commit the other two paths already have, which separates the "
+                          "clock effect from the set effect -- see the note in predict_masks."))
+    ap.add_argument("--owner-lag", action="store_true",
+                    help="off-wall onset = owner's predicted onset + a fitted lag")
+    ap.add_argument("--two-stage", action="store_true",
+                    help="give off-wall nodes their owner's PREDICTED commit trajectory")
+    ap.add_argument("--set-masks", default="",
+                    help="npz of committed masks per vessel; overrides the set readout")
+    ap.add_argument("--head-seeds", type=int, default=1,
+                    help="average this many gradient-boosted heads (variance reduction)")
+    ap.add_argument("--clock", action="store_true",
+                    help=("add the per-vessel physics clock (fraction of the vessel's own "
+                          "ODE/advection nodes fired by t).  MEASURED NEGATIVE and off by "
+                          "default: mean-over-time wall +0.005 but off-wall -0.038, because "
+                          "a vessel-level scalar lets the head fit the schedule of 14 "
+                          "training vessels rather than learn a transferable one."))
+    ap.add_argument("--no-tt", action="store_true",
+                    help="ablate the time-resolved transport channels")
+    ode_group = ap.add_mutually_exclusive_group()
+    ode_group.add_argument("--wake", action="store_true",
+                           help="fit/evaluate against the flow-coupled wake ODE clock")
+    ode_group.add_argument("--stall", action="store_true",
+                           help="fit/evaluate against the near-stall ODE clock")
+    args = ap.parse_args()
+
+    # The ODE clock is bound through explicit CLI state only.
+    # `FLOW` is a module global consumed by `_tt_dir` and `precompute` (the ODE clock and the
+    # per-time transport channels).  It had NO command-line setter: running this script
+    # standalone with `--cache v5_fem` still built a GT-flow clock, silently, because the
+    # default is "gt" and only the promotion entry point ever assigned it.  Every figure built
+    # from the resulting archive would be GT-flow masks labelled as the deployed model.
+    global FLOW, USE_WAKE_ODE, USE_STALL_ODE
+    FLOW = args.flow or _infer_flow(args.cache)
+    print(f"[i] t=0 flow for the clock and transport: {FLOW} (cache={args.cache})", flush=True)
+    if args.wake:
+        USE_WAKE_ODE, USE_STALL_ODE = True, False
+    elif args.stall:
+        USE_WAKE_ODE, USE_STALL_ODE = False, True
+
+    from scripts.eval_strict import load_scores
+
+    cache = attach_physics(load_cache(args.cache))
+    oofs, pool, folds = {}, None, None
+    score_pool, score_folds = None, None
+    for arm in args.arms:
+        p_, f_, sc_ = load_scores(arm.split(","))
+        if pool is None:
+            score_pool = list(p_)
+            score_folds = {int(k): list(v) for k, v in f_.items()}
+            # CLOT-FREE vessels are excluded HERE and nowhere else in this file.  This script
+            # measures ONSET TIMING, and a vessel that never clots has no onset -- every
+            # per-time cell it contributes is empty-GT, so it would enter `precompute` as
+            # pure cost and every mean below as a `nan` that still inflates the reported `n`.
+            # Their false-positive evidence is reported by `eval_strict.py`, which has the
+            # branch for it (`--clot-free`).
+            pool = [a for a in p_ if a in cache and a not in CLOT_FREE]
+            folds = {k: [a for a in held if a in pool] for k, held in f_.items()}
+            n_free = len([a for a in p_ if a in CLOT_FREE])
+            if n_free:
+                print("[i] %d clot-free vessels excluded: this is the TIMING protocol; see "
+                      "eval_strict.py --clot-free for their false-positive row" % n_free,
+                      flush=True)
+        fo = {a: k for k, held in f_.items() for a in held}
+        oofs[arm] = {a: sc_[(fo[a], a)] for a in pool}
+    classes = classes_for(pool, PACKS)
+
+    if args.set_masks:
+        z = np.load(REPO / args.set_masks)
+        EXTERNAL_SET.update({a: z[a].astype(bool) for a in z.files})
+        print("[i] committed set taken from %s (%d vessels)"
+              % (args.set_masks, len(EXTERNAL_SET)), flush=True)
+    LAG_ANCHOR[0] = args.lag_anchor
+    WALL_CLOCK[0] = args.wall_clock
+    print("[i] wall clock = %s%s" % (
+        args.wall_clock,
+        "  (DEPLOY mechanism: ODE crossing, nothing learned)" if args.wall_clock == "ode"
+        else "  (learned temporal head)"), flush=True)
+    ODE_TIMING[0] = not args.no_ode_timing
+    if args.no_ode_timing:
+        print("[i] ODE TIMING ABLATED: oon/T and the onset_phys columns held constant",
+              flush=True)
+    print("[i] precomputing %d vessels ..." % len(pool), flush=True)
+    V = precompute(pool, cache, args.n_times)
+    if args.no_tt:
+        for v in V.values():
+            v["tt"] = None
+    if not args.clock:
+        for v in V.values():
+            v["clock"] = []
+
+    rows, t0, oof_series = {}, time.time(), {}
+    for k, held in sorted(folds.items()):
+        sel = [a for a in pool if a not in held]
+        # --- inner CV over the selection set, to get honest predictions for tuning ------
+        set_th = tune_set(cache, V, sel, oofs)
+        inner = [sel[i::args.inner] for i in range(args.inner)]
+
+        def inner_oof():
+            """Stage-appropriate out-of-fold predictions for every selection vessel.
+
+            Inner folds use the SAME seed count as the final head.  Dropping them to one
+            seed was tried and costs mean-over-time off-wall 0.6833 -> 0.6706: the inner
+            predictions are what the time thresholds are tuned on, so their variance lands
+            straight in the chosen cut.
+            """
+            out = {}
+            for iv in inner:
+                itr = [a for a in sel if a not in iv]
+                m_i = fit_head(V, itr, oofs, set_th, args.head_seeds)
+                for a in iv:
+                    out[a] = predict_series(V, a, m_i, oofs)
+            return out
+
+        OWNER_PRED.clear()
+        Pin = inner_oof()                                   # STAGE 1, out-of-fold on `sel`
+        m_k = fit_head(V, sel, oofs, set_th, args.head_seeds)
+
+        if args.two_stage:
+            # Feed each node its OWNER wall node's stage-1 predicted trajectory.  The
+            # selection vessels get their INNER out-of-fold stage-1 prediction and the
+            # held-out vessels get the stage-1 head fitted on all of `sel`, so the feature
+            # is out-of-sample on both sides -- the same discipline the `score` feature
+            # already gets, and the reason v3's head was quietly flattered without it.
+            for a in sel:
+                OWNER_PRED[a] = Pin[a][:, V[a]["S"]["owner"]]
+            for a in held:
+                OWNER_PRED[a] = predict_series(V, a, m_k, oofs)[:, V[a]["S"]["owner"]]
+            Pin = inner_oof()                               # STAGE 2, with the new feature
+            m_k = fit_head(V, sel, oofs, set_th, args.head_seeds)
+
+        time_th = tune_time(V, sel, Pin, oofs, set_th)
+        owner_cut = None
+        wres, wm, wres_pred = None, None, {}
+        if args.wall_resid:
+            for iv in inner:
+                itr = [a for a in sel if a not in iv]
+                m_w = fit_wall_residual(V, itr, oofs, args.lag_seeds)
+                if m_w is None:
+                    continue
+                for a in iv:
+                    wres_pred[a] = m_w.predict(lag_features(V, a, oofs))
+            wm = fit_wall_residual(V, sel, oofs, args.lag_seeds)
+            # Choose against the probability rule on the inner out-of-fold predictions, and
+            # GATE on wall burden -- the same construction that made the off-wall lag work
+            # (12.2b).  A residual fitted across the cohort is only trustworthy on vessels
+            # with enough committed wall nodes to have contributed to it.
+            n_t = len(V[sel[0]]["times"])
+
+            def wburden(a):
+                S = V[a]["S"]
+                return int((candidate_mask(S, arm_scores(oofs, a), set_th, a)
+                            & S["wall"]).sum())
+
+            best = None
+            for B in WBURDEN_GRID:
+                vals = []
+                for a in sel:
+                    v, S = V[a], V[a]["S"]
+                    gm = candidate_mask(S, arm_scores(oofs, a), set_th, a)
+                    th, cf = time_th[0]
+                    use = (B is not None) and (a in wres_pred) and (wburden(a) >= B)
+                    M = (wall_by_residual(V, a, gm, wres_pred[a], n_t) if use
+                         else series_masks(gm, Pin[a], th, cf, S["owner"], S["wall"]))
+                    for j, ti in enumerate(v["times"]):
+                        x = v["scorer"][ti].score(M[j] & S["wall"], S["wall"])
+                        if x == x:
+                            vals.append(x)
+                q = float(np.mean(vals)) if vals else -1e9
+                if best is None or q > best[0]:
+                    best = (q, B)
+            wres = best[1]
+        # ORACLE-LAG probe: the true per-node lag with our OWN predicted wall onset.  This
+        # splits the remaining timing gap into "we mis-predict the lag" and "we mis-predict
+        # when the owner commits", which need opposite work.
+        if args.oracle_lag:
+            for a in pool:
+                v_, S_ = V[a], V[a]["S"]
+                g_ = np.asarray(v_["times"])
+                gi = np.searchsorted(g_, v_["go"], side="left")
+                lag_pred_o = (gi - gi[S_["owner"]]).astype(float)
+                OWNER_PRED.setdefault("__orc__", {})[a] = lag_pred_o
+        lag, lm, lag_pred = None, None, {}
+        if args.oracle_lag:
+            lag = ("learned", 0)
+            lag_pred = {a: OWNER_PRED["__orc__"][a] for a in pool}
+            lm = None
+        elif args.owner_lag:
+            if args.learn_lag:
+                # OUT-OF-FOLD lag predictions for the selection vessels, on the same inner
+                # split the head uses.  Fitting the lag model on `sel` and then judging it
+                # on `sel` is the leak this whole evaluator exists to remove: the regression
+                # would be reading its own training labels, and the in-fold tuner would then
+                # always prefer it -- which is exactly what it did before this was fixed.
+                for iv in inner:
+                    itr = [a for a in sel if a not in iv]
+                    m_l = fit_lag_model(V, itr, oofs, args.lag_seeds, args.lag_anchor)
+                    if m_l is None:
+                        continue
+                    for a in iv:
+                        lag_pred[a] = m_l.predict(lag_features(V, a, oofs))
+                lm = fit_lag_model(V, sel, oofs, args.lag_seeds, args.lag_anchor)
+            if args.lag_anchor == "ode" and len(ANCHOR_C) > 1:
+                bestc = None
+                for c in ANCHOR_C:
+                    ANCHOR_LEVEL[0] = c
+                    lp = {}
+                    for iv in inner:
+                        m_c = fit_lag_model(V, [a for a in sel if a not in iv], oofs,
+                                            args.lag_seeds, "ode")
+                        if m_c is None:
+                            continue
+                        for a in iv:
+                            lp[a] = m_c.predict(lag_features(V, a, oofs))
+                    lg = tune_lag(V, sel, Pin, oofs, set_th, time_th, lp)
+                    q = _lag_quality(V, sel, Pin, oofs, set_th, time_th, lp, lg)
+                    if bestc is None or q > bestc[0]:
+                        bestc = (q, c, lp, lg)
+                ANCHOR_LEVEL[0] = bestc[1]
+                lag_pred, lag = bestc[2], bestc[3]
+                lm = fit_lag_model(V, sel, oofs, args.lag_seeds, "ode")
+            else:
+                lag = tune_lag(V, sel, Pin, oofs, set_th, time_th, lag_pred)
+            if args.owner_cut and isinstance(lag, tuple) and lag_pred:
+                owner_cut = tune_owner_cut(V, sel, Pin, oofs, set_th, time_th, lag_pred)
+        for a in held:
+            P = predict_series(V, a, m_k, oofs)
+            lag_a = lag
+            if isinstance(lag, tuple):
+                pl = (lag_pred[a] if lm is None else lm.predict(lag_features(V, a, oofs)))
+                lag_a = (("learned", pl)
+                         if offwall_burden(V, a, oofs, set_th) >= lag[1] else None)
+            wr = None
+            if wres is not None and wm is not None:
+                S_ = V[a]["S"]
+                nb = int((candidate_mask(S_, arm_scores(oofs, a), set_th, a)
+                          & S_["wall"]).sum())
+                if nb >= wres:
+                    wr = wm.predict(lag_features(V, a, oofs))
+            masks = predict_masks(V, a, P, oofs, set_th, time_th, lag=lag_a,
+                                  wall_resid=wr, owner_cut=owner_cut)
+            r = score_vessel(V, a, P, oofs, set_th, time_th, lag=lag_a, wall_resid=wr,
+                             owner_cut=owner_cut, masks=masks)
+            # The raw score archive retains predictions for every vessel, including the
+            # in-fold ones that were useful to tune this fold.  For visualization we retain
+            # only the OUTER held-out trajectories and prove the exclusion in the payload.
+            assert score_pool is not None and score_folds is not None
+            base_held = list(score_folds[k])
+            assert a in base_held
+            assert a not in [x for x in score_pool if x not in base_held]
+            oof_series[a] = dict(
+                masks=masks.astype(bool),
+                times=np.asarray(V[a]["times"], dtype=np.int32),
+                fold=int(k),
+                base_train=[x for x in score_pool if x not in base_held],
+                temporal_train=list(sel),
+            )
+            # the STATIC readout on the same set, as the reference the temporal arm must
+            # beat: frozen mask, replayed at every timestep
+            r.update(score_vessel(V, a, np.ones_like(P), oofs, set_th,
+                                  ((0.0, True), (0.0, True)), prefix="frozen_"))
+            # ORACLE TIMING on our OWN committed set: perfect onset, same mask.  This is
+            # the ceiling the temporal arm is actually chasing -- not the global oracle,
+            # which also has a perfect set.
+            Po = np.stack([(V[a]["go"] <= ti).astype(np.float32) for ti in V[a]["times"]])
+            r.update(score_vessel(V, a, Po, oofs, set_th,
+                                  ((0.5, True), (0.5, True)), prefix="oracle_"))
+            r["cls"] = classes.get(a, "?")
+            rows[a] = r
+        desc = " ".join("%s:%s/%s" % (d, set_th[d][0][:10], set_th[d][1])
+                        for d in ("wall", "off"))
+        tdesc = (" ".join("%.2f%s" % (t, "C" if c else "-") for t, c in time_th)
+                 + ("" if lag is None else " lag=%s" % (lag,))
+                 + ("" if wres is None else " wres>=%d" % wres)
+                 + ("" if owner_cut is None else " ocut=%.2f" % owner_cut))
+        print("  fold %d %s time=%s  %s  (%.0fs)"
+              % (k, desc, tdesc,
+                 " ".join("%s m%.3f f%.3f" % (a[-3:], rows[a]["wall"], rows[a]["wall_final"])
+                          for a in held), time.time() - t0), flush=True)
+
+    groups = [("ALL", pool),
+              ("baseline", [a for a in pool if not is_priority(classes.get(a, ""))]),
+              ("PRIORITY", [a for a in pool if is_priority(classes.get(a, ""))])]
+    print("\nSTRICTLY NESTED (tags=%s, cache=%s)\n" % (",".join(args.arms), args.cache))
+    print("%-10s %-8s %3s | %9s %9s | %9s %9s"
+          % ("group", "arm", "n", "mean wall", "mean off", "FIN wall", "FIN off"))
+    for name, sub in groups:
+        if not sub:
+            continue
+        for arm, pre in (("frozen", "frozen_"), ("temporal", ""), ("oracleT", "oracle_")):
+            print("%-10s %-8s %3d | %9.4f %9.4f | %9.4f %9.4f"
+                  % (name, arm, len(sub),
+                     np.nanmean([rows[a][pre + "wall"] for a in sub]),
+                     np.nanmean([rows[a][pre + "off"] for a in sub]),
+                     np.nanmean([rows[a][pre + "wall_final"] for a in sub]),
+                     np.nanmean([rows[a][pre + "off_final"] for a in sub])))
+    print("\nper vessel (mean-over-time / final)")
+    for a in sorted(rows):
+        r = rows[a]
+        print("  %-11s %-9s wall %.3f/%.3f   off %s/%s"
+              % (a, r["cls"][:9], r["wall"], r["wall_final"],
+                 ("%.3f" % r["off"]) if r["off"] == r["off"] else "  n/a",
+                 ("%.3f" % r["off_final"]) if r["off_final"] == r["off_final"] else "  n/a"))
+    if args.save:
+        Path(args.save).write_text(json.dumps(rows, indent=2, default=float))
+        print("\nwrote %s" % args.save)
+    if args.save_oof_series:
+        sealed = sorted(set(oof_series) & set(SEALED))
+        if sealed:
+            raise RuntimeError("refusing to export FINAL_HALF trajectories: %s" % sealed)
+        payload = dict(
+            meta=np.asarray([json.dumps(dict(
+                schema_version=1,
+                purpose="strict nested out-of-fold temporal trajectories for visualization",
+                arms=list(args.arms), cache=args.cache, flow=FLOW,
+                n_times=int(args.n_times), inner=int(args.inner),
+                vessels=sorted(oof_series), final_half_excluded=sorted(SEALED),
+            ))]),
+        )
+        for a, row in sorted(oof_series.items()):
+            payload[f"masks|{a}"] = row["masks"]
+            payload[f"times|{a}"] = row["times"]
+            payload[f"provenance|{a}"] = np.asarray([json.dumps(dict(
+                fold=row["fold"], base_train=row["base_train"],
+                temporal_train=row["temporal_train"], held_out=a,
+            ))])
+        out_path = Path(args.save_oof_series)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path, **payload)
+        print("wrote held-out temporal series -> %s (%d vessels)" %
+              (out_path, len(oof_series)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

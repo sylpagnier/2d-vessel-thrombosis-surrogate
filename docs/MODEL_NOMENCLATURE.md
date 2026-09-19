@@ -1,0 +1,140 @@
+# Model nomenclature (SciML-accurate) — 2D Thrombosis Surrogate
+
+Names should reflect **what each piece is**. Prefer **RGP-DEQ** / **biochem_gnn** over legacy GINO / PMGP / biochem_deploy labels.
+
+**Programmatic source of truth:** [`src/model_nomenclature.py`](../src/model_nomenclature.py)
+
+**Product name:** **2D Thrombosis Surrogate** (`2d-thrombosis-surrogate`). Deploy stack: in-house FEM t=0 + **deploy-clot** (`clot_ml_0`). Former brands: HemoRGP, HemoGINO (retired).
+
+## Quick map
+
+| Canonical ID | Acronym | SciML category | Code class | Legacy alias |
+|--------------|---------|----------------|------------|--------------|
+| **`clot_ml_0`** | **deploy-clot** | Composable deploy thrombosis stack | — | `clot_ml_v0` |
+| **`rgp_deq_kine`** | **RGP-DEQ** | Rheology-coupled graph DEQ | `RGP_DEQ` | `pmgp_deq_kine`, `gino_deq_kine`, `GINO_DEQ` |
+| `species_graphsage` | — | Discrete-time GraphSAGE operator | `SpeciesDualHeadContinuousGNN` | `species_gnn` |
+| `gelation_beta` | — | Scalar calibration | — | `viscosity_beta` |
+| `clot_trigger_physics` | — | Mechanistic physics closure | — | `clot_phi` |
+| `local_kinematic_corrector` **(deprecated, deleted 2026-09-01)** | — | Local residual GNN on frozen flow | `LocalKinematicCorrector` | `local_corrector` |
+| **`biochem_gnn`** | — | Composable hybrid SciML pipeline | `BiochemGNN` | `biochem_deploy`, `BiochemDeployStack` |
+| `gnode_biochem` | GNODE | Graph neural ODE (retired) | `GNODE_Phase3` | `train biochem` |
+
+Legacy IDs still resolve in manifests, CLI aliases, and import paths.
+
+---
+
+## 1. Stage A flow: `rgp_deq_kine` / **RGP-DEQ** (`RGP_DEQ`)
+
+### Name
+
+- **RGP-DEQ** = **R**heology-guided **G**raph-**P**erceiver **DEQ**
+- Canonical id: `rgp_deq_kine`
+- Former ids: `pmgp_deq_kine`, `gino_deq_kine`
+- Code class: `RGP_DEQ` (legacy alias `GINO_DEQ`); block: `RGPBlock` (legacy `GINOBlock`)
+
+### Three distinguishing features (vs generic PI-GNN / implicit GNN / FNO-DEQ)
+
+1. **Physics-modulated GAT (`MultiHeadPhysicsGATConv`)** — edge attention logits biased by **advection**, **wall-rheology**, and **curvature** priors, SDF-decayed toward the bulk.
+
+2. **Perceiver global mixing (`AttentionGlobalMixingBlock`)** — fixed global tokens **cross-attend** the mesh, then **broadcast** back.
+
+3. **μ feedback inside the DEQ loop** — equilibrium solve finds `z*` such that `z* = f(z*, mu(z*))`.
+
+### Preferred phrasing
+
+- **Paper title line:** μ-coupled PM-GAT–Perceiver DEQ for steady non-Newtonian flow on unstructured graphs  
+- **Short:** RGP-DEQ  
+- **Logs:** `rgp_deq_kine (RGP-DEQ)`
+
+### What it is **not**
+
+| Label | Why it does not fit |
+|-------|---------------------|
+| **GINO (Li et al.)** | No GNO→FNO operator; different architecture |
+| **HemoGINO** | Retired product brand that implied GINO |
+
+Train: `python -m src.bin.main train rgp-deq-kine` (aliases: `pmgp-deq-kine`, `gino-deq-kine`, `kinematics`).
+
+Implementation: [`src/architecture/ginodeq.py`](../src/architecture/ginodeq.py).
+
+---
+
+## 2. Deploy species: `species_graphsage`
+
+A **learned discrete-time operator** on the **wall-band subgraph** (~1-hop from ceiling):
+
+- **Backbone:** 3-layer **GraphSAGE**.
+- **Inputs:** frozen `z_kin` from `RGP_DEQ.solve_latent()` + normalized SDF.
+- **Outputs:** FI and Mat only; other species pinned at inference.
+
+---
+
+## 3–4. `gelation_beta` / `clot_trigger_physics`
+
+Unchanged roles (scalar Mat scale; mechanistic Carreau + gelation + nucleation).
+
+---
+
+## 4b. Deprecated coupling: `local_kinematic_corrector`
+
+> **Deprecated — deleted 2026-09-01, not for publication.** Kept below as a naming record; status and failure record are in `LOCAL_KINEMATIC_CORRECTOR.md` (internal working note, not tracked in git).
+
+**Class:** `LocalKinematicCorrector` (formerly `src/core_physics/coupled_shear_gnn.py`, deleted).
+
+Cheap **k-hop residual GNN** that predicts `[dU, dV]` on top of frozen **RGP-DEQ** UV around clot nodes. Wired optionally into `BiochemGNN` via `local_corrector_ckpt` / `set_local_corrector`.
+
+Not required for the locked WC_v7 species baseline.
+
+---
+
+## 5. Retired stack: `biochem_gnn`
+
+> **Not the current biochem architecture.** Full detail and what replaced it:
+> [`docs/BIOCHEM_GNN.md`](BIOCHEM_GNN.md).
+
+```
+rgp_deq_kine           [frozen RGP-DEQ checkpoint, Stage A]
+  -> species_graphsage  [trained]  wall-band GraphSAGE pushforward (FI/Mat)   -- REMOVED
+  -> gelation_beta      [trained]  global Mat scale                           -- REMOVED
+  -> clot_trigger_physics [equations] Carreau + gelation + nucleation phi     -- REMOVED
+  -> local_kinematic_corrector [deprecated, deleted 2026-09-01] k-hop [dU,dV] residual on clot nodes
+```
+
+`species_graphsage`/`gelation_beta`'s model code and its two feeder modules had no caller
+anywhere in the tracked `clot_ml_0` pipeline and were removed. There is no `BiochemGNN` class
+in the tracked tree, and `from src.biochem_gnn import BiochemGNN` is not valid code today.
+`src/biochem_gnn/` still holds live infrastructure unrelated to this retired model
+(`wall_cohort_constants.py` for wound-cohort vessel names, `config.py` for RGP-DEQ deploy env
+application) -- see `docs/BIOCHEM_GNN.md`.
+
+Local corrector train: `python -m src.training.train_local_kinematic_corrector`. **Deprecated, not for publication.**
+
+The current biochem architecture is the one `clot_ml_0` (deploy-clot) actually ships: solved
+deposition ODE + wall AP closure + advective transport (`src/core_physics/`) feeding a
+learned off-wall `Mat` field head (`src/clot_ml/mat_field.py`) and the temporal GNN
+(`src/clot_ml/gnn.py`). See root [`README.md`](../README.md)'s "How it works" table and
+[`docs/PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md).
+
+---
+
+## CLI and manifest conventions
+
+| Use | Name |
+|-----|------|
+| Kinematics train (canonical) | `rgp-deq-kine` |
+| Kinematics train (legacy) | `pmgp-deq-kine`, `gino-deq-kine` |
+| Component key (canonical) | `rgp_deq_kine` |
+| Stack id (canonical) | `biochem_gnn` |
+| Stack id (legacy) | `biochem_deploy` |
+
+New manifests and logs should prefer **`rgp_deq_kine` / RGP-DEQ** and **`biochem_gnn`**; old checkpoints keep working via `resolve_model_id()`.
+
+---
+
+## Related docs
+
+- [BIOCHEM_GNN.md](BIOCHEM_GNN.md)
+- `MAT_GROWTH.md` (internal working note, not tracked in git)
+- [KINEMATICS_BEST_ARCHITECTURE.md](KINEMATICS_BEST_ARCHITECTURE.md)
+- [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md)
+- [README.md](README.md) — documentation index

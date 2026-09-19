@@ -1,0 +1,279 @@
+{
+  "id": "01_stenosis_strength",
+  "title": "Straight channel: stenosis strength vs research parameters",
+  "axis": "stenosis_occlusion",
+  "description": "Stenosis strength = fractional REDUCTION of the vessel width at the stenosis centre (0.50 = 50% narrower), measured back from the built geometry to within 0.5 percentage points. Straight 12 mm vessel, Re=450, centred, with the trained stenosis taper (pathology_std_frac 0.05 -> half-depth width 0.12 of length, as comsol041/042/044). The trained cohort reaches 0.77; points above it are extrapolation.",
+  "control": {
+    "geometry": {
+      "pathology_std_frac": 0.05
+    }
+  },
+  "arms": [
+    {
+      "name": "occ_0.000",
+      "axis_value": 0.0,
+      "geometry": {
+        "stenosis_occlusion": 0.0
+      }
+    },
+    {
+      "name": "occ_0.025",
+      "axis_value": 0.025,
+      "geometry": {
+        "stenosis_occlusion": 0.025
+      }
+    },
+    {
+      "name": "occ_0.050",
+      "axis_value": 0.05,
+      "geometry": {
+        "stenosis_occlusion": 0.05
+      }
+    },
+    {
+      "name": "occ_0.075",
+      "axis_value": 0.075,
+      "geometry": {
+        "stenosis_occlusion": 0.075
+      }
+    },
+    {
+      "name": "occ_0.100",
+      "axis_value": 0.1,
+      "geometry": {
+        "stenosis_occlusion": 0.1
+      }
+    },
+    {
+      "name": "occ_0.125",
+      "axis_value": 0.125,
+      "geometry": {
+        "stenosis_occlusion": 0.125
+      }
+    },
+    {
+      "name": "occ_0.150",
+      "axis_value": 0.15,
+      "geometry": {
+        "stenosis_occlusion": 0.15
+      }
+    },
+    {
+      "name": "occ_0.175",
+      "axis_value": 0.175,
+      "geometry": {
+        "stenosis_occlusion": 0.175
+      }
+    },
+    {
+      "name": "occ_0.200",
+      "axis_value": 0.2,
+      "geometry": {
+        "stenosis_occlusion": 0.2
+      }
+    },
+    {
+      "name": "occ_0.2125",
+      "axis_value": 0.2125,
+      "geometry": {
+        "stenosis_occlusion": 0.2125
+      }
+    },
+    {
+      "name": "occ_0.225",
+      "axis_value": 0.225,
+      "geometry": {
+        "stenosis_occlusion": 0.225
+      }
+    },
+    {
+      "name": "occ_0.2375",
+      "axis_value": 0.2375,
+      "geometry": {
+        "stenosis_occlusion": 0.2375
+      }
+    },
+    {
+      "name": "occ_0.250",
+      "axis_value": 0.25,
+      "geometry": {
+        "stenosis_occlusion": 0.25
+      }
+    },
+    {
+      "name": "occ_0.275",
+      "axis_value": 0.275,
+      "geometry": {
+        "stenosis_occlusion": 0.275
+      }
+    },
+    {
+      "name": "occ_0.300",
+      "axis_value": 0.3,
+      "geometry": {
+        "stenosis_occlusion": 0.3
+      }
+    },
+    {
+      "name": "occ_0.325",
+      "axis_value": 0.325,
+      "geometry": {
+        "stenosis_occlusion": 0.325
+      }
+    },
+    {
+      "name": "occ_0.350",
+      "axis_value": 0.35,
+      "geometry": {
+        "stenosis_occlusion": 0.35
+      }
+    },
+    {
+      "name": "occ_0.3625",
+      "axis_value": 0.3625,
+      "geometry": {
+        "stenosis_occlusion": 0.3625
+      }
+    },
+    {
+      "name": "occ_0.375",
+      "axis_value": 0.375,
+      "geometry": {
+        "stenosis_occlusion": 0.375
+      }
+    },
+    {
+      "name": "occ_0.400",
+      "axis_value": 0.4,
+      "geometry": {
+        "stenosis_occlusion": 0.4
+      }
+    },
+    {
+      "name": "occ_0.425",
+      "axis_value": 0.425,
+      "geometry": {
+        "stenosis_occlusion": 0.425
+      }
+    },
+    {
+      "name": "occ_0.450",
+      "axis_value": 0.45,
+      "geometry": {
+        "stenosis_occlusion": 0.45
+      }
+    },
+    {
+      "name": "occ_0.475",
+      "axis_value": 0.475,
+      "geometry": {
+        "stenosis_occlusion": 0.475
+      }
+    },
+    {
+      "name": "occ_0.4875",
+      "axis_value": 0.4875,
+      "geometry": {
+        "stenosis_occlusion": 0.4875
+      }
+    },
+    {
+      "name": "occ_0.500",
+      "axis_value": 0.5,
+      "geometry": {
+        "stenosis_occlusion": 0.5
+      }
+    },
+    {
+      "name": "occ_0.525",
+      "axis_value": 0.525,
+      "geometry": {
+        "stenosis_occlusion": 0.525
+      }
+    },
+    {
+      "name": "occ_0.550",
+      "axis_value": 0.55,
+      "geometry": {
+        "stenosis_occlusion": 0.55
+      }
+    },
+    {
+      "name": "occ_0.575",
+      "axis_value": 0.575,
+      "geometry": {
+        "stenosis_occlusion": 0.575
+      }
+    },
+    {
+      "name": "occ_0.600",
+      "axis_value": 0.6,
+      "geometry": {
+        "stenosis_occlusion": 0.6
+      }
+    },
+    {
+      "name": "occ_0.6125",
+      "axis_value": 0.6125,
+      "geometry": {
+        "stenosis_occlusion": 0.6125
+      }
+    },
+    {
+      "name": "occ_0.625",
+      "axis_value": 0.625,
+      "geometry": {
+        "stenosis_occlusion": 0.625
+      }
+    },
+    {
+      "name": "occ_0.650",
+      "axis_value": 0.65,
+      "geometry": {
+        "stenosis_occlusion": 0.65
+      }
+    },
+    {
+      "name": "occ_0.675",
+      "axis_value": 0.675,
+      "geometry": {
+        "stenosis_occlusion": 0.675
+      }
+    },
+    {
+      "name": "occ_0.700",
+      "axis_value": 0.7,
+      "geometry": {
+        "stenosis_occlusion": 0.7
+      }
+    },
+    {
+      "name": "occ_0.725",
+      "axis_value": 0.725,
+      "geometry": {
+        "stenosis_occlusion": 0.725
+      }
+    },
+    {
+      "name": "occ_0.750",
+      "axis_value": 0.75,
+      "geometry": {
+        "stenosis_occlusion": 0.75
+      }
+    },
+    {
+      "name": "occ_0.775",
+      "axis_value": 0.775,
+      "geometry": {
+        "stenosis_occlusion": 0.775
+      }
+    },
+    {
+      "name": "occ_0.800",
+      "axis_value": 0.8,
+      "geometry": {
+        "stenosis_occlusion": 0.8
+      }
+    }
+  ]
+}

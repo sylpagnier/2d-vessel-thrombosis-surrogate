@@ -1,0 +1,12 @@
+{
+  "id": "09_stenosis_eccentricity",
+  "title": "Eccentric stenosis wall vs research parameters",
+  "axis": "path_loc",
+  "description": "Fixed 50% stenosis on top / bottom / both walls.",
+  "control": {"geometry_preset": "stenosis_mid"},
+  "arms": [
+    {"name": "top_wall", "axis_value": 0.0, "geometry": {"path_loc": 0}},
+    {"name": "bottom_wall", "axis_value": 1.0, "geometry": {"path_loc": 1}},
+    {"name": "both_walls", "axis_value": 2.0, "geometry": {"path_loc": 2}}
+  ]
+}

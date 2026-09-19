@@ -1,0 +1,395 @@
+{
+  "cohort": "split_20260906",
+  "note": "Decoupled wall/off-wall flow (split) retrain: validated + production families, the full-pool flow checkpoint they consume, and the K=5 cross-fit arms behind the leak-free cohort number. Re-snapshotted 2026-09-06 after the archiver's basename collision was fixed (it had kept 1 of 6 checkpoints).",
+  "written_utc": "2026-09-06T10:02:43Z",
+  "git_commit": "223ef1cc72b6dfb99060a95c8014d6cf9955d47d",
+  "snapshot_dir": "outputs/archive/split_20260906",
+  "artifacts": [
+    {
+      "name": "DeployClotS",
+      "exists": true,
+      "metrics_invalid": false,
+      "flow": "split",
+      "scores_strict_cv": {
+        "protocol": "geometry-stratified 5-fold; every readout scalar selected on the OUT-OF-FOLD scores of vessels outside the held-out fold (scripts/eval_strict.py)",
+        "cohort": "23 clot-carrying vessels (VIZ_HALF released 2026-08-22) + 8 clot-free scored on the false-positive branch only; SEALED 007/013/031/043 never seen",
+        "v4": {
+          "final": {
+            "all": {
+              "wall": 0.9203,
+              "off": 0.7078
+            },
+            "baseline": {
+              "wall": 0.9246,
+              "off": 0.6631
+            },
+            "priority": {
+              "wall": 0.8997,
+              "off": 0.8419
+            },
+            "clot_free_fp_only": {
+              "wall": 1.0,
+              "off": 1.0,
+              "nodes_committed": 0
+            }
+          },
+          "mean_over_time": {
+            "all": {
+              "wall": 0.8694,
+              "off": 0.5792
+            },
+            "baseline": {
+              "wall": 0.8695,
+              "off": 0.5029
+            },
+            "priority": {
+              "wall": 0.869,
+              "off": 0.8081
+            }
+          },
+          "frozen_same_set": {
+            "all": {
+              "wall": 0.7885,
+              "off": 0.4124
+            }
+          },
+          "oracle_timing_same_set": {
+            "all": {
+              "wall": 0.9673,
+              "off": 0.8219
+            }
+          },
+          "per_vessel_oracle_cut": {
+            "all": {
+              "wall": 0.9377,
+              "off": 0.7526
+            }
+          }
+        },
+        "without_c0": {
+          "final": {
+            "all": {
+              "wall": 0.9008,
+              "off": 0.5812
+            }
+          },
+          "mean_over_time": {
+            "all": {
+              "wall": 0.8716,
+              "off": 0.5713
+            }
+          },
+          "per_vessel_oracle_cut": {
+            "all": {
+              "wall": 0.9312,
+              "off": 0.7746
+            }
+          },
+          "note": "the same cohort and features WITHOUT the C0 distributional constraint (shape_w=0; tags v5a/v5b/v5c).  Paired per configuration, off-wall +0.0854 P=0.031, +0.1059 P=0.002, +0.1649 P=0.000 -- three of three positive.  The WALL gain (+0.0195 at ensemble) is INSIDE the +/-0.024 floor and is NOT claimed.  Mean-over-time is unchanged, so C0 is a FINAL-TIME result.  MODEL_REVIEW_2026-08-22 9b."
+        },
+        "physics_backbone": {
+          "final": {
+            "all": {
+              "wall": 0.8832,
+              "off": 0.3999
+            }
+          }
+        },
+        "superseded_pre_repair_n19": {
+          "final": {
+            "all": {
+              "wall": 0.9176,
+              "off": 0.7366
+            }
+          },
+          "mean_over_time": {
+            "all": {
+              "wall": 0.875,
+              "off": 0.7188
+            }
+          },
+          "note": "docs/PHASE10_V4.md.  Measured on 19 vessels before the pack repair; NOT comparable.  The off-wall difference is a READOUT gap, not a model one -- out-of-fold AUC is unchanged at 0.989 and the per-vessel oracle cut is within the noise floor.  See MODEL_REVIEW_2026-08-22 8f."
+        },
+        "noise_floor": {
+          "wall": 0.024,
+          "off": 0.074,
+          "note": "config spread of one arm, RE-MEASURED on this cohort (scripts/eval_significance.py --cache v5). Per-vessel spread is far larger: median 0.042 wall / 0.112 off, max 0.216 / 0.628. A cohort-mean difference below the spread is not a result."
+        },
+        "readout_gap": {
+          "off_cohort_cut": 0.7078,
+          "off_per_vessel_oracle": 0.7526,
+          "gap": 0.0448,
+          "gap_without_c0": 0.1934,
+          "previous_gap": 0.12,
+          "note": "Was the largest quantified loss in the project (0.193).  Closed to 0.045 by the C0 training-time distributional constraint (shape_w), NOT by a new readout: the per-vessel oracle did NOT rise (0.7746 -> 0.7526), the cohort cut did (0.5812 -> 0.7078).  The field became cuttable by one constant.  MODEL_REVIEW_2026-08-22 8f.2 and 9b."
+        }
+      },
+      "members": 9,
+      "checkpoint_keys": [
+        "cfg",
+        "extra_dim",
+        "fingerprint",
+        "in_dim",
+        "seed"
+      ]
+    },
+    {
+      "name": "DeployClotS_w",
+      "exists": true
+    },
+    {
+      "name": "DeployClotS_0",
+      "exists": true,
+      "flow": "split"
+    },
+    {
+      "name": "DeployClotSP",
+      "exists": true,
+      "metrics_invalid": true,
+      "metrics_invalid_reason": "trained with --include-sealed: the whole corpus is in the training pool, so no held-out estimate exists for THIS artifact. Quote the validated sibling (docs/PUBLICATION_PLAN.md 12).",
+      "flow": "split",
+      "members": 9,
+      "checkpoint_keys": [
+        "cfg",
+        "extra_dim",
+        "fingerprint",
+        "in_dim",
+        "seed"
+      ]
+    },
+    {
+      "name": "DeployClotSP_w",
+      "exists": true
+    },
+    {
+      "name": "DeployClotSP_0",
+      "exists": true,
+      "flow": "split"
+    }
+  ],
+  "files": [
+    {
+      "path": "artifacts/DeployClotS/feature_norm.npz",
+      "bytes": 1640,
+      "sha256": "17c486277b39b5df7fb1996ff99770a7b449916d7e17f1164fe4b7fa8c08cb32"
+    },
+    {
+      "path": "artifacts/DeployClotS/manifest.json",
+      "bytes": 16747,
+      "sha256": "7f63ab86ea88178bbf9df26d9d2942a13627d1aeaceb7856ee1c9ede3b9b1767"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5a_s0.pth",
+      "bytes": 627433,
+      "sha256": "b6d10e32c85157649d24586a57847abe1b702ec308ad537879b83ae7879790a1"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5a_s1.pth",
+      "bytes": 627433,
+      "sha256": "615b828ee6f8a85c565ab18e2ccd56c7d79b2fcd106a96e72a3875418b71f3db"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5a_s2.pth",
+      "bytes": 627433,
+      "sha256": "5ddafb85ce7ead6024733a786160707fc93979b1d3fef369fdcee776b201b2eb"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5b_s0.pth",
+      "bytes": 627433,
+      "sha256": "9c1518e2cb1b4262dde224434c77ef5b543855a6958eb300efd271578f4566ad"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5b_s1.pth",
+      "bytes": 627433,
+      "sha256": "89231cc592a3b0fa9f6a2bab731ea60a382d30c158c81e56050118377a00a117"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5b_s2.pth",
+      "bytes": 627433,
+      "sha256": "6bce598fb21f9e38f81b1e9e17bcb80f0773243f9c2f9def5867d4ab486b0d78"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5c_s0.pth",
+      "bytes": 627433,
+      "sha256": "2513b00dc8db2572925abd4f9c0ef84ec61df9362aeea93c0b59d13d02f78d98"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5c_s1.pth",
+      "bytes": 627433,
+      "sha256": "a9f110d07bdf8dead081b2b50087a6e38f41e34e3a1d4efa31cd2d979294f78a"
+    },
+    {
+      "path": "artifacts/DeployClotS/member_v5c_s2.pth",
+      "bytes": 627433,
+      "sha256": "d1aeafdeb65583428081b65ac044117f1939c0dd496f6f37323db6b618fa45c4"
+    },
+    {
+      "path": "artifacts/DeployClotS/temporal.pkl",
+      "bytes": 5262024,
+      "sha256": "b8643783fdce8c114961feea9c725089ce635e6aaf3fc1fc7033870b808fb57e"
+    },
+    {
+      "path": "artifacts/DeployClotS_w/manifest.json",
+      "bytes": 7162,
+      "sha256": "2d0a970c3f952cac81f2293969a707fa5fc55f3cae3f309d7e134f6e1561d424"
+    },
+    {
+      "path": "artifacts/DeployClotS_w/wound_rate.pt",
+      "bytes": 12725,
+      "sha256": "d7eb892af7715299de75d1129a32dba1246ae4c29c0dfb2bc3671343d862a07f"
+    },
+    {
+      "path": "artifacts/DeployClotS_0/manifest.json",
+      "bytes": 1874,
+      "sha256": "5240b52cc1b716686a513f11ecc5dcf84207f84b5584fefc7030b0c7ce793768"
+    },
+    {
+      "path": "artifacts/DeployClotSP/feature_norm.npz",
+      "bytes": 1638,
+      "sha256": "77429cdcdf158840a10d17bf6e69ba24998fff78c2c23f009ab60dba0f92c612"
+    },
+    {
+      "path": "artifacts/DeployClotSP/manifest.json",
+      "bytes": 13471,
+      "sha256": "8319a5b6d6abb05ebc49e3caf3e5b7c20e65827a8c16258c670aee5603846494"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5a_s0.pth",
+      "bytes": 627433,
+      "sha256": "431df978b972577eebdd0d5e1d19ff3b32072b75851384658e0974d3e2e206ae"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5a_s1.pth",
+      "bytes": 627433,
+      "sha256": "2ef6f3516b05dc162f1b37b264898904a2b0bec17daf0354cbfb8ee3a935f12b"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5a_s2.pth",
+      "bytes": 627433,
+      "sha256": "89f367f1bb3d158a948d5730db4c11ffa9ba326bde1ba2da561eda16402c0e0a"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5b_s0.pth",
+      "bytes": 627433,
+      "sha256": "6b860783b1374534dcd3ccb00b72a86ba7382a4a1418059edfb76e657c506e57"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5b_s1.pth",
+      "bytes": 627433,
+      "sha256": "e48fafe5110f0ad5ec04318e2dba64dc38caa6d33a4235891c0f1ca8988cb17f"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5b_s2.pth",
+      "bytes": 627433,
+      "sha256": "375e084fd547737c0d33f06de658833a00d396f4d1624d28e4e9a6e47d33d85c"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5c_s0.pth",
+      "bytes": 627433,
+      "sha256": "cf6530051d8d53eec96ad09ceaf2f446a902682962c8c2274682bf3672943773"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5c_s1.pth",
+      "bytes": 627433,
+      "sha256": "fc6668d882cebc5a5273f09d15488304d9182310c9f5085ad2c8857eb334c899"
+    },
+    {
+      "path": "artifacts/DeployClotSP/member_v5c_s2.pth",
+      "bytes": 627433,
+      "sha256": "9187b4496528ef0260402f1822c5651a4664bfc5400cd228795df93e03507c91"
+    },
+    {
+      "path": "artifacts/DeployClotSP/temporal.pkl",
+      "bytes": 5237131,
+      "sha256": "905bb212bf24e241296b6a749d8402a19e743e07ce1938c3d5c48368637632e5"
+    },
+    {
+      "path": "artifacts/DeployClotSP_w/manifest.json",
+      "bytes": 7165,
+      "sha256": "e37b94f2e99e7ec2733a2b2631f0083830d7b5990fb63e66cfa75613f69384cf"
+    },
+    {
+      "path": "artifacts/DeployClotSP_w/wound_rate.pt",
+      "bytes": 12725,
+      "sha256": "d7eb892af7715299de75d1129a32dba1246ae4c29c0dfb2bc3671343d862a07f"
+    },
+    {
+      "path": "artifacts/DeployClotSP_0/manifest.json",
+      "bytes": 1878,
+      "sha256": "6fd669bde19f6433627834c2e150991ff9bef7555f55a4c22e299c8fd54ee58a"
+    },
+    {
+      "path": "checkpoints/E5_band_gateup/kinematics_best_calibrated.pth",
+      "bytes": 4672997,
+      "sha256": "5d705b040b0325e3d601eb223225227258f748890559b7135ee33f9317fae8aa"
+    },
+    {
+      "path": "checkpoints/E8_xf5_f0/kinematics_best_calibrated.pth",
+      "bytes": 4673189,
+      "sha256": "08a51674cc146457c2e4422352a31e8d64541d267c0b2c76059b5681cbcd9331"
+    },
+    {
+      "path": "checkpoints/E8_xf5_f1/kinematics_best_calibrated.pth",
+      "bytes": 4673189,
+      "sha256": "fb81fe68e2073628f6bf8a1f4a3658fe34230712db944256157b3f776fa32589"
+    },
+    {
+      "path": "checkpoints/E8_xf5_f2/kinematics_best_calibrated.pth",
+      "bytes": 4673189,
+      "sha256": "58d559f417bbd4253b43ffa04b6db917e0647fa3317a09d84dc677d90fa62056"
+    },
+    {
+      "path": "checkpoints/E8_xf5_f3/kinematics_best_calibrated.pth",
+      "bytes": 4673189,
+      "sha256": "333e15e768d459a420ffc5c38e6311a2bf116df766d3c1db119bf55860c06d96"
+    },
+    {
+      "path": "checkpoints/E8_xf5_f4/kinematics_best_calibrated.pth",
+      "bytes": 4673189,
+      "sha256": "66820d730a2d77c10fac78af5aac7da048184db617751cb9e36205a5ea8355e0"
+    },
+    {
+      "path": "scores/dc_v5_split.npz",
+      "bytes": 18563717,
+      "sha256": "d4a7b500435e683f63a6faff88d82134cbfbe7c25ee5facd3bddf6cc62cd28a2"
+    },
+    {
+      "path": "scores/dc_v5_split_seedB.npz",
+      "bytes": 18295653,
+      "sha256": "bc77bb2408456529916195296877ae2e3688fc419170bce0061ce995ef091501"
+    },
+    {
+      "path": "scores/dc_xf5.npz",
+      "bytes": 18563337,
+      "sha256": "52ad8f1b5077cb8aeb2b06b10d0638ace7fc5b4b813f1099998aed4260775635"
+    },
+    {
+      "path": "scores/dc_xf5_seedB.npz",
+      "bytes": 18533802,
+      "sha256": "b7ba5f904fa4a0bbf78c52e580f32f77f62b52dbde97da8c70f5eff187b262d8"
+    },
+    {
+      "path": "scores/dc_fem_cfw025.npz",
+      "bytes": 18406066,
+      "sha256": "a4a80fd12ae25d87d81baa15141cfe46acd3acf8e60e594a6e249ae193cc8a82"
+    },
+    {
+      "path": "scores/dc_fem_seedB.npz",
+      "bytes": 18347530,
+      "sha256": "ca05f23f851ce223f111ab11ca64780935d5254c5a76956744841ad8815edb14"
+    },
+    {
+      "path": "evals/deployclot/split_vs_shipped.json",
+      "bytes": 11551,
+      "sha256": "b3b56db77fc5423b3690f21947c82061c5ef500c09e4c87eed93ebd7c564b32c"
+    },
+    {
+      "path": "evals/deployclot/crossfit5_vs_shipped.json",
+      "bytes": 11617,
+      "sha256": "895470d748812a9d6b61526851028e445dcd257856f26619dfc210dd8bcf0eb7"
+    }
+  ],
+  "n_files": 44,
+  "total_bytes": 160642189,
+  "missing": []
+}

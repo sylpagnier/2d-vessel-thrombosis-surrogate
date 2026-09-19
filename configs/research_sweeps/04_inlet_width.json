@@ -1,0 +1,12 @@
+{
+  "id": "04_inlet_width",
+  "title": "Inlet width vs research parameters",
+  "axis": "width",
+  "description": "Straight vessel at Re=450; sweep channel width.",
+  "arms": [
+    {"name": "w_0.008", "axis_value": 0.008, "geometry": {"width": 0.008}},
+    {"name": "w_0.012", "axis_value": 0.012, "geometry": {"width": 0.012}},
+    {"name": "w_0.016", "axis_value": 0.016, "geometry": {"width": 0.016}},
+    {"name": "w_0.020", "axis_value": 0.020, "geometry": {"width": 0.020}}
+  ]
+}

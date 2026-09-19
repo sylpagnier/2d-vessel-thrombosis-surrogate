@@ -1,0 +1,476 @@
+"""PHASE9: flow-aware residual GNN for the full-mesh clot map.  Targets wall>0.9, off>0.7.
+
+Three things distinguish this from the four ML attempts the repo has already buried:
+
+  * **the loss is the metric** (`src/clot_ml/softmetric.py`) -- a differentiable copy of
+    `0.5*dilation_IoU + 0.5*relaxed_F0.5`, per domain.  BCE optimises none of that;
+    PHASE6_RESULTS 15.3 showed the score is a cliff that plain per-node losses cannot see.
+  * **the physics is the base, not the competitor** -- the backbone's `log(Mat/crit)` is an
+    additive base for the regression head (zero-init, so an untrained net *is* the physics),
+    and its mask drives a residual readout: separate thresholds for keeping a
+    physics-positive node and for adding a physics-negative one.  Wall error is two opposite
+    failure modes (weak-sep FP on 018/019/025, ungated FN on 012/028) and one threshold
+    cannot fix both.
+  * **anisotropic message passing** -- upstream/downstream aggregation weighted by the t=0
+    velocity projected on each edge.  Isotropic smoothing of the source is measurably wrong
+    (PHASE6_RESULTS 3.4).
+
+    python scripts/train_clot_gnn.py --folds 4 --epochs 300
+    python scripts/train_clot_gnn.py --lovo --epochs 300 --seeds 3 --tag final
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import time
+
+import numpy as np
+import torch
+
+from src.utils.paths import get_project_root
+
+REPO = get_project_root()
+
+from src.clot_ml.data import (  # noqa: E402
+    attach_physics, load_cache, off_domain, splits, wall_domain,
+)
+from src.clot_ml.evaluate import banner  # noqa: E402
+from src.clot_ml.gnn import (  # noqa: E402
+    ClotGNN, build_graph, rollout, to_device, to_weighted_sparse,
+)
+from src.clot_ml.protocol import Bench  # noqa: E402
+from src.clot_ml.recurrent import (  # noqa: E402
+    N_FEEDBACK, N_FEEDBACK_ADV, advective_operators, feedback_channels,
+    feedback_channels_advective, neighbour_operator,
+)
+from src.clot_ml.severity_metric import DEFAULT as SEVERITY_CFG, soft_severity  # noqa: E402
+from src.clot_ml.softmetric import (  # noqa: E402
+    dilation_operator, soft_dilate, soft_score, to_torch_sparse,
+)
+
+LOG = REPO / "outputs/phase9_log.jsonl"
+
+# --- running state for the two C0 terms (MODEL_REVIEW 3.4) --------------------------------
+# Both references are EMAs over the vessels seen so far -- data, not fitted parameters, and
+# reset per `train_one` call so a fold never inherits another fold's statistics.
+_burden_cvar_state: dict = {}
+_shape_ref_state: dict = {}
+
+
+def _reset_c0_state() -> None:
+    _burden_cvar_state.clear()
+    _shape_ref_state.clear()
+
+
+def _burden_cvar_update(err: float, q: float, beta: float = 0.98) -> None:
+    """Track a running `q`-quantile of the per-vessel burden error, by stochastic ascent.
+
+    A true quantile needs the whole history; this is the standard online estimator -- step the
+    threshold up when the observation exceeds it and down when it does not, in the ratio that
+    makes `q` a fixed point.  Cheap, and only has to be roughly right: it decides which
+    vessels the term applies to, not by how much.
+    """
+    thr = _burden_cvar_state.get("thr", err)
+    lr = (1.0 - beta) * max(thr, 1e-3)
+    _burden_cvar_state["thr"] = thr + lr * ((1.0 - q) if err > thr else -q)
+
+
+def _shape_ref_get(dom: str, sd: float, beta: float = 0.9) -> float:
+    """EMA of the cohort's within-domain logit spread.  Returns the reference BEFORE update."""
+    ref = _shape_ref_state.get(dom, sd)
+    _shape_ref_state[dom] = beta * ref + (1.0 - beta) * sd
+    return ref
+GRID = np.linspace(0.02, 0.995, 24)
+
+
+def log_result(tag, summ, extra=None):
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    rec = dict(tag=tag, t=time.strftime("%m-%d %H:%M:%S"), fit=summ["fit"], dev=summ["dev"])
+    if extra:
+        rec.update(extra)
+    with LOG.open("a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# residual readout: keep / add thresholds per domain, against the physics mask
+# ---------------------------------------------------------------------------
+def apply_readout(S, score, th):
+    w, o = wall_domain(S), off_domain(S)
+    ph = S["phys_mask"]
+    keep_w, add_w, keep_o, add_o = th
+    wall_pred = (w & ph & (score >= keep_w)) | (w & ~ph & (score >= add_w))
+    off_pred = (o & ph & (score >= keep_o)) | (o & ~ph & (score >= add_o))
+    return wall_pred | off_pred
+
+
+def pick_readout(bench, scores, anchors, grid):
+    """Four scalars, chosen per domain on a coarse grid.  Domains are scored separately."""
+    def best_pair(domain_of, dom_key):
+        best, pair = -1e9, (float(grid[0]), float(grid[0]))
+        for tk in grid:
+            for ta in grid:
+                vals = []
+                for a in anchors:
+                    S = bench.cache[a]
+                    d = domain_of(S)
+                    ph = S["phys_mask"]
+                    pr = (d & ph & (scores[a] >= tk)) | (d & ~ph & (scores[a] >= ta))
+                    v = bench.vs[a].score(pr, d)
+                    if v == v:
+                        vals.append(v)
+                if vals and np.mean(vals) > best:
+                    best, pair = float(np.mean(vals)), (float(tk), float(ta))
+        return pair, best
+
+    (kw, aw), _ = best_pair(wall_domain, "wall")
+    (ko, ao), _ = best_pair(off_domain, "off")
+    return (kw, aw, ko, ao)
+
+
+# ---------------------------------------------------------------------------
+def prepare(cache, anchors, mu, sd, dev_t, need_soft=True, need_fb=False, adv_fb=False,
+            iso=False):
+    G = {}
+    for a in anchors:
+        g = to_device(cache[a], mu, sd, dev_t, iso=iso)
+        S = cache[a]
+        g["phys"] = torch.tensor(S["phys_mask"].astype(np.float32), device=dev_t)
+        if need_fb:
+            g["At"] = to_torch_sparse(neighbour_operator(S["edge_index"], len(S["wall"])), dev_t)
+            g["owner"] = torch.tensor(S["owner"].astype(np.int64), device=dev_t)
+            if adv_fb:
+                Wu, Wd = advective_operators(S["pos"], S["edge_index"], S["u"], S["v"])
+                g["Wup"] = to_weighted_sparse(Wu, dev_t)
+                g["Wdn"] = to_weighted_sparse(Wd, dev_t)
+        if need_soft:
+            D = dilation_operator(S["edge_index"], len(S["wall"]), 2)
+            g["D"] = to_torch_sparse(D, dev_t)
+            gt = g["y"]
+            g["gt_dil"] = soft_dilate(gt, g["D"]).detach()
+        g["off"] = 1.0 - g["solid"]      # true lumen; see `build_graph`
+        # A vessel with NO GT clot anywhere -- `wall_cohort_splits.CLOT_FREE`.  Detected from
+        # the labels rather than imported from the cohort list, so a cache built from any
+        # vessel set behaves the same.  It selects the metric's empty-GT branch below; an
+        # empty DOMAIN on a clot-carrying vessel is a different case and keeps dropping out.
+        g["empty_gt"] = bool(float(g["y"].sum()) <= 0.0)
+        G[a] = g
+    return G
+
+
+def train_one(train_anchors, cache, args, dev_t, seed=0):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    _reset_c0_state()
+    Xall = np.concatenate([cache[a]["X"] for a in train_anchors])
+    mu, sd = Xall.mean(0), Xall.std(0)
+    sd[sd < 1e-6] = 1.0
+    rounds = int(getattr(args, "rounds", 1))
+    adv_fb = bool(getattr(args, "adv_fb", False))
+    off_only = bool(getattr(args, "off_only", False))
+    # --- ARCHITECTURE ABLATION SWITCHES (src/clot_ml/ablation.py) ------------------------
+    # All three default to the shipped behaviour, so an `args` that has never heard of them
+    # -- every existing caller -- trains exactly the model it trained before.
+    iso = bool(getattr(args, "iso", False))               # B_iso:    direction-free messages
+    phys_base = bool(getattr(args, "phys_base", True))    # B_nobase: no residual physics base
+    phys_seed = bool(getattr(args, "phys_seed", True))    # B_noseed: rollout starts at zero
+    G = prepare(cache, train_anchors, mu, sd, dev_t, need_soft=args.metric_w > 0,
+                need_fb=rounds > 1, adv_fb=adv_fb, iso=iso)
+    in_dim = G[train_anchors[0]]["x"].shape[1]
+    edim = G[train_anchors[0]]["ea"].shape[1]
+    n_fb = N_FEEDBACK_ADV if adv_fb else N_FEEDBACK
+    model = ClotGNN(in_dim, edim, dim=args.dim, layers=args.layers, drop=args.drop,
+                    extra_dim=(n_fb if rounds > 1 else 0),
+                    phys_base=phys_base).to(dev_t)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
+    sched = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=args.lr, total_steps=max(args.epochs * len(train_anchors), 1),
+        pct_start=0.25)
+    pw = torch.tensor(args.pos_weight, device=dev_t)
+    warm = max(int(args.epochs * args.metric_start), 1)
+    for ep in range(args.epochs):
+        model.train()
+        use_metric = args.metric_w > 0 and ep >= warm
+        for i in np.random.permutation(len(train_anchors)):
+            g = G[train_anchors[i]]
+            opt.zero_grad(set_to_none=True)
+            logit, reg = rollout(model, g, rounds, adv_fb, phys_seed)
+            # OFF-WALL SPECIALIST.  The metric is domain-restricted, so a model whose whole
+            # loss is the off-wall domain is a legitimate arm (docs/PHASE9_ML.md 0 already
+            # reports a wall-specialised ensemble).  `off_mult` only reweights the metric
+            # term on a shared trunk that the wall's ~5x larger BCE still dominates; this
+            # masks BCE and the regression too, so nothing in the objective is wall.
+            if off_only:
+                sel_n = g["off"] > 0.5
+                loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                    logit[sel_n], g["y"][sel_n], pos_weight=pw)
+                loss = loss + args.reg_w * torch.nn.functional.smooth_l1_loss(
+                    reg[sel_n], g["mat_gt"][sel_n])
+            else:
+                loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                    logit, g["y"], pos_weight=pw)
+                loss = loss + args.reg_w * torch.nn.functional.smooth_l1_loss(
+                    reg, g["mat_gt"])
+            # --- CLOT-FREE VESSEL WEIGHT -------------------------------------------------
+            # A clot-free vessel contributes ~10-20k all-negative off-wall nodes and nothing
+            # else.  Sixteen of them are 45% of the pool, so they carry roughly half the
+            # per-node BCE gradient while adding no information about WHERE the boundary of a
+            # thrombus sits -- which is the only thing the off-wall readout reads.
+            #
+            # MEASURED 2026-09-03 (DEPLOYCLOT.md 24): a gradient-boosted tree on the same 69
+            # features goes from P@n_gt 0.605 to 0.702 when these vessels are dropped from its
+            # training set -- from below the GNN to well above it.  Dropping them from the
+            # GNN's POOL instead makes it worse (0.637 -> 0.595), because `shape_w` wants the
+            # wider cohort for its running reference.  This knob separates the two: the vessel
+            # still trains, still updates the C0 reference, and still counts for the
+            # false-positive branch -- its GRADIENT is scaled.
+            #
+            # 1.0 reproduces the shipped objective exactly.
+            cfw = float(getattr(args, "clot_free_w", 1.0))
+            if cfw != 1.0 and g.get("empty_gt"):
+                loss = loss * cfw
+            if use_metric:
+                p = torch.sigmoid(logit)
+                parts = []
+                # off-wall is the domain furthest from target (0.63 vs 0.70) and it holds a
+                # fifth of the nodes; weight its metric term explicitly.
+                use_sev = str(getattr(args, "metric", "legacy")) == "severity"
+                doms_ = ((("off", 1.0),) if off_only
+                         else (("wall", 1.0),
+                               ("off", float(getattr(args, "off_mult", 1.0)))))
+                # A clot-free vessel has no recall term, so the metric grades the
+                # false-positive VOLUME instead -- `1/(1 + E[n_pred]/8)`.  Training on it
+                # keeps loss and metric the same function everywhere, which is this project's
+                # stated principle (PHASE9 2a).
+                #
+                # MEASURED 2026-08-22 (MODEL_REVIEW 8f.4): **no effect either way.**  Paired,
+                # per configuration: v5a off +0.0694 [-0.043,+0.186] P=0.116, v5b off -0.0150
+                # [-0.089,+0.051] P=0.651.  Both intervals cross zero and the sign flips.
+                # Default `"none"` on PARSIMONY -- the clot-free vessels still train, on
+                # per-node BCE -- not because the term was shown to hurt.  It is a per-VESSEL
+                # count constraint, so it only moves a global bias, and a global bias is
+                # exactly what this cohort's +/-0.074 off-wall floor cannot resolve.
+                eg = ("score" if (g.get("empty_gt")
+                                  and str(getattr(args, "empty_gt_loss", "none")) == "score")
+                      else "none")
+                for dom, mult in doms_:
+                    sc_ = (soft_severity(p, g["y"], g["D"], g[dom], g["gt_dil"],
+                                         SEVERITY_CFG, empty_gt=eg)
+                           if use_sev else
+                           soft_score(p, g["y"], g["D"], g[dom], g["gt_dil"],
+                                      float(getattr(args, "loss_shape_w", 0.5)),
+                                      empty_gt=eg))
+                    if sc_ is not None:
+                        parts.append(mult * (1.0 - sc_))
+                if parts:
+                    loss = loss + args.metric_w * torch.stack(parts).mean()
+            # --- BURDEN CONSISTENCY -----------------------------------------------------
+            # Nothing else in this objective requires the score->burden mapping to TRANSFER.
+            # `pos_weight` and the metric term both decalibrate the field deliberately, and a
+            # cohort cut is then fitted afterwards to undo the damage -- so the cut's meaning
+            # is tied to the training distribution, and a vessel whose field is scaled
+            # differently is read out at the wrong burden with no warning.  This makes the
+            # invariant a CONSTRAINT instead of a post-hoc fit: at one fixed reference cut,
+            # the soft count above it must match the true count, on every vessel and domain.
+            # Measured in log space so the 11-node and 193-node vessels weigh comparably.
+            #
+            # MEASURED AND NOT ADOPTED (2026-08-22).  Strict 5-fold, v5a config, burden_w=2.0
+            # against the identical baseline folds: wall -0.0069 [-0.0314, +0.0185] P=0.705,
+            # off -0.0172 [-0.0524, +0.0234] P=0.821 -- both inside the cohort noise floor and
+            # both slightly NEGATIVE, and wall variance rose (sd 0.107 -> 0.113).  The
+            # mechanism only half-worked: out-of-fold implied-burden error improved in the
+            # MEDIAN (11.6% -> 5.7%) but the tail, which is the actual failure mode, did not
+            # (p90 28.3% -> 32.2%, max 90.9% unchanged).  Left in, defaulted OFF, so the
+            # experiment is not re-derived; `burden_w=0` reproduces the shipped objective
+            # exactly.  See outputs/strict_b5a_solo.json.
+            bw = float(getattr(args, "burden_w", 0.0))
+            if bw > 0:
+                p_ = torch.sigmoid(logit)
+                t_ref = float(getattr(args, "burden_t", 0.89))
+                tau = max(float(getattr(args, "burden_tau", 0.02)), 1e-4)
+                agg = str(getattr(args, "burden_agg", "l1"))
+                bparts = []
+                for dom, mult in (("off", 1.0),) if off_only else (("wall", 1.0), ("off", 1.0)):
+                    d_ = g[dom]
+                    # PER-DOMAIN REFERENCE CUT.  `burden_t` was one number for both domains,
+                    # and 0.89 is about where the WALL readout commits (fold cuts 0.77-0.92)
+                    # but nowhere near the OFF-WALL one (0.62-0.77).  So the term was
+                    # constraining the off-wall count at a threshold the off-wall readout
+                    # never uses -- which is consistent with the 2026-08-22 result that the
+                    # median error halved while the tail did not move, the tail being
+                    # off-wall (median 82.8%, p90 433%, at the cut it actually deploys at;
+                    # scripts/diag_field_calibration.py).  `burden_t_off <= 0` keeps the
+                    # single-cut behaviour exactly.
+                    t_d = t_ref
+                    if dom == "off" and float(getattr(args, "burden_t_off", 0.0)) > 0:
+                        t_d = float(args.burden_t_off)
+                    k_soft = (torch.sigmoid((p_ - t_d) / tau) * d_).sum()
+                    k_true = (g["y"] * d_).sum()
+                    if float(k_true) <= 0:
+                        continue
+                    # --- 3.4(2): WEIGHT THE TAIL ------------------------------------------
+                    # The 2026-08-22 measurement of this term was not a flat null: the MEDIAN
+                    # implied-burden error halved (11.6% -> 5.7%) while the TAIL did not move
+                    # (p90 28.3% -> 32.2%, max 90.9% unchanged).  `smooth_l1` is linear in the
+                    # tail, and one vessel per step means a linear loss weights a 90%-wrong
+                    # vessel no more than a 5%-wrong one.  `sq` is superlinear, so the vessels
+                    # that are actually broken dominate the gradient; `cvar` is the explicit
+                    # form -- apply the term ONLY to vessels currently in the worst `q` tail,
+                    # tracked by a running quantile of the per-vessel error.
+                    e_ = torch.log1p(k_soft) - torch.log1p(k_true)
+                    if agg == "sq":
+                        term = e_ * e_
+                    elif agg == "cvar":
+                        thr = _burden_cvar_state.get("thr", 0.0)
+                        term = (e_ * e_) if float(e_.abs()) >= thr else e_ * 0.0
+                        _burden_cvar_update(float(e_.abs()),
+                                            float(getattr(args, "burden_cvar_q", 0.5)))
+                    else:
+                        term = torch.nn.functional.smooth_l1_loss(
+                            torch.log1p(k_soft), torch.log1p(k_true))
+                    bparts.append(mult * term)
+                if bparts:
+                    loss = loss + bw * torch.stack(bparts).mean()
+
+            # --- 3.4(1): CONSTRAIN THE SHAPE, NOT THE COUNT --------------------------------
+            # The invariant that breaks across vessels is the SCALE of the score field, not
+            # its burden: `comsol032`'s off-wall GT sits at score 0.1156 while `comsol014`'s
+            # no-GT tail reaches 0.8551, so one cohort cut cannot serve both (MODEL_REVIEW
+            # 8f.2).  This penalises each vessel's within-domain logit SPREAD toward a running
+            # cohort reference, and deliberately leaves the MEAN free -- constraining the mean
+            # too would standardise the field, which makes a fixed cut select a fixed quantile
+            # and therefore an equal burden fraction on every vessel.  Burden ranges 11 to 193
+            # nodes here, so that is the physics-anchored-budget class this project rejects
+            # (`SEALED_SPLIT` rule 2).  Spread only: shape comparable, burden free.
+            #
+            # The reference is an EMA over the vessels seen so far, i.e. DATA, not a fitted
+            # parameter.  `shape_w = 0` reproduces the shipped objective exactly.
+            sw = float(getattr(args, "shape_w", 0.0))
+            if sw > 0:
+                sparts = []
+                for dom in (("off",) if off_only else ("wall", "off")):
+                    d_ = g[dom] > 0.5
+                    if int(d_.sum()) < 32:
+                        continue
+                    sd_ = logit[d_].std()
+                    # `.detach()` is the intent, not a warning fix: the EMA reference is a
+                    # constant TARGET assembled from the cohort, and gradient must flow only
+                    # through this vessel's own spread.  Backpropagating into the reference
+                    # would let the model satisfy the constraint by moving the target.
+                    ref = _shape_ref_get(dom, float(sd_.detach()))
+                    sparts.append((torch.log1p(sd_) - float(np.log1p(ref))) ** 2)
+                if sparts:
+                    loss = loss + sw * torch.stack(sparts).mean()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            sched.step()
+    model.eval()
+
+    @torch.no_grad()
+    def predict(anchor):
+        g = build_graph(cache[anchor], mu, sd, dev_t, need_fb=rounds > 1, adv_fb=adv_fb,
+                        iso=iso)
+        logit, _ = rollout(model, g, rounds, adv_fb, phys_seed)
+        return torch.sigmoid(logit).cpu().numpy()
+
+    @torch.no_grad()
+    def predict_reg(anchor):
+        """The REGRESSION head's ``log1p(Mat/crit)``, which no readout has ever used.
+
+        GT clot *is* ``{Mat >= crit}`` (PHASE7 10.1), so this head predicts the physical
+        quantity the label is a threshold on, while the classifier predicts the label.
+        `docs/PHASE9_ML.md` 13.1 measured the two and the regression head ranks GT `Mat`
+        slightly *better* (0.619 against the classifier's 0.601) -- and then only the
+        classifier was ever read out.  Saved so the readout can use both.
+        """
+        g = build_graph(cache[anchor], mu, sd, dev_t, need_fb=rounds > 1, adv_fb=adv_fb,
+                        iso=iso)
+        _, reg = rollout(model, g, rounds, adv_fb, phys_seed)
+        return reg.cpu().numpy()
+
+    predict.model = model          # for checkpointing (scripts/promote_clot_gnn.py)
+    predict.norm = (mu, sd)
+    predict.reg = predict_reg
+    return predict
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--epochs", type=int, default=250)
+    ap.add_argument("--dim", type=int, default=96)
+    ap.add_argument("--layers", type=int, default=6)
+    ap.add_argument("--drop", type=float, default=0.1)
+    ap.add_argument("--lr", type=float, default=3e-3)
+    ap.add_argument("--wd", type=float, default=1e-4)
+    ap.add_argument("--pos-weight", type=float, default=30.0)
+    ap.add_argument("--reg-w", type=float, default=1.0)
+    ap.add_argument("--metric-w", type=float, default=2.0)
+    ap.add_argument("--metric-start", type=float, default=0.3)
+    ap.add_argument("--rounds", type=int, default=1)
+    ap.add_argument("--metric", default="legacy", choices=["legacy", "severity"],
+                    help="which score the soft loss imitates")
+    ap.add_argument("--folds", type=int, default=4)
+    ap.add_argument("--lovo", action="store_true")
+    ap.add_argument("--seeds", type=int, default=1)
+    ap.add_argument("--tag", default="")
+    ap.add_argument("--flow", default="gt")
+    ap.add_argument("--save-scores", default="")
+    args = ap.parse_args()
+
+    dev_t = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cache = attach_physics(load_cache(args.flow))
+    fit, dev = splits(cache)
+    bench = Bench(cache, fit, dev)
+    print("[i] dev=%s FIT=%d DEV=%d ep=%d dim=%d L=%d mw=%.1f pw=%.0f seeds=%d"
+          % (dev_t, len(fit), len(dev), args.epochs, args.dim, args.layers,
+             args.metric_w, args.pos_weight, args.seeds), flush=True)
+
+    folds = ([[a] for a in fit] if args.lovo
+             else [list(fit[i::args.folds]) for i in range(args.folds)])
+    rows, t0, all_scores = {}, time.time(), {}
+    for k, held in enumerate(folds):
+        tr = [a for a in fit if a not in held]
+        sc = {}
+        for s in range(args.seeds):
+            predict = train_one(tr, cache, args, dev_t, seed=s)
+            for a in tr + held:
+                sc[a] = sc.get(a, 0.0) + predict(a) / args.seeds
+        th = pick_readout(bench, sc, tr, GRID)
+        for a in held:
+            rows[a] = bench.row(a, apply_readout(cache[a], sc[a], th))
+            all_scores[a] = sc[a]
+        print("   fold %d/%d th=(%.2f,%.2f,%.2f,%.2f) %s (%.0fs)"
+              % (k + 1, len(folds), *th,
+                 " ".join("%s w%.3f o%s" % (a[-3:], rows[a]["wall"],
+                          ("%.3f" % rows[a]["off"]) if rows[a]["off"] == rows[a]["off"] else "-")
+                          for a in held), time.time() - t0), flush=True)
+
+    sc = {}
+    for s in range(args.seeds):
+        predict = train_one(fit, cache, args, dev_t, seed=s)
+        for a in fit + dev:
+            sc[a] = sc.get(a, 0.0) + predict(a) / args.seeds
+    th = pick_readout(bench, sc, fit, GRID)
+    for a in dev:
+        rows[a] = bench.row(a, apply_readout(cache[a], sc[a], th))
+        all_scores[a] = sc[a]
+    summ = bench.summarise(rows)
+    tag = "gnn" + (("/" + args.tag) if args.tag else "")
+    print(banner(tag, summ), " (%.0fs)" % (time.time() - t0), flush=True)
+    for a in sorted(rows):
+        r = rows[a]
+        print("      %-12s wall %.4f off %6s" %
+              (a, r["wall"], ("%.4f" % r["off"]) if r["off"] == r["off"] else " n/a"), flush=True)
+    log_result(tag, summ, dict(epochs=args.epochs, dim=args.dim, layers=args.layers,
+                               drop=args.drop, lr=args.lr, pos_weight=args.pos_weight,
+                               reg_w=args.reg_w, metric_w=args.metric_w, seeds=args.seeds,
+                               rounds=args.rounds,
+                               folds=("lovo" if args.lovo else args.folds), th=list(th)))
+    if args.save_scores:
+        np.savez_compressed(args.save_scores, **{a: v for a, v in all_scores.items()})
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

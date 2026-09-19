@@ -1,0 +1,307 @@
+{
+  "id": "02_aneurysm_strength",
+  "title": "Straight channel: aneurysm strength vs research parameters",
+  "axis": "aneurysm_widening",
+  "description": "Aneurysm strength = fractional INCREASE of the vessel width at the aneurysm centre (1.00 = twice as wide), measured back from the built geometry to within 0.5 percentage points. Straight 12 mm vessel, Re=450, centred, with the trained aneurysm taper (pathology_std_frac 0.08 -> half-depth width 0.20 of length, as comsol040/047). The trained cohort reaches 0.99; points above it are extrapolation.",
+  "control": {
+    "geometry": {
+      "pathology_std_frac": 0.08
+    }
+  },
+  "arms": [
+    {
+      "name": "widen_0.000",
+      "axis_value": 0.0,
+      "geometry": {
+        "aneurysm_widening": 0.0
+      }
+    },
+    {
+      "name": "widen_0.100",
+      "axis_value": 0.1,
+      "geometry": {
+        "aneurysm_widening": 0.1
+      }
+    },
+    {
+      "name": "widen_0.200",
+      "axis_value": 0.2,
+      "geometry": {
+        "aneurysm_widening": 0.2
+      }
+    },
+    {
+      "name": "widen_0.300",
+      "axis_value": 0.3,
+      "geometry": {
+        "aneurysm_widening": 0.3
+      }
+    },
+    {
+      "name": "widen_0.400",
+      "axis_value": 0.4,
+      "geometry": {
+        "aneurysm_widening": 0.4
+      }
+    },
+    {
+      "name": "widen_0.425",
+      "axis_value": 0.425,
+      "geometry": {
+        "aneurysm_widening": 0.425
+      }
+    },
+    {
+      "name": "widen_0.450",
+      "axis_value": 0.45,
+      "geometry": {
+        "aneurysm_widening": 0.45
+      }
+    },
+    {
+      "name": "widen_0.45625",
+      "axis_value": 0.45625,
+      "geometry": {
+        "aneurysm_widening": 0.45625
+      }
+    },
+    {
+      "name": "widen_0.4625",
+      "axis_value": 0.4625,
+      "geometry": {
+        "aneurysm_widening": 0.4625
+      }
+    },
+    {
+      "name": "widen_0.46875",
+      "axis_value": 0.46875,
+      "geometry": {
+        "aneurysm_widening": 0.46875
+      }
+    },
+    {
+      "name": "widen_0.475",
+      "axis_value": 0.475,
+      "geometry": {
+        "aneurysm_widening": 0.475
+      }
+    },
+    {
+      "name": "widen_0.500",
+      "axis_value": 0.5,
+      "geometry": {
+        "aneurysm_widening": 0.5
+      }
+    },
+    {
+      "name": "widen_0.525",
+      "axis_value": 0.525,
+      "geometry": {
+        "aneurysm_widening": 0.525
+      }
+    },
+    {
+      "name": "widen_0.550",
+      "axis_value": 0.55,
+      "geometry": {
+        "aneurysm_widening": 0.55
+      }
+    },
+    {
+      "name": "widen_0.575",
+      "axis_value": 0.575,
+      "geometry": {
+        "aneurysm_widening": 0.575
+      }
+    },
+    {
+      "name": "widen_0.600",
+      "axis_value": 0.6,
+      "geometry": {
+        "aneurysm_widening": 0.6
+      }
+    },
+    {
+      "name": "widen_0.625",
+      "axis_value": 0.625,
+      "geometry": {
+        "aneurysm_widening": 0.625
+      }
+    },
+    {
+      "name": "widen_0.650",
+      "axis_value": 0.65,
+      "geometry": {
+        "aneurysm_widening": 0.65
+      }
+    },
+    {
+      "name": "widen_0.675",
+      "axis_value": 0.675,
+      "geometry": {
+        "aneurysm_widening": 0.675
+      }
+    },
+    {
+      "name": "widen_0.700",
+      "axis_value": 0.7,
+      "geometry": {
+        "aneurysm_widening": 0.7
+      }
+    },
+    {
+      "name": "widen_0.725",
+      "axis_value": 0.725,
+      "geometry": {
+        "aneurysm_widening": 0.725
+      }
+    },
+    {
+      "name": "widen_0.750",
+      "axis_value": 0.75,
+      "geometry": {
+        "aneurysm_widening": 0.75
+      }
+    },
+    {
+      "name": "widen_0.775",
+      "axis_value": 0.775,
+      "geometry": {
+        "aneurysm_widening": 0.775
+      }
+    },
+    {
+      "name": "widen_0.800",
+      "axis_value": 0.8,
+      "geometry": {
+        "aneurysm_widening": 0.8
+      }
+    },
+    {
+      "name": "widen_0.825",
+      "axis_value": 0.825,
+      "geometry": {
+        "aneurysm_widening": 0.825
+      }
+    },
+    {
+      "name": "widen_0.850",
+      "axis_value": 0.85,
+      "geometry": {
+        "aneurysm_widening": 0.85
+      }
+    },
+    {
+      "name": "widen_0.875",
+      "axis_value": 0.875,
+      "geometry": {
+        "aneurysm_widening": 0.875
+      }
+    },
+    {
+      "name": "widen_0.900",
+      "axis_value": 0.9,
+      "geometry": {
+        "aneurysm_widening": 0.9
+      }
+    },
+    {
+      "name": "widen_0.925",
+      "axis_value": 0.925,
+      "geometry": {
+        "aneurysm_widening": 0.925
+      }
+    },
+    {
+      "name": "widen_0.950",
+      "axis_value": 0.95,
+      "geometry": {
+        "aneurysm_widening": 0.95
+      }
+    },
+    {
+      "name": "widen_0.975",
+      "axis_value": 0.975,
+      "geometry": {
+        "aneurysm_widening": 0.975
+      }
+    },
+    {
+      "name": "widen_1.000",
+      "axis_value": 1.0,
+      "geometry": {
+        "aneurysm_widening": 1.0
+      }
+    },
+    {
+      "name": "widen_1.100",
+      "axis_value": 1.1,
+      "geometry": {
+        "aneurysm_widening": 1.1
+      }
+    },
+    {
+      "name": "widen_1.200",
+      "axis_value": 1.2,
+      "geometry": {
+        "aneurysm_widening": 1.2
+      }
+    },
+    {
+      "name": "widen_1.300",
+      "axis_value": 1.3,
+      "geometry": {
+        "aneurysm_widening": 1.3
+      }
+    },
+    {
+      "name": "widen_1.400",
+      "axis_value": 1.4,
+      "geometry": {
+        "aneurysm_widening": 1.4
+      }
+    },
+    {
+      "name": "widen_1.500",
+      "axis_value": 1.5,
+      "geometry": {
+        "aneurysm_widening": 1.5
+      }
+    },
+    {
+      "name": "widen_1.600",
+      "axis_value": 1.6,
+      "geometry": {
+        "aneurysm_widening": 1.6
+      }
+    },
+    {
+      "name": "widen_1.700",
+      "axis_value": 1.7,
+      "geometry": {
+        "aneurysm_widening": 1.7
+      }
+    },
+    {
+      "name": "widen_1.800",
+      "axis_value": 1.8,
+      "geometry": {
+        "aneurysm_widening": 1.8
+      }
+    },
+    {
+      "name": "widen_1.900",
+      "axis_value": 1.9,
+      "geometry": {
+        "aneurysm_widening": 1.9
+      }
+    },
+    {
+      "name": "widen_2.000",
+      "axis_value": 2.0,
+      "geometry": {
+        "aneurysm_widening": 2.0
+      }
+    }
+  ]
+}

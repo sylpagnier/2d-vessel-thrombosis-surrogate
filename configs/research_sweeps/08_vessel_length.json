@@ -1,0 +1,11 @@
+{
+  "id": "08_vessel_length",
+  "title": "Vessel length vs research parameters",
+  "axis": "base_length",
+  "description": "Straight mid-width vessel; sweep axial length at Re=450.",
+  "arms": [
+    {"name": "len_0.05", "axis_value": 0.05, "geometry": {"base_length": 0.05}},
+    {"name": "len_0.10", "axis_value": 0.1, "geometry": {"base_length": 0.1}},
+    {"name": "len_0.15", "axis_value": 0.15, "geometry": {"base_length": 0.15}}
+  ]
+}

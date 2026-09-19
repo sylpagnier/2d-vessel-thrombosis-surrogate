@@ -1,0 +1,12 @@
+{
+  "id": "10_pathology_length",
+  "title": "Pathology axial extent vs research parameters",
+  "axis": "pathology_std_frac",
+  "description": "Fixed 50% stenosis; narrow / default / broad Gaussian pathology.",
+  "control": {"geometry_preset": "stenosis_mid"},
+  "arms": [
+    {"name": "narrow", "axis_value": 0.03, "geometry": {"pathology_std_frac": 0.03}},
+    {"name": "default", "axis_value": 0.06, "geometry": {"pathology_std_frac": 0.06}},
+    {"name": "broad", "axis_value": 0.12, "geometry": {"pathology_std_frac": 0.12}}
+  ]
+}

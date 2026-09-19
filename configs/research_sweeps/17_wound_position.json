@@ -1,0 +1,12 @@
+{
+  "id": "17_wound_position",
+  "title": "Wound axial position vs research parameters",
+  "axis": "wound_position_frac",
+  "description": "Fixed wound width 0.15; move wound proximal / mid / distal on a straight vessel.",
+  "control": {"geometry_preset": "wound_standard_width"},
+  "arms": [
+    {"name": "proximal", "axis_value": 0.2, "geometry": {"wound_position_frac": 0.2}},
+    {"name": "mid", "axis_value": 0.5, "geometry": {"wound_position_frac": 0.5}},
+    {"name": "distal", "axis_value": 0.8, "geometry": {"wound_position_frac": 0.8}}
+  ]
+}

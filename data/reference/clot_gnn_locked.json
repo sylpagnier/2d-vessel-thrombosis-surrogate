@@ -1,0 +1,135 @@
+{
+  "name": "clot_ml_final_0",
+  "kind": "unified_v0",
+  "path": "outputs/clot_ml/locked/clot_ml_final_0",
+  "manifest": "outputs/clot_ml/locked/clot_ml_final_0/manifest.json",
+  "promoted_at": "2026-09-04T03:06:20Z",
+  "docs": "docs/WOUND_PROGRESS.md",
+  "supersedes": "clot_ml_final_w",
+  "flow": "fem",
+  "v0": {
+    "base_model": "clot_ml_final_w",
+    "ap_renewal_scale": 1.0,
+    "da_scale_auto": 123.0,
+    "washout": true,
+    "replace_att": 0.23,
+    "replace_depth": 1,
+    "att_beta": 0.5,
+    "replace_scope": "wound_region",
+    "ap_residual": null
+  },
+  "readout": {
+    "wall": "resid_adapt",
+    "off": "resid_adapt",
+    "lag_anchor": "ode",
+    "burden_gate": 15,
+    "wake_ode": false,
+    "stall_ode": false,
+    "flow": "fem"
+  },
+  "scores_strict_cv": {
+    "protocol": "geometry-stratified 5-fold over the 36-vessel pool; every readout scalar selected on the OUT-OF-FOLD scores of vessels outside the held-out fold (scripts/eval_expected_score_readout.py --tags dc_fem_c0)",
+    "flow": "fem",
+    "cohort": "27 clot-carrying + 9 clot-free; SEALED 007/013/031/043 never in the pool",
+    "metric": "`guiding` -- the default deploy score (`species_continuous_clout_score_mode()`), and the one every other evaluation here reports. `severity` is Deploy Score v2, more forgiving; it is what the readout family was SELECTED on and the arm ordering is the same under both. Never mix them (DEPLOYCLOT.md 0 and 22).",
+    "shipped_readout": {
+      "wall": 0.8667,
+      "off": 0.6369
+    },
+    "shipped_readout_severity": {
+      "wall": 0.9331,
+      "off": 0.8221
+    },
+    "per_vessel_oracle_cut": {
+      "wall": 0.8872,
+      "off": 0.7272
+    },
+    "readout_gap": {
+      "wall": 0.0205,
+      "off": 0.0903,
+      "note": "Headroom left in the CUT, against the best single per-vessel threshold. Both are inside the noise floor. Seven label-free per-vessel cut rules were measured on this pool and none beats `resid` by more than noise -- DEPLOYCLOT.md 20."
+    },
+    "noise_floor": {
+      "wall": 0.024,
+      "off": 0.074,
+      "note": "config spread of one arm on this cohort. Per-vessel spread is far larger: median 0.042 wall / 0.112 off."
+    }
+  },
+  "scores_wound": {
+    "protocol": "scripts/eval_clot_ml_0.py --flow fem; n=6; the depth rule's (beta, depth) picked LEAVE-ONE-VESSEL-OUT (scripts/diag_wound_offwall_attenuation.py)",
+    "n_vessels": 6,
+    "final": {
+      "wall": 0.8999,
+      "w_reg": 0.9271,
+      "w_lum": 0.8728,
+      "far": 0.2819
+    },
+    "lovo_held_out": {
+      "w_lum": 0.8611,
+      "w_reg": 0.927,
+      "note": "what the rule scores on the vessel its parameters were NOT chosen on; the `final` block above is the deployed arm on the full cohort."
+    },
+    "non_wound_is_bit_identical": {
+      "vessels": [
+        "comsol003",
+        "comsol004",
+        "comsol005",
+        "comsol006",
+        "comsol008",
+        "comsol009",
+        "comsol011",
+        "comsol012",
+        "comsol015",
+        "comsol016",
+        "comsol018",
+        "comsol019",
+        "comsol020",
+        "comsol021",
+        "comsol024",
+        "comsol025",
+        "comsol028",
+        "comsol029",
+        "comsol032",
+        "comsol035",
+        "comsol036",
+        "comsol037",
+        "comsol001",
+        "comsol010",
+        "comsol014",
+        "comsol045",
+        "comsol046",
+        "comsol047",
+        "comsol048",
+        "comsol039",
+        "comsol040",
+        "comsol041",
+        "comsol042",
+        "comsol044"
+      ],
+      "wall_delta": 0.0,
+      "off_delta": 0.0,
+      "note": "the wound depth rule is unreachable on a pack with no wound mask -- asserted at promotion and pinned by src/tests/test_clot_ml_0.py"
+    }
+  },
+  "scores_sealed": {
+    "protocol": "THE ONE FINAL READ, taken 2026-09-03 on DeployClot_0 and never repeated. These four vessels are spent: they may not be used to select anything.",
+    "n_vessels": 4,
+    "metric": "`evaluate.domain_score` -- the DEPLOY metric. It is NOT the severity metric the strictly-nested CV table reports; the two run 0.19-0.22 apart off-wall (DEPLOYCLOT.md 22).",
+    "final": {
+      "wall": 0.9572,
+      "off": 0.618
+    },
+    "carries_over_because": "every change since that read is inert on a pack with no wound mask, and no SEALED vessel has one, so these numbers hold for this artifact WITHOUT a second read.",
+    "off_wall_vs_cohort": {
+      "severity": {
+        "cohort": 0.8353,
+        "sealed": 0.839
+      },
+      "deploy": {
+        "cohort": 0.6429,
+        "sealed": 0.618
+      },
+      "note": "SEALED matches the training cohort on BOTH metrics -- the difference is inside the +/-0.074 off-wall noise floor either way. There is no SEALED off-wall shortfall."
+    }
+  }
+}

@@ -1,0 +1,1154 @@
+import os
+import json
+import torch
+import numpy as np
+import pandas as pd
+import meshio
+from pathlib import Path
+from scipy.spatial import cKDTree
+from torch_geometric.data import Data
+from src.utils.console_progress import progress
+import re
+from src.config import NodeFeat, VesselConfig, PhysicsConfig, BiochemConfig, biochem_comsol_time_cap_s
+from src.utils.kinematics_paths import BIOCHEM_ANCHOR_KINE_RHEOLOGY, kinematics_anchor_graph_dir
+from src.utils.paths import get_project_root
+from src.data_gen.lib.node_feature_assembly import (
+    build_biochem_bc_x_tensor,
+    kinematics_uv_prior_max,
+)
+from src.utils.channel_schema import attach_comsol_anchor_graph_metadata
+from src.data_gen.lib.centerline_utils import write_anchor_sidecar_from_masks
+from src.data_gen.lib.kinematics_graph_builder import (
+    build_kinematics_graph_from_comsol_steady,
+    resolve_d_bar_si_from_sidecar_or_inlet,
+)
+from src.utils.units import MESH_UNIT_CM, assert_mesh_unit
+from src.data_gen.lib.boundary_snap import boundary_snap_tol_m
+
+# Former environment overrides that nothing in the tree ever set and no doc
+# named, so each always resolved to the value below.  Kept as named constants
+# rather than inlined literals so the value stays greppable and explainable.
+KINE_ANCHOR_PRIOR_MODE = "analytic"
+
+
+# Inlet/outlet/wall must land on a real mesh line. Wound is optional on nowound packs.
+CSV_MATCH_RATE_MIN = 0.30
+MIN_REQUIRED_VERTEX_HITS = 5
+
+def validate_graph_physical_integrity(data: Data, stem: str, avg_flux_imbalance: float) -> None:
+    """Sanity check that the exported graph fields fall within physical boundaries."""
+    # 1. Mass Flux Imbalance Check
+    if abs(avg_flux_imbalance) > 5.0:
+        raise ValueError(
+            f"[{stem}] CRITICAL MASS FLUX IMBALANCE: {avg_flux_imbalance:.2%}. "
+            f"This is highly non-physical and usually indicates that variable columns are swapped "
+            f"or misaligned in the COMSOL spreadsheet export. Expected < 500%."
+        )
+
+    # 2. Velocity Bounds Check (ND fields at index 0 and 1 of y)
+    u_max_nd = float(data.y[:, :, 0].abs().max().item())
+    v_max_nd = float(data.y[:, :, 1].abs().max().item())
+    if u_max_nd > 100.0 or v_max_nd > 100.0:
+        raise ValueError(
+            f"[{stem}] CRITICAL VELOCITY OUT OF BOUNDS: u_max_nd={u_max_nd:.3f}, v_max_nd={v_max_nd:.3f}. "
+            f"Expected ND velocity magnitudes < 100.0 (relative to u_ref)."
+        )
+
+    # 3. Viscosity Bounds Check (ND field at index 3 of y)
+    from src.config import PhysicsConfig, STATE_CHANNEL_MU_EFF_ND
+    phys_cfg = PhysicsConfig()
+    mu_si = phys_cfg.viscosity_nd_to_si(data.y[:, :, STATE_CHANNEL_MU_EFF_ND])
+    mu_min = float(mu_si.min().item())
+    mu_max = float(mu_si.max().item())
+    if mu_min <= 0.0:
+        raise ValueError(
+            f"[{stem}] CRITICAL VISCOSITY ERROR: Minimum viscosity is non-positive ({mu_min:.6g} Pa*s). "
+            f"Expected positive viscosity values."
+        )
+    if mu_max > 100.0:
+        raise ValueError(
+            f"[{stem}] CRITICAL VISCOSITY ERROR: Maximum viscosity exceeds limit ({mu_max:.3f} Pa*s). "
+            f"Expected viscosity < 100.0 Pa*s."
+        )
+
+    # 4. Species Concentration Bounds Check (log1p transformed at index 4-15 of y)
+    species_y = data.y[:, :, 4:16]
+    species_min = float(species_y.min().item())
+    species_max = float(species_y.max().item())
+    if species_min < -1e-5:
+        raise ValueError(
+            f"[{stem}] CRITICAL SPECIES ERROR: Negative concentration detected ({species_min:.6g}). "
+            f"Expected log1p non-negative values."
+        )
+    if species_max > 30.0:
+        raise ValueError(
+            f"[{stem}] CRITICAL SPECIES ERROR: Extreme concentration spike detected ({species_max:.3f}). "
+            f"Expected log1p values < 30.0."
+        )
+
+
+class ComsolAnchorDataExtractor:
+    """
+    Extracts and processes Eulerian node-wise COMSOL data into PyTorch Geometric Data objects.
+
+    State ``y`` layout: indices 0–2 are u, v, p (non-dimensional); channel index 3
+    (``STATE_CHANNEL_MU_EFF_ND`` in ``src.config``) is ``mu_effective`` via
+    ``PhysicsConfig.viscosity_si_to_nd`` (canonical cross-phase ND viscosity reference).
+
+    Default entry: ``python -m src.data_gen.lib.extract_biochem_comsol_data`` pulls solved
+    ``comsol_models/phase2_nowound_XXX.mph`` (``comsolXXX``) and
+    ``comsol_models/phase2_wound_XXX.mph`` (``wound_comsolXXX``) via ``pull_comsol_exports``,
+    then builds graphs. The two families never share a stem. Manual COMSOL txt only with
+    ``--no-from-comsol``.
+
+    --- Manual COMSOL Export Instructions ---
+    Alternatively, export the exact node-wise data from COMSOL to match the .msh topology.
+    IMPORTANT: export from ``Component 1 -> Mesh 1`` geometry coordinates (the solved component mesh),
+    not directly from the raw Mesh Import object, otherwise node coordinates/order can drift and mapping fails.
+
+    1. In COMSOL: Go to Results > Export > Data.
+    2. Main Domain: Export domain nodes to `data/processed/cfd_results_biochem/<stem>.txt`
+       Headers must map exactly to:
+       x, y, u, v, p, mu_effective, rp, ap, apr, aps, PT, th, at, fg, fi, M, Mas, Mat
+    3. Boundaries: Export Edge 2D coordinates (x, y) with "Time Selection: Last" to:
+       - <stem>_inlet.txt
+       - <stem>_outlet.txt
+       - <stem>_wall.txt
+    ----------------------------------
+    """
+
+    def __init__(self, phase="biochem_anchors", raw_dir=None, label_dir=None, proc_dir=None):
+        self.root = get_project_root()
+        self.vessel_cfg = VesselConfig(phase=phase)
+        self.phys_cfg = PhysicsConfig(phase=phase)
+
+        # Directory handling
+        self.raw_dir = Path(raw_dir) if raw_dir else self.root / self.vessel_cfg.mesh_input_dir
+        self.label_dir = Path(label_dir) if label_dir else self.root / self.vessel_cfg.output_dir
+        self.proc_dir = Path(proc_dir) if proc_dir else self.root / self.vessel_cfg.graph_output_dir
+        self.proc_dir.mkdir(parents=True, exist_ok=True)
+        self.kine_anchor_dir = kinematics_anchor_graph_dir(rheology=BIOCHEM_ANCHOR_KINE_RHEOLOGY)
+        self.kine_anchor_dir.mkdir(parents=True, exist_ok=True)
+
+        # Dictionary mapping exact COMSOL export names to standardized internal names
+        self.species_map = {
+            'rp': 'RP', 'ap': 'AP', 'apr': 'APR', 'aps': 'APS',
+            'PT': 'PT', 'th': 'T', 'at': 'AT', 'fg': 'FG',
+            'fi': 'FI', 'M': 'M', 'Mas': 'Mas', 'Mat': 'Mat'
+        }
+
+        self.csv_fields = [ 'x', 'y', 'u', 'v', 'p', 'mu_effective' ] + list(self.species_map.keys())
+
+    def _precompute_wls(self, edge_index, num_nodes, pos_tensor):
+        """Computes the 2nd Order Polynomial Basis, WLS Inverse, and Condition Number."""
+        row, col = edge_index
+        pos_diff = pos_tensor[ col, :2 ] - pos_tensor[ row, :2 ]
+        dx, dy = pos_diff[ :, 0 ], pos_diff[ :, 1 ]
+        dist_sq = dx ** 2 + dy ** 2 + 1e-8
+
+        V = torch.stack([ dx, dy, 0.5 * dx ** 2, dx * dy, 0.5 * dy ** 2 ], dim=1)
+        W = 1.0 / dist_sq
+
+        V_unsqueezed = V.unsqueeze(2)
+        V_T_unsqueezed = V.unsqueeze(1)
+        M_e = W.view(-1, 1, 1) * torch.bmm(V_unsqueezed, V_T_unsqueezed)
+
+        M_e_flat = M_e.view(-1, 25)
+        out = torch.zeros((num_nodes, 25), dtype=M_e_flat.dtype, device=M_e_flat.device)
+        M_flat = out.scatter_add_(0, row.view(-1, 1).expand_as(M_e_flat), M_e_flat)
+
+        M = M_flat.view(num_nodes, 5, 5)
+
+        # RGP_DEQ_REPAIR_PLAN.md D5: truncate what the stencil cannot resolve instead of
+        # ridging it into the inverse.  See `mesh_wls.rank_aware_pinv_sym` for why the old
+        # `pinv(M + 1e-6*I)` is scale-dependent and blows up on collinear (P2 mid-side) rows.
+        from src.data_gen.lib.mesh_wls import rank_aware_pinv_sym
+
+        cond_numbers = torch.linalg.cond(M)
+        finite_cond = cond_numbers[torch.isfinite(cond_numbers)]
+        max_cond = float(finite_cond.max().item()) if finite_cond.numel() else float("inf")
+
+        M_inv = rank_aware_pinv_sym(M)
+        return V, W, M_inv.squeeze(1), max_cond
+
+    def _precompute_sparse_operators(self, edge_index, num_nodes, M_inv, V, W):
+        """Converts WLS polynomial weights into global sparse matrices."""
+        from src.data_gen.lib.mesh_wls import wls_sparse_operators
+
+        return wls_sparse_operators(edge_index, num_nodes, M_inv, V, W)
+
+    def _compute_gradient_wls(self, f_node, row, col, W, V, M_inv, num_nodes):
+        """Generic WLS gradient computer for any scalar field f_node."""
+        df = f_node[ col ] - f_node[ row ]
+        sum_W_V_df = torch.zeros((num_nodes, 5), dtype=torch.float32, device=f_node.device)
+        integrand = W.unsqueeze(1) * V * df.unsqueeze(1)
+        sum_W_V_df.scatter_add_(0, row.unsqueeze(1).expand(-1, 5), integrand)
+        grad_f = torch.bmm(M_inv, sum_W_V_df.unsqueeze(2)).squeeze(2)
+        return grad_f[ :, :2 ]
+
+    def _compute_boundary_normals(self, edge_index, boundary_mask, pos_tensor, num_nodes):
+        """Computes geometric unit normals for any boundary mask using adjacent edges."""
+        normals = torch.zeros((num_nodes, 2), dtype=torch.float32, device=pos_tensor.device)
+
+        row, col = edge_index
+        # Use unique undirected boundary segments only; duplicated edge directions cancel exactly.
+        b_edges = boundary_mask[ row ] & boundary_mask[ col ] & (row < col)
+
+        r = row[ b_edges ]
+        c = col[ b_edges ]
+
+        # Compute edge vectors (dx, dy)
+        edge_vecs = pos_tensor[ c ] - pos_tensor[ r ]
+
+        # Perpendicular vector (-dy, dx)
+        edge_normals = torch.stack([ -edge_vecs[ :, 1 ], edge_vecs[ :, 0 ] ], dim=1)
+
+        # Orient normals consistently toward mesh center (inward) to avoid random sign flips.
+        center_pt = pos_tensor.mean(dim=0)
+        midpoints = (pos_tensor[ r ] + pos_tensor[ c ]) / 2.0
+        inward_vecs = center_pt - midpoints
+        dot_prods = (edge_normals * inward_vecs).sum(dim=1, keepdim=True)
+        edge_normals = torch.where(dot_prods < 0, -edge_normals, edge_normals)
+
+        # Accumulate normals at the respective nodes
+        normals.scatter_add_(0, r.unsqueeze(1).expand(-1, 2), edge_normals)
+        normals.scatter_add_(0, c.unsqueeze(1).expand(-1, 2), edge_normals)
+
+        # Normalize to create unit vectors
+        norm_mag = torch.linalg.norm(normals, dim=1, keepdim=True) + 1e-9
+        normals_unit = normals / norm_mag
+
+        return normals_unit
+
+    @staticmethod
+    def _empty_boundary_diagnostics(*, missing: bool = False) -> dict:
+        """Diagnostic dict returned when a boundary file is missing or empty."""
+        return {
+            "n_csv_unique": 0,
+            "n_vertex_hits": 0,
+            "n_csv_matched": 0,
+            "vertex_hit_rate": 0.0,
+            "csv_match_rate": 0.0,
+            "unmapped_ratio": 1.0 if missing else 0.0,
+            "d_median_m": float("nan"),
+            "d_p90_m": float("nan"),
+            "d_max_m": float("nan"),
+            "vertex_tol_m": float("nan"),
+            "p2_inferred": False,
+            "status": "missing" if missing else "empty",
+        }
+
+    def _load_spatial_mask(
+        self,
+        file_path,
+        tree,
+        num_nodes,
+        *,
+        mesh_edge_scale_m: float | None = None,
+        vertex_tol_m: float | None = None,
+        unit_floor_m: float = 1.0e-3,
+        required: bool = True,
+    ):
+        """Map COMSOL boundary coords to mesh-vertex indices, with health diagnostics.
+
+        Snap distance is ``boundary_snap_tol_m`` (0.55 * mesh edge, min 20 um) unless
+        ``vertex_tol_m`` is passed. That accepts slanted/curved inlets whose geometry
+        samples sit a fraction of an edge off the volume mesh (healthy COMSOL; the
+        old 10 um remap dropped them) and still rejects unit-frame bugs and sparse
+        Dirichlet lines.
+
+        Required boundaries (inlet/outlet/wall): missing, empty, csv_match_rate
+        below ``CSV_MATCH_RATE_MIN``, or fewer than ``MIN_REQUIRED_VERTEX_HITS``
+        unique mesh vertices are hard errors. Wound is optional on nowound packs.
+        """
+        mask = torch.zeros(num_nodes, dtype=torch.bool)
+        tol_m = (
+            float(vertex_tol_m)
+            if vertex_tol_m is not None
+            else boundary_snap_tol_m(mesh_edge_scale_m=mesh_edge_scale_m)
+        )
+
+        if not file_path.exists():
+            diag = self._empty_boundary_diagnostics(missing=True)
+            diag["vertex_tol_m"] = tol_m
+            if required:
+                raise ValueError(
+                    f"[ERR] {file_path.name}: required boundary file is missing."
+                )
+            return mask, diag
+
+        bnd_df = pd.read_csv(file_path, comment='%', sep=r'\s+', header=None)
+
+        bnd_coords = np.unique(bnd_df.iloc[:, -2:].values, axis=0) * self.phys_cfg.cm_to_m
+        n_unique = int(len(bnd_coords))
+        if n_unique == 0:
+            diag = self._empty_boundary_diagnostics(missing=False)
+            diag["vertex_tol_m"] = tol_m
+            if required:
+                raise ValueError(
+                    f"[ERR] {file_path.name}: required boundary file has no coordinates."
+                )
+            return mask, diag
+
+        distances, indices = tree.query(bnd_coords)
+        d_median = float(np.median(distances))
+        d_p90 = float(np.percentile(distances, 90))
+        d_max = float(distances.max())
+
+        if d_median > unit_floor_m:
+            raise ValueError(
+                f"[ERR] {file_path.name}: median nearest-vertex distance "
+                f"{d_median * 1e3:.3f} mm > {unit_floor_m * 1e3:.3f} mm. "
+                "Usually a unit / coordinate-frame mismatch (export cm vs mesh)."
+            )
+
+        matched = distances <= tol_m
+        n_csv_matched = int(np.count_nonzero(matched))
+        csv_match_rate = float(n_csv_matched) / float(n_unique)
+        valid_matches = indices[matched]
+        n_vertex_hits = int(len(np.unique(valid_matches))) if n_csv_matched else 0
+        vertex_hit_rate = float(n_vertex_hits) / float(n_unique)
+        unmapped_ratio = 1.0 - csv_match_rate
+
+        if n_csv_matched == 0:
+            raise ValueError(
+                f"[ERR] {file_path.name}: zero of {n_unique} COMSOL coords matched a "
+                f"mesh vertex within {tol_m * 1e6:.1f} um "
+                f"(nearest [{float(distances.min()) * 1e6:.1f}, {d_max * 1e6:.1f}] um). "
+                "Check that boundary exports use the same units (cm) as the mesh."
+            )
+
+        mask[valid_matches] = True
+
+        p2_inferred = False
+        if (
+            mesh_edge_scale_m is not None
+            and unmapped_ratio > 0.10
+            and csv_match_rate >= CSV_MATCH_RATE_MIN
+        ):
+            far = distances[~matched]
+            if far.size > 0:
+                far_median = float(np.median(far))
+                lo = 0.30 * mesh_edge_scale_m
+                hi = 0.70 * mesh_edge_scale_m
+                p2_inferred = lo <= far_median <= hi
+
+        unhealthy = csv_match_rate < CSV_MATCH_RATE_MIN or (
+            required and n_vertex_hits < MIN_REQUIRED_VERTEX_HITS
+        )
+        if unhealthy:
+            msg = (
+                f"[ERR] {file_path.name}: unhealthy boundary map -- "
+                f"csv_match_rate={csv_match_rate:.1%} ({n_csv_matched}/{n_unique} "
+                f"within {tol_m * 1e6:.0f} um), unique mesh vertices={n_vertex_hits} "
+                f"(min {MIN_REQUIRED_VERTEX_HITS} for required BCs), "
+                f"median residual {d_median * 1e6:.1f} um, max {d_max * 1e6:.1f} um."
+            )
+            if required:
+                raise ValueError(msg)
+            print(msg, flush=True)
+        elif p2_inferred:
+            far_median_um = (
+                float(np.median(distances[~matched])) * 1e6 if np.any(~matched) else 0.0
+            )
+            print(
+                f"[note] {file_path.name}: P2 export inferred -- "
+                f"{n_csv_matched}/{n_unique} csv matched, {n_vertex_hits} vertices, "
+                f"residual cluster at ~{far_median_um:.0f} um (~1/2 mesh edge "
+                f"{mesh_edge_scale_m * 1e6:.0f} um).",
+                flush=True,
+            )
+        elif unmapped_ratio > 0.10:
+            print(
+                f"[WARN] {file_path.name}: {unmapped_ratio:.1%} of boundary coords "
+                f"unmapped (median {d_median * 1e6:.1f} um, p90 "
+                f"{d_p90 * 1e6:.1f} um, max {d_max * 1e6:.1f} um); not a clean "
+                f"P2 pattern -- inspect the export.",
+                flush=True,
+            )
+
+        diagnostics = {
+            "n_csv_unique": n_unique,
+            "n_vertex_hits": n_vertex_hits,
+            "n_csv_matched": n_csv_matched,
+            "vertex_hit_rate": vertex_hit_rate,
+            "csv_match_rate": csv_match_rate,
+            "unmapped_ratio": unmapped_ratio,
+            "d_median_m": d_median,
+            "d_p90_m": d_p90,
+            "d_max_m": d_max,
+            "vertex_tol_m": tol_m,
+            "p2_inferred": p2_inferred,
+            "status": "ok" if not unhealthy else "low_coverage",
+        }
+        return mask, diagnostics
+
+    def _compute_analytic_inlet_mu_nd(self, mask_inlet, mesh_nodes, u_raw_si, v_raw_si):
+        """Compute analytical Carreau inlet viscosity from a Poiseuille-style profile."""
+        num_nodes = mesh_nodes.shape[0]
+        mu_inlet_nd = torch.zeros((num_nodes, 1), dtype=torch.float32)
+
+        inlet_idx = torch.where(mask_inlet)[0]
+        if inlet_idx.numel() < 2:
+            return mu_inlet_nd
+
+        inlet_coords = torch.tensor(mesh_nodes[inlet_idx.cpu().numpy()], dtype=torch.float32)
+        inlet_center = inlet_coords.mean(dim=0, keepdim=True)
+        r = torch.linalg.norm(inlet_coords - inlet_center, dim=1)
+        R = torch.max(r)
+        if torch.isclose(R, torch.tensor(0.0), atol=1e-12):
+            return mu_inlet_nd
+
+        inlet_speed = torch.sqrt(u_raw_si[inlet_idx] ** 2 + v_raw_si[inlet_idx] ** 2)
+        Umax = torch.max(inlet_speed)
+        gamma_dot = 2.0 * Umax * (r / (R ** 2 + 1e-12))
+
+        shear_term = 1.0 + (self.phys_cfg.lam * gamma_dot) ** self.phys_cfg.a
+        power = (self.phys_cfg.n - 1.0) / self.phys_cfg.a
+        mu_inlet_si = self.phys_cfg.mu_inf + (self.phys_cfg.mu_0 - self.phys_cfg.mu_inf) * (shear_term ** power)
+        mu_inlet_nd[inlet_idx, 0] = self.phys_cfg.viscosity_si_to_nd(mu_inlet_si)
+        return mu_inlet_nd
+
+    def load_comsol_trajectory(self, filepath):
+        """Parses a single 'wide-format' COMSOL Spreadsheet export."""
+
+        # 1. Read the header to extract the time steps dynamically
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+
+        header_line = ""
+        for line in lines:
+            if line.startswith('% x') and '@ t=' in line:
+                header_line = line
+                break
+
+        if not header_line:
+            raise ValueError(f"Could not find time-step header in {filepath.name}")
+
+        # Find all unique time values in the header
+        times = []
+        for match in re.finditer(r't=([0-9.]+)', header_line):
+            t_val = float(match.group(1))
+            if t_val not in times:
+                times.append(t_val)
+
+        times_arr = np.asarray(times, dtype=np.float64)
+        t_cap = biochem_comsol_time_cap_s()
+        if t_cap is None:
+            times = [float(x) for x in times_arr]
+        else:
+            valid_time_indices = times_arr <= float(t_cap)
+            n_kept = int(valid_time_indices.sum())
+            if n_kept == 0:
+                raise ValueError(
+                    f"No COMSOL export time steps <= t_cap={t_cap} s in {filepath.name!r}."
+                )
+            if n_kept < int(times_arr.size):
+                print(
+                    f"[i]  {filepath.name}: truncating COMSOL trajectory to "
+                    f"t <= {t_cap} s (kept {n_kept}/{int(times_arr.size)} steps).",
+                    flush=True,
+                )
+            times = [float(x) for x in times_arr[valid_time_indices]]
+
+        # 2. Load the numeric data (skipping comment lines)
+        df_full = pd.read_csv(filepath, comment='%', sep=r'\s+', header=None)
+
+        # 3. Parse the header line to map columns dynamically to variables for each time step
+        tokens = header_line.strip().split()
+        if len(tokens) < 3 or tokens[0] != '%' or tokens[1] != 'x' or tokens[2] != 'y':
+            raise ValueError(f"Unexpected header format in {filepath.name}: {header_line[:200]}")
+
+        # Map: (t_val, var_name) -> col_idx
+        col_mapping = {}
+        
+        # We start looking at tokens from index 3. They come in groups of 3: <name> @ t=<value>
+        for col_idx in range((len(tokens) - 3) // 3):
+            name = tokens[3 + col_idx * 3]
+            at_symbol = tokens[3 + col_idx * 3 + 1]
+            t_tag = tokens[3 + col_idx * 3 + 2]
+            
+            if at_symbol != '@' or not t_tag.startswith('t='):
+                continue
+                
+            try:
+                t_val = float(t_tag.split('=')[1])
+                # COMSOL can use 'spf.mu' or 'mu_effective'
+                if name == 'spf.mu':
+                    name = 'mu_effective'
+                col_mapping[(t_val, name)] = col_idx + 2
+            except (ValueError, IndexError):
+                continue
+
+        static_x = df_full.iloc[:, 0].copy()
+        static_y = df_full.iloc[:, 1].copy()
+
+        # Standard variables list in expected output order
+        target_fields = [
+            'u', 'v', 'p', 'mu_effective',
+            'rp', 'ap', 'apr', 'aps', 'PT', 'th', 'at', 'fg', 'fi', 'M', 'Mas', 'Mat'
+        ]
+
+        time_blocks = {}
+        for t_val in times:
+            df_step = pd.DataFrame(index=df_full.index)
+            
+            # Static coordinates
+            df_step['x'] = static_x
+            df_step['y'] = static_y
+            
+            # Find and map each field for this time value
+            for f in target_fields:
+                col_key = (t_val, f)
+                if col_key in col_mapping:
+                    df_step[f] = df_full.iloc[:, col_mapping[col_key]]
+                else:
+                    if f in ('x', 'y'):
+                        continue
+                    # Fallback lookup in case of floating-point comparison issues
+                    closest_time = min(col_mapping.keys(), key=lambda k: abs(k[0] - t_val))
+                    if abs(closest_time[0] - t_val) < 1e-4 and closest_time[1] == f:
+                        df_step[f] = df_full.iloc[:, col_mapping[closest_time]]
+                    else:
+                        raise KeyError(
+                            f"Could not find column for variable '{f}' at t={t_val} in {filepath.name}. "
+                            f"Available variables at this step: {[k[1] for k in col_mapping if abs(k[0] - t_val) < 1e-4]}"
+                        )
+            time_blocks[t_val] = df_step
+
+        return time_blocks
+
+    def pull_comsol_exports(
+        self,
+        stem: str,
+        *,
+        model_path: Path | None = None,
+        force: bool = False,
+    ) -> Path:
+        """Sample a solved ``.mph`` onto the anchor mesh and write ``cfd_results_biochem`` txt."""
+        from src.data_gen.lib.biochem_comsol_auto_export import pull_biochem_comsol_exports
+
+        return pull_biochem_comsol_exports(
+            stem,
+            label_dir=self.label_dir,
+            raw_dir=self.raw_dir,
+            model_path=model_path,
+            force=force,
+        )
+
+    def process_comsol_anchor(self, stem):
+        """
+        Full extraction pipeline with Physics-Informed Sanity Checks and
+        Training Metadata generation.
+        """
+        from src.data_gen.lib.biochem_comsol_auto_export import (
+            parse_biochem_extract_stem,
+            resolve_biochem_comsol_model_path,
+        )
+
+        ref = parse_biochem_extract_stem(stem)
+        if ref is not None:
+            stem = ref.stem
+        biochem_variant = ref.variant if ref is not None else "unknown"
+        source_mph = resolve_biochem_comsol_model_path(stem)
+        source_mph_name = source_mph.name if source_mph is not None else None
+
+        # 1. Path Setup and Mesh Loading
+        from src.data_gen.lib.centerline_utils import resolve_anchor_mesh_path
+
+        msh_path = resolve_anchor_mesh_path(self.raw_dir, stem)
+        if msh_path is None:
+            print(f"[ERR] Skipping {stem}: Mesh file (.nas/.msh) not found.", flush=True)
+            return
+
+        sidecar_path = self.raw_dir / f"{stem}.json"
+        sidecar_meta = None
+        if sidecar_path.exists():
+            with open(sidecar_path, "r", encoding="utf-8") as _f:
+                sidecar_meta = json.load(_f)
+        assert_mesh_unit(sidecar_meta, MESH_UNIT_CM, stem=stem, builder="ComsolAnchorDataExtractor")
+
+        txt_path = self.label_dir / f"{stem}.txt"
+        inlet_path = self.label_dir / f"{stem}_inlet.txt"
+        outlet_path = self.label_dir / f"{stem}_outlet.txt"
+        wall_path = self.label_dir / f"{stem}_wall.txt"
+        wound_path = self.label_dir / f"{stem}_wound.txt"
+
+        if not txt_path.exists():
+            print(f"[ERR] Skipping {stem}: COMSOL domain data (.txt) missing.", flush=True)
+            return
+
+        # 2. Topology & Enhanced Boundary Mapping
+        mesh = meshio.read(msh_path)
+        mesh_nodes = mesh.points[ :, :2 ] * self.phys_cfg.cm_to_m
+        num_nodes = len(mesh_nodes)
+        mesh_tree = cKDTree(mesh_nodes)
+
+        # Mean nearest-neighbour spacing -- used to recognise the COMSOL P2 mid-edge
+        # signature (unmatched cluster sits at ~½ this value) without misclassifying
+        # genuine alignment failures.
+        if num_nodes >= 2:
+            nn_d, _ = mesh_tree.query(mesh_nodes, k=2)
+            mesh_edge_scale_m = float(np.mean(nn_d[:, 1]))
+        else:
+            mesh_edge_scale_m = None
+
+        mask_inlet, diag_inlet = self._load_spatial_mask(
+            inlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
+        )
+        mask_outlet, diag_outlet = self._load_spatial_mask(
+            outlet_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
+        )
+        mask_wall, diag_wall = self._load_spatial_mask(
+            wall_path, mesh_tree, num_nodes, mesh_edge_scale_m=mesh_edge_scale_m, required=True
+        )
+        
+        mask_wound, diag_wound = self._load_spatial_mask(
+            wound_path,
+            mesh_tree,
+            num_nodes,
+            mesh_edge_scale_m=mesh_edge_scale_m,
+            required=biochem_variant == "wound",
+        )
+        if bool(mask_wound.any()):
+            mask_wall = mask_wall & ~mask_wound
+        elif biochem_variant == "wound":
+            print(
+                f"[WARN] {stem}: biochem_variant=wound but mask_wound is empty. "
+                "Expected *_wound.txt from the COMSOL wound selection.",
+                flush=True,
+            )
+
+        d_bar = resolve_d_bar_si_from_sidecar_or_inlet(
+            sidecar_meta,
+            stem=stem,
+            mesh_nodes_si=mesh_nodes,
+            mask_inlet=mask_inlet,
+        )
+
+        # 4. Connectivity and Edge Construction (P2 triangle6 uses mid-edge nodes)
+        from src.data_gen.lib.mesh_triangle6_edges import edge_index_from_mesh
+
+        try:
+            edge_index = edge_index_from_mesh(mesh)
+        except ValueError:
+            print(f"[WARN] {stem}: Unsupported cell type.", flush=True)
+            return
+        row, col = edge_index
+
+        needs_sidecar = (
+            sidecar_meta is None
+            or sidecar_meta.get("centerline_pts") is None
+            or sidecar_meta.get("centerline_tangents") is None
+            or sidecar_meta.get("d_bar") is None
+        )
+        if needs_sidecar:
+            level_hint = int((sidecar_meta or {}).get("level", 2))
+            write_anchor_sidecar_from_masks(
+                sidecar_path,
+                mesh_nodes_si=mesh_nodes,
+                mask_inlet=mask_inlet,
+                mask_outlet=mask_outlet,
+                mask_wall=mask_wall,
+                edge_index=edge_index,
+                d_bar_si=d_bar,
+                stem=stem,
+                unit="cm",
+                level=level_hint,
+                existing=sidecar_meta,
+            )
+            with open(sidecar_path, encoding="utf-8") as _f:
+                sidecar_meta = json.load(_f)
+            d_bar = resolve_d_bar_si_from_sidecar_or_inlet(
+                sidecar_meta,
+                stem=stem,
+                mesh_nodes_si=mesh_nodes,
+                mask_inlet=mask_inlet,
+            )
+
+        # --- 5. DYNAMIC EULERIAN FIELD MAPPING (TRAJECTORY EXTRACTION) ---
+        trajectory_file = self.label_dir / f"{stem}.txt"
+
+        if not trajectory_file.exists():
+            print(f"[ERR] Skipping {stem}: Trajectory file not found.", flush=True)
+            return
+
+        time_blocks = self.load_comsol_trajectory(trajectory_file)
+
+        eval_times = sorted(list(time_blocks.keys()))
+        eval_times_tensor = torch.tensor(eval_times, dtype=torch.float32)
+
+        # Pre-compute geometry-normalized node/edge features once
+        nodes_nd = torch.tensor(mesh_nodes / d_bar, dtype=torch.float32)
+        edge_attr = torch.cat([
+            nodes_nd[ row ] - nodes_nd[ col ],
+            torch.linalg.norm(nodes_nd[ row ] - nodes_nd[ col ], dim=1, keepdim=True)
+        ], dim=1)
+
+        y_trajectory = []
+        u_raw_list = []
+        v_raw_list = []
+
+        # --- Pre-Compute KDTree Mapping ONCE outside the loop ---
+        # Load just the first timestep block to establish the spatial mapping
+        df_first = time_blocks[ eval_times[ 0 ] ]
+        csv_coords_static = df_first[ [ 'x', 'y' ] ].values * self.phys_cfg.cm_to_m
+
+        domain_tree = cKDTree(csv_coords_static)
+        match_distances, match_indices = domain_tree.query(mesh_nodes)
+        tol_m = self.phys_cfg.comsol_spatial_match_tol_m
+        is_anchor = torch.tensor(match_distances < tol_m, dtype=torch.bool)
+        if int(is_anchor.sum()) == 0:
+            print(
+                f"[WARN] {stem}: no nodes within comsol_spatial_match_tol_m={tol_m} m of COMSOL export; "
+                f"raise PhysicsConfig.comsol_spatial_match_tol_m or verify mesh/CSV alignment.",
+                flush=True,
+            )
+
+        # --- Pre-Compute Normals and initialize accumulator ---
+        pos_tensor = torch.tensor(mesh_nodes, dtype=torch.float32)
+        inlet_normals = self._compute_boundary_normals(edge_index, mask_inlet, pos_tensor, num_nodes)
+        outlet_normals = self._compute_boundary_normals(edge_index, mask_outlet, pos_tensor, num_nodes)
+        total_flux_imbalance = 0.0
+
+        # Iterate through the parsed time steps
+        for t_idx, t_val in enumerate(eval_times):
+            df_csv = time_blocks[t_val]
+            df_matched = df_csv.iloc[match_indices].reset_index(drop=True)
+
+            # --- USE CENTRALIZED SCALES ---
+            u_raw = torch.tensor(df_matched['u'].values, dtype=torch.float32) * self.phys_cfg.cm_to_m
+            v_raw = torch.tensor(df_matched['v'].values, dtype=torch.float32) * self.phys_cfg.cm_to_m
+            p_raw = torch.tensor(df_matched['p'].values, dtype=torch.float32) * self.phys_cfg.cgs_p_to_pa
+            mu_eff = torch.tensor(df_matched['mu_effective'].values, dtype=torch.float32) * self.phys_cfg.cgs_mu_to_pa_s
+
+            u_ref_actual = self.phys_cfg.get_u_ref(d_bar)
+            p_ref = self.phys_cfg.rho * (u_ref_actual ** 2)
+            p_relative = p_raw - (p_raw[mask_outlet].mean() if mask_outlet.any() else p_raw.min())
+
+            u_nd = u_raw / u_ref_actual
+            v_nd = v_raw / u_ref_actual
+            p_nd = p_relative / p_ref
+            mu_nd = self.phys_cfg.viscosity_si_to_nd(mu_eff)
+
+            # --- USE CENTRALIZED BIOCHEM SCALES ---
+            bio_cfg = BiochemConfig(phase=self.vessel_cfg.phase)
+            species_cols = list(self.species_map.keys())
+            raw_bulk_cgs = torch.tensor(df_matched[species_cols[:9]].values, dtype=torch.float32)
+            raw_surf_cgs = torch.tensor(df_matched[species_cols[9:]].values, dtype=torch.float32)
+
+            # COMSOL export convention for phase-3 species is mixed-CGS:
+            # - rp, ap: platelet number density in plt/ml  -> scaled linear field via x bulk_scale
+            # - apr, aps, PT, th, at, fg, fi: concentration in uM -> mol/m^3 (x1e-3), then x bulk_scale
+            # This keeps transformed ND channels consistent with BiochemConfig.get_species_scales().
+            bulk_si = torch.zeros_like(raw_bulk_cgs)
+            bulk_si[:, 0:2] = raw_bulk_cgs[:, 0:2] * bio_cfg.bulk_scale
+            bulk_si[:, 2:9] = raw_bulk_cgs[:, 2:9] * (bio_cfg.bulk_scale * 1e-3)
+            # M/Mas/Mat: COMSOL model units for mu1(Mat) etc. (not plt/m^2). surface_scale
+            # cancels in log1p ND (raw/Minf); gelation decodes with expm1*Minf only.
+            surf_si = raw_surf_cgs * bio_cfg.surface_scale
+            species = torch.clamp(torch.cat([bulk_si, surf_si], dim=1), min=0.0)
+
+            scales = bio_cfg.get_species_scales(device='cpu')
+            species_nd = species / scales
+            species_transformed = torch.log1p(species_nd)
+
+            # Combine to [Nodes, 16]
+            y_t = torch.cat([
+                u_nd.unsqueeze(1), v_nd.unsqueeze(1), p_nd.unsqueeze(1),
+                mu_nd.unsqueeze(1), species_transformed
+            ], dim=1)
+
+            y_trajectory.append(y_t)
+            u_raw_list.append(u_raw)
+            v_raw_list.append(v_raw)
+
+            # --- DYNAMIC MASS FLUX CALCULATION ---
+            inlet_v = torch.stack([ u_raw[ mask_inlet ], v_raw[ mask_inlet ] ], dim=1)
+            outlet_v = torch.stack([ u_raw[ mask_outlet ], v_raw[ mask_outlet ] ], dim=1)
+
+            inlet_flux = torch.abs(torch.sum(inlet_v * inlet_normals[ mask_inlet ])).item()
+            outlet_flux = torch.abs(torch.sum(outlet_v * outlet_normals[ mask_outlet ])).item()
+
+            step_imbalance = abs(inlet_flux - outlet_flux) / (inlet_flux + 1e-8)
+            total_flux_imbalance += step_imbalance
+
+            # Save the inlet/wall BCs explicitly from the FIRST timestep (t=0)
+            if t_idx == 0:
+                u_nd_0 = u_nd
+                v_nd_0 = v_nd
+                mu_nd_0 = mu_nd
+                p_nd_0 = p_nd
+
+        # Stack into shape: [Time, Nodes, 16]
+        y_tensor_series = torch.stack(y_trajectory, dim=0)
+        if y_tensor_series.shape[0] != len(eval_times):
+            raise ValueError(
+                f"{stem}: trajectory length {y_tensor_series.shape[0]} != time stamps {len(eval_times)}; "
+                "check COMSOL export headers (@ t=... columns)."
+            )
+        avg_flux_imbalance = total_flux_imbalance / len(eval_times)
+
+        # 6. Gradients & Numerical Stability
+        V, W, M_inv, max_cond = self._precompute_wls(edge_index, num_nodes, nodes_nd)
+        G_x, G_y, Laplacian = self._precompute_sparse_operators(edge_index, num_nodes, M_inv, V, W)
+
+        # 8. Data-Driven ML Scaling
+        # Compute U_ref from the 99th percentile to clamp data strictly to ~[-1.0, 1.0]
+        u_ref_actual = self.phys_cfg.get_u_ref(d_bar)  # Matches Kinematics/2 logic exactly
+        re_actual = self.phys_cfg.re_target  # Locks the ML Re to your target
+
+        # Ensure your bio_cfg scales match these new SI units
+        bio_cfg = BiochemConfig(phase=self.vessel_cfg.phase)
+        scales = bio_cfg.get_species_scales(device='cpu')
+
+        # Outlet normals for species BCs (Bio_IO); distinct from wall normals in x.
+        outlet_normals = self._compute_boundary_normals(
+            edge_index, mask_outlet, pos_tensor, num_nodes
+        )
+
+        u_bc = torch.zeros((num_nodes, 1), dtype=torch.float32)
+        v_bc = torch.zeros((num_nodes, 1), dtype=torch.float32)
+        u_bc[mask_inlet, 0] = u_nd_0[mask_inlet]
+        v_bc[mask_inlet, 0] = v_nd_0[mask_inlet]
+        p_bc = torch.zeros((num_nodes, 1), dtype=torch.float32)
+
+        mu_bc = mu_nd_0
+
+        geometry_level = None
+        if sidecar_meta is not None and sidecar_meta.get("level") is not None:
+            geometry_level = int(sidecar_meta["level"])
+        from src.data_gen.lib.node_feature_assembly import resolve_anchor_kine_phys_cfg
+
+        kine_phys = resolve_anchor_kine_phys_cfg()
+        kine_data = build_kinematics_graph_from_comsol_steady(
+            mesh=mesh,
+            mesh_nodes_si=mesh_nodes,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            mask_inlet=mask_inlet,
+            mask_outlet=mask_outlet,
+            mask_wall=mask_wall,
+            mask_wound=mask_wound,
+            u_nd=u_nd_0,
+            v_nd=v_nd_0,
+            p_nd=p_nd_0,
+            mu_nd=mu_nd_0,
+            d_bar_si=d_bar,
+            u_ref=u_ref_actual,
+            sidecar_meta=sidecar_meta,
+            stem=stem,
+            G_x=G_x,
+            G_y=G_y,
+            V=V,
+            W=W,
+            M_inv=M_inv,
+            phys_cfg=kine_phys,
+            raw_sidecar_dir=self.raw_dir,
+            geometry_level=geometry_level,
+            prior_mode=KINE_ANCHOR_PRIOR_MODE.strip() or "analytic",
+        )
+        x_kine = kine_data.x
+        u_prior = kine_data.u_prior
+        mu_prior = kine_data.mu_prior
+        centerline_source = str(getattr(kine_data, "centerline_source", ""))
+        torch.save(kine_data, self.kine_anchor_dir / f"{stem}.pt")
+
+        x_biochem = build_biochem_bc_x_tensor(
+            pos_nd=x_kine[:, NodeFeat.XY],
+            sdf_nd=x_kine[:, NodeFeat.SDF],
+            wall_normal=x_kine[:, NodeFeat.WALL_NORMAL],
+            mask_inlet=mask_inlet,
+            mask_outlet=mask_outlet,
+            mask_wall=mask_wall,
+            u_bc=u_bc,
+            v_bc=v_bc,
+            p_bc=p_bc,
+            mu_bc_nd=mu_bc,
+        )
+
+        # --- Use index assignment for the tensor ---
+        inlet_species_si = torch.zeros(9, dtype=torch.float32)
+        inlet_species_si[0] = bio_cfg.c_RP0 * bio_cfg.bulk_scale  # RP
+        inlet_species_si[1] = bio_cfg.c_AP0 * bio_cfg.bulk_scale  # AP
+        inlet_species_si[4] = bio_cfg.c_pT0 * bio_cfg.bulk_scale  # PT
+        inlet_species_si[6] = bio_cfg.cAT0 * bio_cfg.bulk_scale  # AT
+        inlet_species_si[7] = bio_cfg.c_Fg0 * bio_cfg.bulk_scale  # FG
+        # Note: APR, APS, T, FI remain 0.0 at the inlet
+
+        # Scale and transform
+        inlet_species_nd = inlet_species_si / scales[ :9 ]
+        inlet_species_transformed = torch.log1p(inlet_species_nd)
+
+        # Broadcast to all nodes
+        bio_inlet_bc = inlet_species_transformed.unsqueeze(0).expand(num_nodes, -1)
+
+        # 10. Metadata Export
+        boundary_diagnostics = {
+            "inlet": diag_inlet,
+            "outlet": diag_outlet,
+            "wall": diag_wall,
+            "wound": diag_wound,
+        }
+        metadata = {
+            "stem": stem,
+            "biochem_variant": biochem_variant,
+            "source_mph": source_mph_name,
+            "quality": {
+                "max_wls_condition_number": max_cond,
+                "mass_flux_imbalance": avg_flux_imbalance,
+                # Legacy field, kept for back-compat. Per-boundary diagnostics live in `boundaries`.
+                "boundary_unmapped_ratio": max(
+                    diag_inlet["unmapped_ratio"],
+                    diag_outlet["unmapped_ratio"],
+                    diag_wall["unmapped_ratio"],
+                ),
+                "mesh_edge_scale_m": mesh_edge_scale_m,
+                "boundaries": boundary_diagnostics,
+            },
+            "field_stats": {
+                "u_max": u_raw.max().item(),
+                "u_ref_ml": u_ref_actual,
+                "re_ml": re_actual,
+                "d_bar": d_bar
+            }
+        }
+        with open(self.proc_dir / f"{stem}_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=4)
+
+        # 11. Final PyG Data Save
+        uv_inlet_bc = torch.cat([u_nd_0.unsqueeze(1), v_nd_0.unsqueeze(1)], dim=1)
+        mu_inlet_bc = self._compute_analytic_inlet_mu_nd(
+            mask_inlet=mask_inlet,
+            mesh_nodes=mesh_nodes,
+            u_raw_si=u_raw_list[0],
+            v_raw_si=v_raw_list[0],
+        )
+        data = Data(
+            x=x_kine,
+            x_biochem=x_biochem,
+            y=y_tensor_series,
+            t=eval_times_tensor,
+            edge_index=edge_index,
+            edge_attr=edge_attr,
+            mask_inlet=mask_inlet,
+            mask_outlet=mask_outlet,
+            mask_wall=mask_wall,
+            mask_wound=mask_wound,
+            is_anchor=is_anchor,
+            d_bar=torch.tensor([d_bar], dtype=torch.float32),
+            u_ref=torch.tensor([u_ref_actual], dtype=torch.float32),
+            re_actual=torch.tensor([re_actual], dtype=torch.float32),
+            G_x=G_x,
+            G_y=G_y,
+            Laplacian=Laplacian,
+            V=V,
+            W=W,
+            M_inv=M_inv,
+            u_inlet_bc=uv_inlet_bc,
+            mu_inlet_bc=mu_inlet_bc,
+            bio_inlet_bc=bio_inlet_bc,
+            outlet_normal=outlet_normals,
+            u_prior=u_prior,
+            mu_prior=mu_prior,
+        )
+        data = attach_comsol_anchor_graph_metadata(data, mask_wall=mask_wall)
+        data.centerline_source = centerline_source
+        data.graph_stem = stem
+        data.biochem_variant = biochem_variant
+        if source_mph_name:
+            data.source_mph = source_mph_name
+
+        # Run physical boundaries and mass balance health check before saving
+        validate_graph_physical_integrity(data, stem, avg_flux_imbalance)
+
+        torch.save(data, self.proc_dir / f"{stem}.pt")
+        n_in = int(mask_inlet.reshape(-1).sum())
+        n_out = int(mask_outlet.reshape(-1).sum())
+        n_wall = int(mask_wall.reshape(-1).sum())
+        n_wound = int(mask_wound.reshape(-1).sum()) if mask_wound is not None else 0
+        tmax = float(eval_times_tensor.max()) if eval_times_tensor.numel() else 0.0
+        inlet_match = diag_inlet.get("csv_match_rate")
+        parts = [
+            f"[OK] {stem} {biochem_variant}",
+            f"N={num_nodes}",
+            f"T={len(eval_times)}/{tmax:.0f}s",
+            f"in/out/wall={n_in}/{n_out}/{n_wall}",
+        ]
+        if n_wound:
+            parts.append(f"wound={n_wound}")
+        parts.extend(
+            [
+                f"D={d_bar * 1000:.1f}mm",
+                f"Re={re_actual:.0f}",
+                f"imbal={avg_flux_imbalance:.2%}",
+            ]
+        )
+        if inlet_match is not None:
+            parts.append(f"inlet_match={float(inlet_match):.0%}")
+        parts.append(f"prior={kinematics_uv_prior_max(x_kine):.3f}")
+        from src.data_gen.lib.biochem_extract_transfer import stage_extract_transfer_bundle
+
+        bundle = stage_extract_transfer_bundle(
+            stem,
+            raw_dir=self.raw_dir,
+            label_dir=self.label_dir,
+            proc_dir=self.proc_dir,
+            kine_dir=self.kine_anchor_dir,
+        )
+        if bundle is not None:
+            parts.append(f"packed={bundle.name}")
+        print("  ".join(parts), flush=True)
+
+    def run(
+        self,
+        *,
+        from_comsol: bool = True,
+        force_comsol_pull: bool = False,
+        stems: list[str] | None = None,
+    ) -> None:
+        """Batch-extract all anchor meshes (optionally pull COMSOL fields first)."""
+        from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+        quiet_comsol_extract_logs()
+        if stems is None:
+            from src.data_gen.lib.biochem_comsol_auto_export import stems_from_phase2_mph
+
+            mesh_stems = []
+            if self.raw_dir.is_dir():
+                files = [f for f in os.listdir(self.raw_dir) if f.endswith(".nas") or f.endswith(".msh")]
+                mesh_stems = sorted({Path(f).stem for f in files})
+            mph_stems = stems_from_phase2_mph()
+            seen: set[str] = set()
+            stems = []
+            for s in mesh_stems + mph_stems:
+                if s not in seen:
+                    seen.add(s)
+                    stems.append(s)
+            stems.sort()
+            if not stems:
+                print(
+                    f"CRITICAL ERROR: No meshes under {self.raw_dir} and no "
+                    f"phase2_nowound_*.mph / phase2_wound_*.mph in comsol_models/"
+                )
+                return
+            if mph_stems and not mesh_stems:
+                print(
+                    f"[i] Using {len(mph_stems)} stem(s) from comsol_models/"
+                    f"phase2_nowound_*.mph and phase2_wound_*.mph only."
+                )
+            elif mph_stems:
+                extra = [s for s in mph_stems if s not in set(mesh_stems)]
+                if extra:
+                    print(f"[i] Also found COMSOL models without mesh: {', '.join(extra)}")
+
+        from src.data_gen.lib.biochem_comsol_auto_export import resolve_biochem_comsol_model_path
+
+        for stem in progress(stems, desc="Biochem extract", unit="vessel"):
+            if from_comsol:
+                domain_txt = self.label_dir / f"{stem}.txt"
+                mph_path = resolve_biochem_comsol_model_path(stem)
+                if mph_path is None:
+                    if not domain_txt.is_file():
+                        print(
+                            f"[WARN] Skipping {stem}: no domain .txt and no matching "
+                            f"phase2_nowound_XXX.mph / phase2_wound_XXX.mph in comsol_models/.",
+                            flush=True,
+                        )
+                        continue
+                elif force_comsol_pull or not domain_txt.is_file() or not (
+                    (self.raw_dir / f"{stem}.msh").is_file()
+                    or (self.raw_dir / f"{stem}.nas").is_file()
+                ):
+                    from src.data_gen.lib.extract_logging import extract_verbose_requested
+
+                    if extract_verbose_requested():
+                        print(f"[i] COMSOL pull {stem} <- {mph_path.name}", flush=True)
+                    try:
+                        self.pull_comsol_exports(stem, model_path=mph_path, force=force_comsol_pull)
+                    except Exception as exc:
+                        print(f"[ERR] COMSOL pull failed for {stem}: {exc}", flush=True)
+                        if not domain_txt.is_file():
+                            continue
+            self.process_comsol_anchor(stem)
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Extract biochem anchor graphs. Default: pull solved COMSOL fields from "
+            "comsol_models/phase2_nowound_XXX.mph (comsolXXX) and "
+            "phase2_wound_XXX.mph (wound_comsolXXX) via mph, then write .pt graphs."
+        )
+    )
+    parser.add_argument(
+        "--stem",
+        type=str,
+        default="",
+        help="One or more stems: comsol007 | wound_comsol007 | 7 | 5,8,9 | 5-9 "
+        "(default: all meshes in table). Combine with --variant wound to restamp comsolXXX.",
+    )
+    parser.add_argument(
+        "--variant",
+        choices=("nowound", "wound", "all"),
+        default="all",
+        help="Restrict extraction to nowound (comsolXXX) or wound (wound_comsolXXX).",
+    )
+    parser.add_argument("--force", action="store_true", help="Re-pull COMSOL txt and overwrite graphs.")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Keep COMSOL/mph session and per-file export logs.",
+    )
+    parser.add_argument(
+        "--no-from-comsol",
+        action="store_true",
+        help="Require manual cfd_results_biochem/*.txt exports (legacy).",
+    )
+    args = parser.parse_args(argv)
+    from src.data_gen.lib.extract_logging import quiet_comsol_extract_logs
+
+    quiet_comsol_extract_logs(verbose=True if args.verbose else None)
+
+    from src.data_gen.pipeline_biochem import _auto_scaffold_anchor_sidecars
+
+    extractor = ComsolAnchorDataExtractor(phase="biochem_anchors")
+    _auto_scaffold_anchor_sidecars(extractor.raw_dir)
+
+    stem_list = None
+    variant = None if args.variant == "all" else args.variant
+    if args.stem.strip():
+        from src.data_gen.lib.biochem_comsol_auto_export import (
+            collect_biochem_extract_stems,
+            resolve_stem_selection,
+        )
+
+        table = collect_biochem_extract_stems(extractor.raw_dir, extractor.label_dir)
+        stem_list = resolve_stem_selection(args.stem.strip(), table, variant=variant)
+        if not stem_list:
+            raise SystemExit("[ERR] No stems matched --stem.")
+    elif variant:
+        from src.data_gen.lib.biochem_comsol_auto_export import (
+            collect_biochem_extract_stems,
+            parse_biochem_extract_stem,
+        )
+
+        table = collect_biochem_extract_stems(extractor.raw_dir, extractor.label_dir)
+        stem_list = [
+            s
+            for s in table
+            if (ref := parse_biochem_extract_stem(s)) is not None and ref.variant == variant
+        ]
+        if not stem_list:
+            raise SystemExit(f"[ERR] No {variant} stems found.")
+    extractor.run(
+        from_comsol=not args.no_from_comsol,
+        force_comsol_pull=args.force,
+        stems=stem_list,
+    )
+
+
+if __name__ == "__main__":
+    main()

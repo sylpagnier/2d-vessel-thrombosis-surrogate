@@ -1,0 +1,46 @@
+{
+  "rule": "score against mirrored GT iff the mesh is mirror-symmetric and the solved FEM t=0 flow is >2x closer (rel-L2) to COMSOL's reflected flow than to COMSOL's flow; decided from flow only, applied to evaluation labels only (src/clot_ml/mirror_branch.py)",
+  "n_packs_scanned": 54,
+  "vessels": {
+    "comsol041": {
+      "symmetric": true,
+      "residual": 0.515,
+      "unique_frac": 0.9808,
+      "rel_l2_direct": 0.0443,
+      "rel_l2_mirrored": 0.6517,
+      "mirror_branch": false
+    },
+    "comsol042": {
+      "symmetric": true,
+      "residual": 0.465,
+      "unique_frac": 0.9837,
+      "rel_l2_direct": 0.0319,
+      "rel_l2_mirrored": 0.6235,
+      "mirror_branch": false
+    },
+    "comsol044": {
+      "symmetric": true,
+      "residual": 0.513,
+      "unique_frac": 0.9759,
+      "rel_l2_direct": 0.0218,
+      "rel_l2_mirrored": 0.7395,
+      "mirror_branch": false
+    },
+    "comsol045": {
+      "symmetric": true,
+      "residual": 0.449,
+      "unique_frac": 0.9781,
+      "rel_l2_direct": 0.5335,
+      "rel_l2_mirrored": 0.0794,
+      "mirror_branch": true
+    },
+    "comsol046": {
+      "symmetric": true,
+      "residual": 0.495,
+      "unique_frac": 0.9838,
+      "rel_l2_direct": 0.6705,
+      "rel_l2_mirrored": 0.0369,
+      "mirror_branch": true
+    }
+  }
+}
